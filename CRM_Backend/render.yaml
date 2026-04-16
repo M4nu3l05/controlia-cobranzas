@@ -6,6 +6,8 @@ services:
     buildCommand: pip install -r CRM_Backend/requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --app-dir CRM_Backend
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
       - key: APP_NAME
         value: CRM_Backend
       - key: APP_ENV
