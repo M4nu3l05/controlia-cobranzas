@@ -29,6 +29,23 @@ if errorlevel 1 (
     exit /b 1
 )
 
+for %%F in ("installer\output\ControliaCobranzas_Setup_*.exe") do set "LAST_SETUP=%%~fF"
+if not defined LAST_SETUP (
+    echo [ERROR] No se encontro el instalador generado en installer\output.
+    exit /b 1
+)
+
+set "DESKTOP_DIR=%USERPROFILE%\Desktop"
+copy /Y "%LAST_SETUP%" "%DESKTOP_DIR%\" >nul
+if errorlevel 1 (
+    echo [WARN] Instalador compilado, pero no se pudo copiar al escritorio.
+    echo [INFO] Ruta instalador: %LAST_SETUP%
+) else (
+    for %%N in ("%LAST_SETUP%") do set "SETUP_NAME=%%~nxN"
+    echo [OK] Instalador copiado al escritorio:
+    echo      %DESKTOP_DIR%\%SETUP_NAME%
+)
+
 echo.
 echo Instalador generado en: installer\output
 endlocal
