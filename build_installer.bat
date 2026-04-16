@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions DisableDelayedExpansion
 
 cd /d "%~dp0"
 
@@ -17,7 +17,7 @@ set "ISCC_PATH="
 if exist "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" set "ISCC_PATH=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 if exist "C:\Program Files\Inno Setup 6\ISCC.exe" set "ISCC_PATH=C:\Program Files\Inno Setup 6\ISCC.exe"
 
-if "%ISCC_PATH%"=="" (
+if not defined ISCC_PATH (
     echo [ERROR] No se encontro ISCC.exe (Inno Setup 6).
     echo Instala Inno Setup desde: https://jrsoftware.org/isdl.php
     exit /b 1
