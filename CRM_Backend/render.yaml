@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: crm-backend
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_NAME
+        value: CRM_Backend
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "480"
+      - key: FIRST_ADMIN_EMAIL
+        value: admin@controlia.cl
+      - key: FIRST_ADMIN_USERNAME
+        value: Administrador
+      - key: FIRST_ADMIN_PASSWORD
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: crm-backend-db
+          property: connectionString
+
+databases:
+  - name: crm-backend-db
+    plan: starter

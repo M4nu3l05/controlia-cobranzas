@@ -1,0 +1,5 @@
+PyQt6
+pandas
+openpyxl
+XlsxWriter
+requests>=2.31

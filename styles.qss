@@ -1,0 +1,141 @@
+/* =========================
+   Controlia Cobranzas Modern QSS
+   ========================= */
+
+QWidget {
+    font-family: Segoe UI;
+    font-size: 9pt;
+    color: #0f172a;
+    background: #f6f8fb;
+}
+
+QLabel#HeaderHint {
+    color: #64748b;
+}
+
+QFrame#Card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+}
+
+QLabel#CardTitle {
+    font-size: 10pt;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+QLabel#CardSubtitle {
+    color: #64748b;
+}
+
+QLabel#MutedLabel {
+    color: #64748b;
+}
+
+QLabel#StatusLabel {
+    color: #334155;
+    padding-top: 4px;
+}
+
+QLineEdit, QComboBox {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 10px 12px;
+    min-height: 22px;
+}
+
+QLineEdit:focus, QComboBox:focus {
+    border: 1px solid #3b82f6;
+}
+
+QPushButton {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 10px 12px;
+    min-height: 24px;
+    font-weight: 600;
+}
+
+QPushButton:hover {
+    background: #eaf2ff;
+    border: 1px solid #c7ddff;
+}
+
+QPushButton#PrimaryButton {
+    background: #2563eb;
+    color: white;
+    border: 1px solid #1d4ed8;
+}
+
+QPushButton#PrimaryButton:hover {
+    background: #1d4ed8;
+}
+
+QPushButton#PrimaryButton:disabled {
+    background: #e2e8f0;
+    color: #64748b;
+    border: 1px solid #cbd5e1;
+}
+
+QPushButton[blockableAction="true"]:disabled {
+    background: #e2e8f0;
+    color: #64748b;
+    border: 1px solid #cbd5e1;
+}
+
+QProgressBar {
+    height: 16px;
+    border-radius: 8px;
+    border: 1px solid #e2e8f0;
+    background: #f1f5f9;
+    text-align: right;
+    padding-right: 6px;
+    color: #64748b;
+}
+
+QProgressBar::chunk {
+    border-radius: 8px;
+    background: #3b82f6;
+}
+
+QCheckBox {
+    color: #0f172a;
+    padding: 4px 0;
+}
+
+QTableWidget {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    gridline-color: #e2e8f0;
+    selection-background-color: #eaf2ff;
+    selection-color: #0f172a;
+    alternate-background-color: #f8fafc;
+}
+
+QHeaderView::section {
+    background: #f8fafc;
+    color: #334155;
+    border: none;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 8px;
+    font-weight: 700;
+}
+
+#CardTitle {
+    font-size: 11pt;
+    font-weight: 600;
+}
+
+#CardSubtitle {
+    color: #5a6b7c;
+    font-size: 9pt;
+}
+
+QComboBox QAbstractItemView {
+    min-height: 24px;
+    padding: 4px 6px;
+}

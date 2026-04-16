@@ -1,0 +1,23 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.sqlite
+*.db
+*.log
+build/
+dist/
+.pytest_cache/
+coverage/
+.env
+CRM_Backend/.env
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Coverage extra
+.coverage
+htmlcov/

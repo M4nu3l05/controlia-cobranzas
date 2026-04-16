@@ -1,0 +1,168 @@
+TÉRMINOS Y CONDICIONES DE USO – CONTROLIA COBRANZAS
+
+1. Identificación del servicio
+El presente documento regula el uso del software “Controlia Cobranzas” (en adelante, el “Software”), desarrollado para la gestión de procesos de cobranza, administración de deudores, seguimiento de gestiones comerciales y demás funciones relacionadas con la operación de cobranza de personas o empresas.
+
+2. Aceptación
+La instalación, acceso o utilización del Software implica que el usuario, la empresa cliente y cualquier persona autorizada para operar el sistema han leído, comprendido y aceptado íntegramente estos Términos y Condiciones.
+
+Si el usuario no está de acuerdo con cualquiera de sus disposiciones, no deberá instalar, acceder ni utilizar el Software.
+
+3. Licencia de uso
+El proveedor otorga al cliente una licencia de uso limitada, no exclusiva, no transferible, revocable y sin facultad de sublicenciamiento, únicamente para fines internos de gestión de cobranza y administración operativa.
+
+Salvo autorización expresa y por escrito del proveedor, el cliente no podrá:
+- vender, arrendar, sublicenciar, ceder o transferir el Software a terceros;
+- distribuir copias del Software;
+- modificar, descompilar, desensamblar o realizar ingeniería inversa del Software;
+- eliminar marcas, avisos de propiedad o medidas de protección incluidas en el Software;
+- utilizar el Software para fines ilícitos, abusivos o distintos de los autorizados.
+
+4. Uso permitido y cumplimiento normativo
+El cliente se obliga a utilizar el Software exclusivamente en el marco de actividades lícitas y conforme a la legislación aplicable.
+
+En particular, el cliente declara y acepta que será de su exclusiva responsabilidad:
+- cumplir la normativa aplicable en materia de cobranza, protección de datos personales, consumo, telecomunicaciones y cualquier otra que corresponda;
+- definir, revisar y aprobar sus propios procesos, mensajes, plantillas, comunicaciones y criterios de gestión;
+- capacitar a sus usuarios internos respecto del uso adecuado del Software.
+
+El proveedor no participa en la decisión comercial, jurídica o estratégica sobre a quién cobrar, cómo cobrar, qué mensajes enviar, ni la oportunidad o legalidad de dichas acciones.
+
+5. Responsabilidad sobre la información ingresada
+El cliente es el único y exclusivo responsable de toda la información, documentos, bases de datos, archivos, mensajes, registros y demás contenido que cargue, almacene, procese o genere a través del Software.
+
+Esto incluye, entre otros:
+- RUT u otros identificadores;
+- nombres y apellidos;
+- correos electrónicos;
+- teléfonos;
+- domicilios o datos de contacto;
+- antecedentes de deuda, pago, mora o cobranza;
+- gestiones, observaciones y trazabilidad interna.
+
+El proveedor no revisa de forma previa, no valida y no garantiza la exactitud, integridad, actualidad, licitud o legitimidad de la información ingresada por el cliente.
+
+6. Datos personales y bases de cobranza
+Cuando el cliente cargue o trate datos personales mediante el Software, declara que cuenta con una base legal o autorización suficiente para ello, según la normativa aplicable.
+
+El cliente será el responsable del tratamiento de los datos personales que incorpore al sistema. El proveedor actuará únicamente como proveedor tecnológico o encargado técnico de tratamiento, en la medida que corresponda según la modalidad de operación del Software.
+
+El cliente asume íntegramente la responsabilidad por:
+- la recopilación y origen de los datos;
+- la legitimidad del tratamiento;
+- el cumplimiento del deber de información;
+- la atención de solicitudes de titulares de datos;
+- la exactitud, actualización y pertinencia de la información tratada.
+
+7. Seguridad de la información
+El proveedor podrá implementar medidas técnicas y organizativas razonables orientadas a resguardar la confidencialidad, integridad y disponibilidad de la información tratada por el Software.
+
+No obstante, el cliente acepta expresamente que:
+- ningún sistema informático es completamente invulnerable;
+- no existe garantía absoluta de continuidad, disponibilidad o seguridad;
+- pueden existir riesgos derivados de errores humanos, fallas de hardware, software, redes, accesos indebidos, malware, phishing, ransomware, ciberataques u otros eventos externos.
+
+Por ello, el cliente deberá adoptar también sus propias medidas de seguridad, control de accesos, respaldos, políticas internas y buenas prácticas operativas.
+
+8. Ambientes locales, servidores e infraestructura
+El Software puede operar total o parcialmente en equipos locales, redes internas, servidores privados o infraestructura remota, incluyendo ambientes multiusuario y servicios en la nube.
+
+El cliente reconoce que el correcto funcionamiento del Software puede depender de factores ajenos al proveedor, tales como:
+- calidad de conexión a internet;
+- disponibilidad de red local;
+- configuración de equipos;
+- sistemas operativos;
+- antivirus o firewalls;
+- servicios de hosting o nube;
+- motores de bases de datos;
+- configuración de credenciales y permisos.
+
+El proveedor no será responsable por fallas derivadas de la infraestructura del cliente o de terceros.
+
+9. Integraciones y servicios de terceros
+El Software puede incluir o permitir integraciones, aperturas o interacciones con servicios, plataformas o aplicaciones de terceros, tales como correo electrónico, navegadores, WhatsApp Web u otras herramientas externas.
+
+El cliente acepta que tales servicios:
+- no son controlados por el proveedor;
+- pueden cambiar, limitarse, suspenderse o dejar de funcionar en cualquier momento;
+- pueden tener sus propios términos, políticas, restricciones y requisitos.
+
+El proveedor no garantiza la disponibilidad continua ni la compatibilidad futura de tales integraciones y no responderá por fallas, cambios, bloqueos, restricciones o decisiones adoptadas por terceros.
+
+10. Disponibilidad, actualizaciones y soporte
+Salvo pacto expreso por escrito, el proveedor no garantiza un nivel específico de disponibilidad, tiempo de respuesta, soporte permanente, continuidad operacional ni actualización obligatoria del Software.
+
+El proveedor podrá, a su sola discreción:
+- corregir errores;
+- liberar mejoras o nuevas versiones;
+- modificar funcionalidades;
+- discontinuar módulos o características;
+- redefinir condiciones comerciales o técnicas.
+
+Ciertas mejoras, adaptaciones o desarrollos a medida podrán estar sujetas a cobros adicionales.
+
+11. Propiedad intelectual
+El Software, su código fuente, estructura, arquitectura, diseños, interfaces, marcas, nombres comerciales, documentación, textos, imágenes, módulos, bases lógicas y cualquier desarrollo asociado son y seguirán siendo de propiedad exclusiva del proveedor o de sus licenciantes, según corresponda.
+
+El presente acuerdo no transfiere al cliente derecho de propiedad intelectual alguno, salvo la licencia limitada de uso expresamente otorgada.
+
+12. Confidencialidad
+Cada parte deberá tratar como confidencial toda información técnica, comercial, estratégica u operacional de la otra parte a la que acceda con ocasión de la instalación, soporte, uso o negociación del Software, salvo que:
+- sea de dominio público sin infracción de este acuerdo;
+- deba revelarse por mandato legal o autoridad competente;
+- la parte divulgadora autorice expresamente su revelación.
+
+13. Respaldo y conservación de información
+Salvo que exista un servicio contratado que lo contemple expresamente, el proveedor no asume obligación de ejecutar respaldos periódicos, restauraciones, planes de continuidad operativa ni conservación indefinida de la información del cliente.
+
+El cliente deberá mantener sus propios respaldos y procedimientos internos de recuperación ante incidentes.
+
+14. Suspensión o terminación
+El proveedor podrá suspender, restringir o terminar el acceso al Software, temporal o definitivamente, en caso de:
+- incumplimiento de estos Términos y Condiciones;
+- uso indebido o ilegal del Software;
+- mora o incumplimiento de pago, cuando corresponda;
+- riesgo para la seguridad del sistema;
+- requerimiento de autoridad competente.
+
+La terminación o suspensión no extinguirá las obligaciones previas pendientes del cliente.
+
+15. Exclusión de garantías
+El Software se entrega “tal cual” y “según disponibilidad”, sin garantías expresas ni implícitas de ningún tipo, incluyendo, sin limitación, garantías de comerciabilidad, adecuación para un propósito particular, disponibilidad continua, ausencia de errores o compatibilidad total con cualquier entorno técnico.
+
+16. Limitación de responsabilidad
+En la máxima medida permitida por la legislación aplicable, el proveedor no será responsable por daños directos, indirectos, incidentales, especiales, emergentes o lucro cesante, incluyendo, entre otros:
+- pérdida de ingresos o utilidades;
+- interrupción de operaciones;
+- pérdida o corrupción de datos;
+- sanciones regulatorias o administrativas;
+- reclamaciones de terceros;
+- daños reputacionales;
+- decisiones de negocio adoptadas por el cliente.
+
+En todo caso, si por disposición legal se estableciera responsabilidad del proveedor, esta quedará limitada, como máximo, al monto efectivamente pagado por el cliente por concepto de licencia o servicio asociado al Software durante los seis meses inmediatamente anteriores al hecho que da origen al reclamo.
+
+17. Indemnidad
+El cliente se obliga a defender, indemnizar y mantener indemne al proveedor frente a cualquier reclamo, acción, sanción, multa, procedimiento, daño, costo o gasto, incluidos honorarios legales razonables, que se originen en:
+- el uso indebido del Software por parte del cliente o sus usuarios;
+- la información cargada por el cliente;
+- la infracción normativa en materia de cobranza o protección de datos;
+- la afectación de derechos de terceros derivada del uso del Software.
+
+18. Modificaciones
+El proveedor podrá modificar estos Términos y Condiciones en cualquier momento. Cuando ello ocurra, la nueva versión podrá ser comunicada por medios electrónicos, incorporada al instalador, publicada en la documentación del producto o presentada al iniciar sesión.
+
+El uso continuado del Software después de la entrada en vigencia de una nueva versión constituirá aceptación de los términos actualizados, salvo que la normativa aplicable exija una aceptación adicional o expresa.
+
+19. Independencia de cláusulas
+Si alguna disposición de estos Términos y Condiciones fuese declarada inválida, ilegal o inaplicable, ello no afectará la validez de las demás disposiciones, las que continuarán vigentes.
+
+20. Ley aplicable y jurisdicción
+Estos Términos y Condiciones se regirán e interpretarán conforme a las leyes de la República de Chile.
+
+Toda controversia derivada de su interpretación, validez, ejecución o terminación será sometida a los tribunales ordinarios de justicia con competencia en Chile, salvo que las partes acuerden expresamente otro mecanismo de resolución.
+
+21. Contacto del proveedor
+El cliente deberá completar o actualizar en este documento, en el instalador o en la documentación comercial correspondiente, los datos de identificación del proveedor, incluyendo al menos nombre o razón social, correo de contacto comercial y correo de soporte, según corresponda.
+
+Versión del documento: v1.0

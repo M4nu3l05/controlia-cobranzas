@@ -1,0 +1,22 @@
+[
+  {
+    "nombre": "Recordatorio de deuda",
+    "asunto": "Recordatorio de saldo pendiente — {empresa}",
+    "cuerpo": "Estimado/a {nombre},\n\nLe contactamos para recordarle que registra un saldo pendiente de ${saldo} en {empresa}.\n\nLe solicitamos regularizar su situación a la brevedad. Si ya realizó el pago, por favor ignore este mensaje.\n\nAtentamente,\nEquipo de Controlia Cobranzas"
+  },
+  {
+    "nombre": "Aviso de mora",
+    "asunto": "Aviso de cuenta en mora — Expediente {nro_expediente}",
+    "cuerpo": "Estimado/a {nombre},\n\nSu cuenta con expediente N° {nro_expediente} presenta un saldo vencido de ${saldo}.\n\nPara evitar mayores consecuencias, le invitamos a ponerse en contacto con nosotros para acordar un plan de pago.\n\nAtentamente,\nEquipo de Controlia Cobranzas"
+  },
+  {
+    "nombre": "Primer contacto",
+    "asunto": "Información sobre su cuenta — {empresa}",
+    "cuerpo": "Estimado/a {nombre},\n\nNos comunicamos en representación de {empresa} para informarle que hemos recibido su caso para gestión de cobranza.\n\nMonto copago: ${copago}\nPagos registrados: ${total_pagos}\nSaldo pendiente: ${saldo}\n\nPara consultas, responda este correo o contáctenos directamente.\n\nAtentamente,\nEquipo de Controlia Cobranzas"
+  },
+  {
+    "nombre": "Recordatorio de Compromiso",
+    "asunto": "",
+    "cuerpo": ""
+  }
+]
