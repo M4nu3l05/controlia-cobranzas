@@ -21,7 +21,6 @@ OutputBaseFilename=ControliaCobranzas_Setup_{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
-SetupIconFile=
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesInstallIn64BitMode=x64
 PrivilegesRequired=admin
