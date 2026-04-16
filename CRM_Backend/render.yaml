@@ -2,10 +2,9 @@ services:
   - type: web
     name: crm-backend
     runtime: python
-    rootDir: CRM_Backend
     plan: starter
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install -r CRM_Backend/requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --app-dir CRM_Backend
     envVars:
       - key: APP_NAME
         value: CRM_Backend
