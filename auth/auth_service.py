@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import requests
@@ -93,7 +95,18 @@ def get_backend_base_url() -> str:
     if env_value:
         return env_value.rstrip("/")
 
-    # 2) Archivo de configuración en runtime (%APPDATA%/Controlia Cobranzas/config).
+    # 2) Archivo junto al ejecutable instalado (Program Files).
+    try:
+        exe_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path.cwd()
+        exe_cfg = exe_dir / "backend_url.txt"
+        if exe_cfg.exists():
+            txt = exe_cfg.read_text(encoding="utf-8", errors="ignore").strip()
+            if txt:
+                return txt.rstrip("/")
+    except OSError:
+        pass
+
+    # 3) Archivo de configuración en runtime (%APPDATA%/Controlia Cobranzas/config).
     try:
         cfg_path = get_config_dir() / "backend_url.txt"
         if cfg_path.exists():
@@ -103,7 +116,7 @@ def get_backend_base_url() -> str:
     except OSError:
         pass
 
-    # 3) Fallback por defecto (backend productivo).
+    # 4) Fallback por defecto (backend productivo).
     return DEFAULT_BACKEND_URL.rstrip("/")
 
 

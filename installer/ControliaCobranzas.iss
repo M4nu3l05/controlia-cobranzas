@@ -2,7 +2,7 @@
 ; Requiere tener compilado: dist\ControliaCobranzas\ControliaCobranzas.exe
 
 #define MyAppName "Controlia Cobranzas"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "Controlia"
 #define MyAppExeName "ControliaCobranzas.exe"
 #define MyAppId "{{1D6E7720-33C0-4745-BFB7-C1EC5A46A57C}"
@@ -15,8 +15,8 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
-LicenseFile=legal\terminos.txt
-OutputDir=installer\output
+LicenseFile=..\legal\terminos.txt
+OutputDir=output
 OutputBaseFilename=ControliaCobranzas_Setup_{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
@@ -32,11 +32,12 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; GroupDescription: "Accesos directos:"; Flags: unchecked
 
 [Files]
-Source: "dist\ControliaCobranzas\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "dist\ControliaCobranzas\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "legal\terminos.txt"; DestDir: "{app}\legal"; Flags: ignoreversion
-Source: "legal\privacidad.txt"; DestDir: "{app}\legal"; Flags: ignoreversion
-Source: "legal\privacidad.txt"; DestDir: "{tmp}"; Flags: dontcopy
+Source: "..\dist\ControliaCobranzas\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\ControliaCobranzas\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\backend_url.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\legal\terminos.txt"; DestDir: "{app}\legal"; Flags: ignoreversion
+Source: "..\legal\privacidad.txt"; DestDir: "{app}\legal"; Flags: ignoreversion
+Source: "..\legal\privacidad.txt"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
