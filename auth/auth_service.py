@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import requests
+from core.paths import get_config_dir
 
 from .auth_db import (
     ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_EJECUTIVO, ROLES,
@@ -41,7 +42,7 @@ __all__ = [
 ]
 
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
-DEFAULT_BACKEND_URL = "http://127.0.0.1:8000"
+DEFAULT_BACKEND_URL = "https://crm-backend-4712.onrender.com"
 DEFAULT_TIMEOUT = 12
 
 
@@ -87,8 +88,23 @@ class UserSession:
 
 
 def get_backend_base_url() -> str:
-    value = os.environ.get("CONTROLIA_BACKEND_URL", DEFAULT_BACKEND_URL).strip()
-    return value.rstrip("/") if value else DEFAULT_BACKEND_URL
+    # 1) Variable de entorno (prioridad mayor).
+    env_value = os.environ.get("CONTROLIA_BACKEND_URL", "").strip()
+    if env_value:
+        return env_value.rstrip("/")
+
+    # 2) Archivo de configuración en runtime (%APPDATA%/Controlia Cobranzas/config).
+    try:
+        cfg_path = get_config_dir() / "backend_url.txt"
+        if cfg_path.exists():
+            txt = cfg_path.read_text(encoding="utf-8", errors="ignore").strip()
+            if txt:
+                return txt.rstrip("/")
+    except OSError:
+        pass
+
+    # 3) Fallback por defecto (backend productivo).
+    return DEFAULT_BACKEND_URL.rstrip("/")
 
 
 def _friendly_backend_error(exc: Exception) -> str:
