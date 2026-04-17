@@ -21,3 +21,5 @@ Thumbs.db
 # Coverage extra
 .coverage
 htmlcov/
+
+installer/output/
