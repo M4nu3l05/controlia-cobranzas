@@ -33,6 +33,7 @@ from auth.session_history_db import (
     obtener_conexiones_mes,
     preparar_reporte_excel,
 )
+from auth.auth_service import get_backend_base_url
 from core.excel_export import write_excel_report
 from core.paths import get_data_dir
 from deudores.database import EMPRESAS, cargar_empresas, cargar_todas, stats_por_empresa, stats_por_empresas
@@ -95,8 +96,7 @@ def _norm_rut(v: str) -> str:
 
 
 def _backend_base_url() -> str:
-    value = os.environ.get("CONTROLIA_BACKEND_URL", "http://127.0.0.1:8000").strip()
-    return value.rstrip("/") if value else "http://127.0.0.1:8000"
+    return get_backend_base_url()
 
 
 def _parse_datetime_multi(value: str) -> pd.Timestamp:
