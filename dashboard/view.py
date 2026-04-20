@@ -946,6 +946,38 @@ class DashboardWidget(QWidget):
         self.lbl_updated.setText(f"Actualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         return True
 
+    def _backend_session_history(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        empty = pd.DataFrame(columns=["id", "user_id", "email", "username", "role", "login_at", "logout_at"])
+        try:
+            now = datetime.now()
+            resp = requests.get(
+                f"{_backend_base_url()}/dashboard/sessions",
+                params={"role": "ejecutivo", "year": now.year, "month": now.month},
+                headers=self._backend_headers(),
+                timeout=15,
+            )
+            resp.raise_for_status()
+            payload = resp.json() or {}
+            today_rows = payload.get("today", []) or []
+            month_rows = payload.get("month", []) or []
+
+            df_today = pd.DataFrame(today_rows).fillna("")
+            df_month = pd.DataFrame(month_rows).fillna("")
+
+            for df in (df_today, df_month):
+                if "login_at" in df.columns:
+                    df["login_at"] = pd.to_datetime(df["login_at"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
+                if "logout_at" in df.columns:
+                    df["logout_at"] = pd.to_datetime(df["logout_at"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
+                for col in ["id", "user_id", "email", "username", "role", "login_at", "logout_at"]:
+                    if col not in df.columns:
+                        df[col] = ""
+                df.fillna("", inplace=True)
+
+            return df_today, df_month
+        except Exception:
+            return empty.copy(), empty.copy()
+
     def _gestiones_db_path(self) -> str:
         return os.path.join(str(get_data_dir()), "db_gestiones.sqlite")
 
@@ -1096,7 +1128,10 @@ class DashboardWidget(QWidget):
 
     def _exportar_excel_mensual(self):
         hoy = datetime.now()
-        df_mes = obtener_conexiones_mes(hoy.year, hoy.month, role="ejecutivo")
+        if self._usa_backend_dashboard():
+            _, df_mes = self._backend_session_history()
+        else:
+            df_mes = obtener_conexiones_mes(hoy.year, hoy.month, role="ejecutivo")
         rep = preparar_reporte_excel(df_mes)
 
         if rep.empty:
@@ -1160,8 +1195,7 @@ class DashboardWidget(QWidget):
 
             if ok and self._can_view_reporte_ejecutiva():
                 hoy = datetime.now()
-                df_hoy = obtener_conexiones_hoy(role="ejecutivo")
-                df_mes = obtener_conexiones_mes(hoy.year, hoy.month, role="ejecutivo")
+                df_hoy, df_mes = self._backend_session_history()
                 team_stats = self._build_team_stats(df_hoy, df_mes)
                 self._fill_ejecutivas_table(df_hoy)
 

@@ -66,7 +66,7 @@ class EnviosWidget(QWidget):
         self.tabs.setTabBar(_SubTabBar())
 
         self.tab_config = TabConfig()
-        self.tab_plantillas = TabPlantillas()
+        self.tab_plantillas = TabPlantillas(session=session)
         self.tab_envio = TabEnvio(
             get_config_fn=self.tab_config.get_config,
             get_plantilla_fn=self.tab_plantillas.get_plantilla_actual,

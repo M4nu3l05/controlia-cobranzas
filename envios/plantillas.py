@@ -11,6 +11,7 @@ import os
 import json
 import re
 
+from auth.auth_service import backend_list_email_templates
 from core.paths import get_data_dir
 
 # ────────────────────────────────────────────────────────────────
@@ -86,8 +87,28 @@ def _plantillas_path() -> str:
     return os.path.join(data_dir, "plantillas.json")
 
 
-def cargar_plantillas() -> list[dict]:
-    """Devuelve las plantillas guardadas. Si no existen, devuelve las predeterminadas."""
+def _normalizar_backend_templates(rows: list[dict]) -> list[dict]:
+    out: list[dict] = []
+    for row in rows or []:
+        out.append(
+            {
+                "_id": int(row.get("id", 0) or 0),
+                "nombre": str(row.get("nombre", "")).strip(),
+                "asunto": str(row.get("asunto", "")).strip(),
+                "cuerpo": str(row.get("cuerpo", "")).strip(),
+            }
+        )
+    return out
+
+
+def cargar_plantillas(session=None) -> list[dict]:
+    """Devuelve plantillas. En sesión backend usa DB central; si falla, usa fallback local/default."""
+    if session is not None and getattr(session, "auth_source", "") == "backend":
+        rows, err = backend_list_email_templates(session)
+        if not err and rows:
+            return _normalizar_backend_templates(rows)
+
+    # Fallback local/default para modo no-backend o contingencia.
     path = _plantillas_path()
     if not os.path.exists(path):
         return [dict(p) for p in PLANTILLAS_DEFAULT]

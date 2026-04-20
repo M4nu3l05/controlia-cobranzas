@@ -38,6 +38,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     must_change_password: bool
+    session_history_id: int | None = None
     user: UserMeResponse
 
 

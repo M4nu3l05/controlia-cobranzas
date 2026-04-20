@@ -9,6 +9,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -44,6 +45,68 @@ _BTN_SEC = """
         font-size:9pt; font-weight:600; }
     QPushButton:hover { background:#e2e8f0; }
 """
+
+
+class _TempPasswordDialog(QDialog):
+    def __init__(self, *, username: str, temp_password: str, parent=None):
+        super().__init__(parent)
+        self._temp_password = str(temp_password or "")
+        self.setWindowTitle("Contrasena temporal generada")
+        self.setMinimumWidth(520)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        info = QLabel(
+            "Comparte esta contrasena por canal seguro. "
+            "El usuario debera cambiarla al iniciar sesion."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color:#334155; font-size:9pt;")
+        lay.addWidget(info)
+
+        user_lbl = QLabel(f"Usuario: {username}")
+        user_lbl.setStyleSheet("font-weight:700; color:#0f172a;")
+        lay.addWidget(user_lbl)
+
+        row = QHBoxLayout()
+        self.edit = QLineEdit(self._temp_password)
+        self.edit.setReadOnly(True)
+        self.edit.setMinimumHeight(38)
+        self.edit.setStyleSheet(
+            """
+            QLineEdit {
+                background:#f8fafc; border:1px solid #cbd5e1; border-radius:8px;
+                padding:0 10px; font-family:Consolas; font-size:10pt; color:#0f172a;
+            }
+            """
+        )
+        row.addWidget(self.edit, 1)
+
+        btn_copy = QPushButton("Copiar contrasena")
+        btn_copy.setMinimumHeight(38)
+        btn_copy.setStyleSheet(_BTN_PRIMARY)
+        btn_copy.clicked.connect(self._copy)
+        row.addWidget(btn_copy)
+        lay.addLayout(row)
+
+        self.lbl_ok = QLabel("")
+        self.lbl_ok.setStyleSheet("color:#16a34a; font-size:8.5pt;")
+        lay.addWidget(self.lbl_ok)
+
+        btn_close = QPushButton("Cerrar")
+        btn_close.setMinimumHeight(34)
+        btn_close.setStyleSheet(_BTN_SEC)
+        btn_close.clicked.connect(self.accept)
+        lay.addWidget(btn_close, 0, Qt.AlignmentFlag.AlignRight)
+
+        self.edit.selectAll()
+        self.edit.setFocus()
+
+    def _copy(self):
+        QApplication.clipboard().setText(self._temp_password)
+        self.lbl_ok.setText("Contrasena copiada al portapapeles.")
 
 
 def _badge(role: str) -> QLabel:
@@ -419,7 +482,7 @@ class UsersPanel(QWidget):
         executor_role = str(self._session.role or "").strip().lower()
 
         if target_role == ROLE_EJECUTIVO:
-            return executor_role in {ROLE_SUPERVISOR, ROLE_ADMIN}
+            return executor_role == ROLE_SUPERVISOR
         if target_role == ROLE_SUPERVISOR:
             return executor_role == ROLE_ADMIN
         return False
@@ -445,12 +508,6 @@ class UsersPanel(QWidget):
             QMessageBox.warning(self, "Sin contraseña temporal", "El backend no devolvió contraseña temporal.")
             return
 
-        QMessageBox.information(
-            self,
-            "Contraseña temporal generada",
-            "Comparte esta contraseña por un canal seguro:\n\n"
-            f"Usuario: {username}\n"
-            f"Temporal: {temp_password}\n\n"
-            "El usuario deberá cambiarla al iniciar sesión.",
-        )
+        dlg = _TempPasswordDialog(username=username, temp_password=temp_password, parent=self)
+        dlg.exec()
         self.reload()

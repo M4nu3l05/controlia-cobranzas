@@ -15,6 +15,8 @@ from app.schemas.user import (
     UserCarteraAssignmentItem,
     UserCarteraEmpresasResponse,
     AssistedPasswordResetResponse,
+    RecoveryRequestItem,
+    RecoveryRequestResetResponse,
 )
 from app.services.user_service import (
     admin_create_user_service,
@@ -26,6 +28,8 @@ from app.services.user_service import (
     list_cartera_assignments_service,
     save_cartera_assignments_service,
     assisted_reset_password_service,
+    list_pending_recovery_requests_service,
+    assisted_reset_password_by_request_service,
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -214,6 +218,49 @@ def assisted_reset_password(
             target_user_id=user_id,
         )
         return AssistedPasswordResetResponse(
+            user=user_item,
+            temporary_password=temp_password,
+            must_change_password=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/assisted-recovery/requests/pending", response_model=list[RecoveryRequestItem])
+def list_pending_recovery_requests(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return list_pending_recovery_requests_service(
+            db=db,
+            executor=current_user,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/assisted-recovery/requests/{request_id}/reset", response_model=RecoveryRequestResetResponse)
+def assisted_reset_password_by_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_admin_or_supervisor(current_user)
+    try:
+        resolved_request_id, user_item, temp_password = assisted_reset_password_by_request_service(
+            db=db,
+            executor=current_user,
+            request_id=request_id,
+        )
+        return RecoveryRequestResetResponse(
+            request_id=resolved_request_id,
             user=user_item,
             temporary_password=temp_password,
             must_change_password=True,

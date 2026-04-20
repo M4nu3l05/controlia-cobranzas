@@ -8,11 +8,13 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 import requests
+from requests.adapters import HTTPAdapter
 from core.paths import get_config_dir
 
 from .auth_db import (
@@ -41,11 +43,20 @@ __all__ = [
     "backend_get_user_carteras", "backend_list_cartera_asignaciones", "backend_save_cartera_asignaciones", "backend_list_all_gestiones",
     "backend_clear_empresa_deudores", "backend_clear_all_deudores", "backend_clear_all_gestiones",
     "backend_get_legal_acceptance_status", "backend_register_legal_acceptance", "backend_assisted_reset_password",
+    "backend_list_pending_recovery_requests", "backend_reset_pending_recovery_request",
+    "backend_list_email_templates", "backend_create_email_template",
+    "backend_update_email_template", "backend_delete_email_template",
+    "backend_close_session",
 ]
 
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 DEFAULT_BACKEND_URL = "https://crm-backend-4712.onrender.com"
 DEFAULT_TIMEOUT = 12
+_HTTP_POOL_SIZE = 20
+_CARTERA_ASSIGNMENTS_TTL_SEC = 120
+_HTTP_SESSION = requests.Session()
+_HTTP_SESSION.mount("http://", HTTPAdapter(pool_connections=_HTTP_POOL_SIZE, pool_maxsize=_HTTP_POOL_SIZE))
+_HTTP_SESSION.mount("https://", HTTPAdapter(pool_connections=_HTTP_POOL_SIZE, pool_maxsize=_HTTP_POOL_SIZE))
 
 
 @dataclass
@@ -59,6 +70,7 @@ class UserSession:
     access_token: str | None = None
     auth_source: str = "local"
     empresas_asignadas: list[str] | None = None
+    session_history_id: int | None = None
 
     @property
     def role_label(self) -> str:
@@ -86,6 +98,11 @@ class UserSession:
             access_token=str(payload.get("access_token", "")) or None,
             auth_source="backend",
             empresas_asignadas=[],
+            session_history_id=(
+                int(payload.get("session_history_id"))
+                if payload.get("session_history_id") is not None
+                else None
+            ),
         )
 
 
@@ -178,7 +195,7 @@ def _extract_error_message(response: requests.Response, default_message: str) ->
 
 def _http_post_json(path: str, payload: dict, timeout: int = DEFAULT_TIMEOUT) -> dict:
     url = f"{get_backend_base_url()}{path}"
-    response = requests.post(url, json=payload, timeout=timeout)
+    response = _HTTP_SESSION.post(url, json=payload, timeout=timeout)
     try:
         data = response.json()
     except ValueError:
@@ -207,7 +224,7 @@ def _http_request_auth(
     timeout: int = DEFAULT_TIMEOUT,
 ):
     url = f"{get_backend_base_url()}{path}"
-    response = requests.request(
+    response = _HTTP_SESSION.request(
         method=method,
         url=url,
         json=payload,
@@ -236,7 +253,7 @@ def _http_multipart_auth(
     timeout: int = 120,
 ) -> dict:
     url = f"{get_backend_base_url()}{path}"
-    response = requests.post(
+    response = _HTTP_SESSION.post(
         url=url,
         data=data,
         files=files,
@@ -968,12 +985,21 @@ def backend_list_cartera_asignaciones(
     session: UserSession,
 ) -> Tuple[list[dict], str]:
     try:
+        now = time.time()
+        cached_at = float(getattr(session, "_cartera_assignments_cache_at", 0.0) or 0.0)
+        cached_rows = getattr(session, "_cartera_assignments_cache", None)
+        if isinstance(cached_rows, list) and (now - cached_at) <= _CARTERA_ASSIGNMENTS_TTL_SEC:
+            return cached_rows, ""
+
         data = _http_request_auth(
             "GET",
             "/users/carteras",
             token=_require_backend_token(session),
         )
-        return data if isinstance(data, list) else [], ""
+        rows = data if isinstance(data, list) else []
+        session._cartera_assignments_cache = rows
+        session._cartera_assignments_cache_at = now
+        return rows, ""
     except ValueError as exc:
         return [], str(exc)
     except requests.RequestException as exc:
@@ -992,7 +1018,10 @@ def backend_save_cartera_asignaciones(
             token=_require_backend_token(session),
             payload={"assignments": assignments},
         )
-        return data if isinstance(data, list) else [], ""
+        rows = data if isinstance(data, list) else []
+        session._cartera_assignments_cache = rows
+        session._cartera_assignments_cache_at = time.time()
+        return rows, ""
     except ValueError as exc:
         return [], str(exc)
     except requests.RequestException as exc:
@@ -1049,5 +1078,145 @@ def backend_register_legal_acceptance(
         return None, str(exc)
     except requests.RequestException as exc:
         return None, _friendly_backend_error(exc)
+
+
+def backend_list_pending_recovery_requests(
+    session: UserSession,
+) -> Tuple[list[dict], str]:
+    try:
+        data = _http_request_auth(
+            "GET",
+            "/users/assisted-recovery/requests/pending",
+            token=_require_backend_token(session),
+        )
+        return data if isinstance(data, list) else [], ""
+    except ValueError as exc:
+        return [], str(exc)
+    except requests.RequestException as exc:
+        return [], _friendly_backend_error(exc)
+
+
+def backend_reset_pending_recovery_request(
+    session: UserSession,
+    *,
+    request_id: int,
+) -> Tuple[dict | None, str]:
+    try:
+        data = _http_request_auth(
+            "POST",
+            f"/users/assisted-recovery/requests/{int(request_id)}/reset",
+            token=_require_backend_token(session),
+        )
+        return data if isinstance(data, dict) else None, ""
+    except ValueError as exc:
+        return None, str(exc)
+    except requests.RequestException as exc:
+        return None, _friendly_backend_error(exc)
+
+
+def backend_list_email_templates(
+    session: UserSession,
+) -> Tuple[list[dict], str]:
+    try:
+        data = _http_request_auth(
+            "GET",
+            "/templates/email",
+            token=_require_backend_token(session),
+        )
+        return data if isinstance(data, list) else [], ""
+    except ValueError as exc:
+        return [], str(exc)
+    except requests.RequestException as exc:
+        return [], _friendly_backend_error(exc)
+
+
+def backend_create_email_template(
+    session: UserSession,
+    *,
+    nombre: str,
+    asunto: str,
+    cuerpo: str,
+    is_active: bool = True,
+) -> Tuple[dict | None, str]:
+    try:
+        data = _http_request_auth(
+            "POST",
+            "/templates/email",
+            token=_require_backend_token(session),
+            payload={
+                "nombre": str(nombre or "").strip(),
+                "asunto": str(asunto or "").strip(),
+                "cuerpo": str(cuerpo or "").strip(),
+                "is_active": bool(is_active),
+            },
+        )
+        return data if isinstance(data, dict) else None, ""
+    except ValueError as exc:
+        return None, str(exc)
+    except requests.RequestException as exc:
+        return None, _friendly_backend_error(exc)
+
+
+def backend_update_email_template(
+    session: UserSession,
+    *,
+    template_id: int,
+    nombre: str,
+    asunto: str,
+    cuerpo: str,
+    is_active: bool = True,
+) -> Tuple[dict | None, str]:
+    try:
+        data = _http_request_auth(
+            "PUT",
+            f"/templates/email/{int(template_id)}",
+            token=_require_backend_token(session),
+            payload={
+                "nombre": str(nombre or "").strip(),
+                "asunto": str(asunto or "").strip(),
+                "cuerpo": str(cuerpo or "").strip(),
+                "is_active": bool(is_active),
+            },
+        )
+        return data if isinstance(data, dict) else None, ""
+    except ValueError as exc:
+        return None, str(exc)
+    except requests.RequestException as exc:
+        return None, _friendly_backend_error(exc)
+
+
+def backend_delete_email_template(
+    session: UserSession,
+    *,
+    template_id: int,
+) -> str:
+    try:
+        _http_request_auth(
+            "DELETE",
+            f"/templates/email/{int(template_id)}",
+            token=_require_backend_token(session),
+        )
+        return ""
+    except ValueError as exc:
+        return str(exc)
+    except requests.RequestException as exc:
+        return _friendly_backend_error(exc)
+
+
+def backend_close_session(session: UserSession) -> str:
+    if getattr(session, "auth_source", "") != "backend":
+        return ""
+    try:
+        _http_request_auth(
+            "POST",
+            "/auth/logout",
+            token=_require_backend_token(session),
+            payload={"session_history_id": getattr(session, "session_history_id", None)},
+        )
+        return ""
+    except ValueError as exc:
+        return str(exc)
+    except requests.RequestException as exc:
+        return _friendly_backend_error(exc)
 
 

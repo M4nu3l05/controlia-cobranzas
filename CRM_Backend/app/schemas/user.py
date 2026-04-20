@@ -55,3 +55,22 @@ class AssistedPasswordResetResponse(BaseModel):
     user: UserListItem
     temporary_password: str
     must_change_password: bool = True
+
+
+class RecoveryRequestItem(BaseModel):
+    id: int
+    requested_email: str
+    target_user_id: int | None = None
+    target_username: str = ""
+    target_role: str = ""
+    target_role_label: str = ""
+    required_assistor_role: str = ""
+    requested_at: str = ""
+    status: str = "pending"
+
+
+class RecoveryRequestResetResponse(BaseModel):
+    request_id: int
+    user: UserListItem
+    temporary_password: str
+    must_change_password: bool = True

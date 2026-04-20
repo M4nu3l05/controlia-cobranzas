@@ -5,7 +5,7 @@
 from __future__ import annotations
 import math
 
-from PyQt6.QtCore import QRect, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QRect, QRectF, Qt, QSettings, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QBrush, QColor, QFont, QLinearGradient,
     QPainter, QPainterPath, QPen, QRadialGradient
@@ -257,6 +257,7 @@ class _LoginPage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._settings = QSettings("Controlia", "ControliaCobranzas")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(44, 28, 44, 28)
         lay.setSpacing(0)
@@ -314,6 +315,23 @@ class _LoginPage(QWidget):
         info.setStyleSheet("color:#94a3b8; font-size:8pt;")
         lay.addWidget(info)
         lay.addStretch(1)
+        self._load_remembered_email()
+
+    def _load_remembered_email(self) -> None:
+        remembered = str(self._settings.value("auth/remembered_email", "") or "").strip()
+        if remembered:
+            self.f_email.edit.setText(remembered)
+            self.chk.setChecked(True)
+            self.f_pass.edit.setFocus()
+        else:
+            self.chk.setChecked(False)
+
+    def _persist_remembered_email(self, email: str) -> None:
+        if self.chk.isChecked():
+            self._settings.setValue("auth/remembered_email", str(email or "").strip())
+        else:
+            self._settings.remove("auth/remembered_email")
+        self._settings.sync()
 
     def apply_responsive(self, width: int) -> None:
         if width <= 760:
@@ -330,7 +348,9 @@ class _LoginPage(QWidget):
         self.f_email.clear_error()
         self.f_pass.clear_error()
 
-        if not self.f_email.value.strip():
+        email = self.f_email.value.strip()
+
+        if not email:
             self.f_email.set_error("Ingresa tu correo.")
             return
         if not self.f_pass.value:
@@ -339,11 +359,12 @@ class _LoginPage(QWidget):
 
         self.btn.setEnabled(False)
         self.btn.setText("Verificando...")
-        session, err = login(self.f_email.value.strip(), self.f_pass.value)
+        session, err = login(email, self.f_pass.value)
         self.btn.setEnabled(True)
         self.btn.setText("Iniciar sesión")
 
         if session:
+            self._persist_remembered_email(email)
             self.sig_ok.emit(session)
         else:
             self.f_pass.set_error(err)
@@ -724,7 +745,7 @@ class AuthWindow(QDialog):
         self._apply_responsive()
 
     def _after_login(self, session: UserSession):
-        if not getattr(session, "session_history_id", None):
+        if getattr(session, "auth_source", "") != "backend" and not getattr(session, "session_history_id", None):
             try:
                 setattr(session, "session_history_id", register_login(session))
             except Exception:

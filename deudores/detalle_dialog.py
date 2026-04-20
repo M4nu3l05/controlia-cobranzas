@@ -628,7 +628,7 @@ class _GestionWidget(QWidget):
         lay.addLayout(btn_row)
 
         self.tbl.itemSelectionChanged.connect(self._on_sel)
-        self._cargar()
+        QTimer.singleShot(0, self._cargar)
 
     def _cargar(self):
         self.tbl.setRowCount(0)
@@ -999,7 +999,7 @@ class DetalleDeudorDialog(QDialog):
         nombre = self._info_cliente.get("Nombre", rut)
         rut_fmt = self._resolver_rut_cliente() or self._info_cliente.get("RUT", rut)
 
-        self._plantillas = cargar_plantillas() or []
+        self._plantillas = cargar_plantillas(self._session) or []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
@@ -1237,8 +1237,8 @@ class DetalleDeudorDialog(QDialog):
         root.addLayout(btn_row)
 
         self._aplicar_modo_backend()
-        self._actualizar_permisos_cartera()
         self._ajustar_layout_responsivo()
+        QTimer.singleShot(0, self._actualizar_permisos_cartera)
 
 
     def _usa_backend_deudores(self) -> bool:

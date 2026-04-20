@@ -12,6 +12,7 @@ from app.models.password_recovery_request import PasswordRecoveryRequest
 from app.models.reset_token import PasswordResetToken
 from app.models.user import User
 from app.schemas.auth import TokenResponse, UserMeResponse
+from app.services.session_history_service import register_session_login
 
 ROLES = {
     "admin": "Administrador",
@@ -138,10 +139,12 @@ def authenticate_user(db: Session, email: str, password: str) -> TokenResponse:
         raise ValueError("Correo o contrasena incorrectos.")
 
     token = create_access_token(subject=str(user.id))
+    session_row = register_session_login(db, user=user, auth_source="backend")
 
     return TokenResponse(
         access_token=token,
         must_change_password=bool(user.must_change_password),
+        session_history_id=int(session_row.id),
         user=user_to_me(user),
     )
 

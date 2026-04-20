@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import pandas as pd
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
@@ -33,9 +34,10 @@ from deudores.database import (
 )
 from deudores.gestiones_db import (
     ESTADO_DEUDOR_DEFAULT,
+    insertar_gestion_manual,
     obtener_estados_deudor_por_rut,
 )
-from auth.auth_service import backend_list_destinatarios
+from auth.auth_service import backend_create_gestion, backend_list_destinatarios
 from .config import config_completa
 from .plantillas import cargar_plantillas
 from .ui_components import (
@@ -74,6 +76,9 @@ class TabEnvio(QWidget):
         self._df_base_segmentacion: pd.DataFrame | None = None
         self._col_email: str = "mail_afiliado"
         self._email_to_rows: dict[str, list[int]] = {}
+        self._envio_payload_by_email: dict[str, list[dict]] = {}
+        self._gestiones_pendientes_registro: list[dict] = []
+        self._plantilla_envio_nombre: str = ""
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -365,14 +370,14 @@ class TabEnvio(QWidget):
     def _refrescar_plantillas(self):
         self.cmb_plantilla.blockSignals(True)
         self.cmb_plantilla.clear()
-        for p in cargar_plantillas():
+        for p in cargar_plantillas(self._session):
             self.cmb_plantilla.addItem(p.get("nombre", "Sin nombre"))
         self.cmb_plantilla.blockSignals(False)
         self._preview_plantilla()
 
     def _preview_plantilla(self):
         idx = self.cmb_plantilla.currentIndex()
-        pls = cargar_plantillas()
+        pls = cargar_plantillas(self._session)
         if 0 <= idx < len(pls):
             self.txt_preview_asunto.setText(pls[idx].get("asunto", ""))
         else:
@@ -413,6 +418,8 @@ class TabEnvio(QWidget):
     def _limpiar_log(self):
         self.tbl_log.setRowCount(0)
         self._email_to_rows.clear()
+        self._envio_payload_by_email.clear()
+        self._gestiones_pendientes_registro.clear()
         self._df_dest = None
         self.btn_enviar.setEnabled(False)
         self.lbl_dest_info.setText("Log limpiado. Pulsa 'Cargar destinatarios filtrados'.")
@@ -451,6 +458,15 @@ class TabEnvio(QWidget):
                 return r
 
         return None
+
+    def _pop_payload_for_email(self, email: str) -> dict | None:
+        key = self._email_key(email)
+        if not key:
+            return None
+        rows = self._envio_payload_by_email.get(key, [])
+        if not rows:
+            return None
+        return rows.pop(0)
 
     # =========================================================
     # Utilidades de datos
@@ -775,12 +791,13 @@ class TabEnvio(QWidget):
             return
 
         idx = self.cmb_plantilla.currentIndex()
-        pls = cargar_plantillas()
+        pls = cargar_plantillas(self._session)
         if idx < 0 or idx >= len(pls):
             QMessageBox.warning(self, "Sin plantilla", "Selecciona una plantilla.")
             return
 
         plantilla = pls[idx]
+        self._plantilla_envio_nombre = str(plantilla.get("nombre", "")).strip()
 
         if (
             QMessageBox.question(
@@ -801,6 +818,13 @@ class TabEnvio(QWidget):
 
         mask = self._df_dest[self._col_email].astype(str).isin(emails_pendientes)
         df_enviar = self._df_dest[mask].copy()
+        self._envio_payload_by_email.clear()
+        self._gestiones_pendientes_registro.clear()
+        for _, fila in df_enviar.iterrows():
+            email_key = self._email_key(str(fila.get(self._col_email, "")).strip())
+            if not email_key:
+                continue
+            self._envio_payload_by_email.setdefault(email_key, []).append(dict(fila))
 
         params = EnvioParams(
             host=cfg["host"],
@@ -842,6 +866,7 @@ class TabEnvio(QWidget):
                     item.setText("📨 Enviando…")
 
     def _on_resultado(self, res: ResultadoEnvio):
+        payload = self._pop_payload_for_email(res.email)
         row = self._find_row_for_email(res.email, consume=True)
         if row is None:
             row = self.tbl_log.rowCount()
@@ -855,22 +880,84 @@ class TabEnvio(QWidget):
             estado, color = _ESTADO_NO_ENVIADO, _COLOR_FALLIDO
 
         self._set_fila_log(row, res.email, res.nombre, estado, res.mensaje, color)
+        if res.ok and isinstance(payload, dict):
+            self._gestiones_pendientes_registro.append(payload)
         self._actualizar_contadores()
+
+
+    def _registrar_gestiones_envio_masivo(self) -> tuple[int, list[str]]:
+        if not self._gestiones_pendientes_registro:
+            return 0, []
+
+        ok_count = 0
+        errores: list[str] = []
+        fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
+        empresa_filtro = self.cmb_empresa_filtro.currentText().strip()
+        empresa_fallback = "" if empresa_filtro.lower().startswith("todas") else empresa_filtro
+        observacion = f"Envio masivo | Plantilla: {self._plantilla_envio_nombre or 'Plantilla'}"
+
+        for fila in self._gestiones_pendientes_registro:
+            rut = str(fila.get("Rut_Afiliado", "")).strip()
+            if not rut:
+                continue
+            nombre = str(fila.get("Nombre_Afiliado", "")).strip() or rut
+            empresa = str(fila.get("_empresa", "")).strip() or empresa_fallback
+            try:
+                if self._usa_backend_envios():
+                    _, err = backend_create_gestion(
+                        self._session,
+                        rut=rut,
+                        empresa=empresa,
+                        nombre_afiliado=nombre,
+                        tipo_gestion="Email",
+                        estado="Enviado",
+                        fecha_gestion=fecha_hoy,
+                        observacion=observacion,
+                        origen="backend_email_masivo",
+                    )
+                    if err:
+                        raise ValueError(err)
+                else:
+                    insertar_gestion_manual(
+                        rut=rut,
+                        nombre=nombre,
+                        tipo_gestion="Email",
+                        estado="Enviado",
+                        fecha=fecha_hoy,
+                        observacion=observacion,
+                    )
+                ok_count += 1
+            except Exception as exc:
+                errores.append(f"{rut}: {exc}")
+
+        self._gestiones_pendientes_registro.clear()
+        return ok_count, errores
 
     def _on_terminado(self, ok: int, fallidos: int, omitidos: int):
         self.btn_enviar.setEnabled(True)
         self.btn_cancelar.setEnabled(False)
         self.progress.setValue(self.progress.maximum())
         self.lbl_prog.setText(
-            f"Proceso finalizado — ✅ {ok} enviados | ❌ {fallidos} no enviados | ⚠️ {omitidos} sin email"
+            f"Proceso finalizado - enviados={ok}, no_enviados={fallidos}, sin_email={omitidos}"
         )
         self._actualizar_contadores()
+        gest_ok, gest_err = self._registrar_gestiones_envio_masivo()
 
-        QMessageBox.information(
-            self,
-            "Envío completado",
-            f"Enviados: {ok}\nNo enviados: {fallidos}\nSin email: {omitidos}",
-        )
+        if gest_err:
+            detalle = "\n".join(gest_err[:5])
+            QMessageBox.warning(
+                self,
+                "Envio completado con advertencias",
+                f"Enviados: {ok}\nNo enviados: {fallidos}\nSin email: {omitidos}\n"
+                f"Gestiones registradas: {gest_ok}\n\nErrores de registro:\n{detalle}",
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Envio completado",
+                f"Enviados: {ok}\nNo enviados: {fallidos}\nSin email: {omitidos}\n"
+                f"Gestiones registradas: {gest_ok}",
+            )
 
     def _on_error_fatal(self, err: str):
         self.btn_enviar.setEnabled(True)

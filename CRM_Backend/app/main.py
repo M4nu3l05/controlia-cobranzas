@@ -9,8 +9,11 @@ from app.api.deudores import router as deudores_router
 from app.api.deudores_import import router as deudores_import_router
 from app.api.gestiones import router as gestiones_router
 from app.api.dashboard import router as dashboard_router
+from app.api.templates import router as templates_router
 from app.core.config import get_settings
 from app.db.session import Base, SessionLocal, engine
+from app.models.email_template import EmailTemplate  # noqa: F401
+from app.models.session_history import UserSessionHistory  # noqa: F401
 from app.models.legal_acceptance import LegalAcceptanceCurrent, LegalAcceptanceEvent  # noqa: F401
 from app.models.password_recovery_request import PasswordRecoveryRequest  # noqa: F401
 from app.models.reset_token import PasswordResetToken  # noqa: F401
@@ -18,6 +21,7 @@ from app.schemas.auth import HealthResponse
 from app.services.auth_service import ensure_first_admin
 from app.services.deudor_schema_service import ensure_deudores_optional_columns
 from app.services.gestion_service import ensure_gestiones_optional_columns
+from app.services.template_service import ensure_default_email_templates
 from app.services.user_service import ensure_cartera_assignments_table
 
 settings = get_settings()
@@ -53,6 +57,7 @@ def on_startup():
             password=settings.first_admin_password,
         )
         ensure_cartera_assignments_table(db)
+        ensure_default_email_templates(db)
     finally:
         db.close()
 
@@ -81,6 +86,7 @@ app.include_router(gestiones_router)
 
 
 app.include_router(dashboard_router)
+app.include_router(templates_router)
 
 
 

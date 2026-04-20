@@ -12,6 +12,7 @@ from app.models.user import User
 from app.schemas.user import (
     UserListItem,
     UserCarteraAssignmentItem,
+    RecoveryRequestItem,
 )
 from app.services.auth_service import (
     ROLE_ADMIN,
@@ -393,6 +394,79 @@ def assisted_reset_password_service(
     db.refresh(target)
 
     return _to_user_item(target), temp_password
+
+
+def _ensure_admin_or_supervisor(executor: User) -> None:
+    if str(executor.role or "").strip().lower() not in {ROLE_ADMIN, ROLE_SUPERVISOR}:
+        raise ValueError("No tienes permiso para gestionar recuperaciones asistidas.")
+
+
+def list_pending_recovery_requests_service(
+    db: Session,
+    *,
+    executor: User,
+) -> list[RecoveryRequestItem]:
+    _ensure_admin_or_supervisor(executor)
+    executor_role = str(executor.role or "").strip().lower()
+
+    rows = (
+        db.query(PasswordRecoveryRequest)
+        .filter(
+            PasswordRecoveryRequest.status == "pending",
+            PasswordRecoveryRequest.required_assistor_role == executor_role,
+        )
+        .order_by(PasswordRecoveryRequest.requested_at.asc(), PasswordRecoveryRequest.id.asc())
+        .all()
+    )
+
+    out: list[RecoveryRequestItem] = []
+    for row in rows:
+        target = get_user_by_id(db, int(row.target_user_id)) if row.target_user_id else None
+        out.append(
+            RecoveryRequestItem(
+                id=int(row.id),
+                requested_email=str(row.requested_email or ""),
+                target_user_id=(int(row.target_user_id) if row.target_user_id is not None else None),
+                target_username=str(getattr(target, "username", "") or ""),
+                target_role=str(getattr(target, "role", row.target_role) or ""),
+                target_role_label=_role_label(str(getattr(target, "role", row.target_role) or "")),
+                required_assistor_role=str(row.required_assistor_role or ""),
+                requested_at=row.requested_at.strftime("%Y-%m-%d %H:%M:%S") if row.requested_at else "",
+                status=str(row.status or "pending"),
+            )
+        )
+    return out
+
+
+def assisted_reset_password_by_request_service(
+    db: Session,
+    *,
+    executor: User,
+    request_id: int,
+) -> tuple[int, UserListItem, str]:
+    _ensure_admin_or_supervisor(executor)
+    executor_role = str(executor.role or "").strip().lower()
+
+    req = (
+        db.query(PasswordRecoveryRequest)
+        .filter(
+            PasswordRecoveryRequest.id == int(request_id),
+            PasswordRecoveryRequest.status == "pending",
+            PasswordRecoveryRequest.required_assistor_role == executor_role,
+        )
+        .first()
+    )
+    if not req:
+        raise ValueError("La solicitud ya no está pendiente o no te corresponde gestionarla.")
+    if not req.target_user_id:
+        raise ValueError("La solicitud no tiene usuario objetivo válido.")
+
+    user_item, temp_password = assisted_reset_password_service(
+        db=db,
+        executor=executor,
+        target_user_id=int(req.target_user_id),
+    )
+    return int(req.id), user_item, temp_password
 
 
 

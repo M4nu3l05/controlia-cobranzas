@@ -18,6 +18,7 @@ from app.schemas.auth import (
     TokenResponse,
     UserMeResponse,
 )
+from app.schemas.session_history import LogoutRequest
 from app.services.auth_service import (
     authenticate_user,
     change_current_user_password,
@@ -25,6 +26,7 @@ from app.services.auth_service import (
     get_user_by_id,
     user_to_me,
 )
+from app.services.session_history_service import close_session
 from app.services.legal_acceptance_service import (
     get_legal_acceptance_status,
     register_legal_acceptance,
@@ -96,6 +98,20 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserMeResponse)
 def me(current_user: User = Depends(get_current_user)):
     return user_to_me(current_user)
+
+
+@router.post("/logout", response_model=MessageResponse)
+def logout(
+    payload: LogoutRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    close_session(
+        db=db,
+        user=current_user,
+        session_history_id=payload.session_history_id,
+    )
+    return MessageResponse(message="Sesion cerrada correctamente.")
 
 
 @router.post("/change-password", response_model=MessageResponse)
