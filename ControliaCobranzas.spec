@@ -11,6 +11,8 @@ datas = [
     (str(project_dir / "legal" / "terminos.txt"), "legal"),
     (str(project_dir / "legal" / "privacidad.txt"), "legal"),
 ]
+if icon_file.exists():
+    datas.append((str(icon_file), "."))
 
 hiddenimports = [
     "PyQt6.sip",

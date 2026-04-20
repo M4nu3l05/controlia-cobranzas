@@ -39,13 +39,14 @@ Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; Group
 Source: "..\dist\ControliaCobranzas\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\ControliaCobranzas\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\backend_url.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\assets\app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\legal\terminos.txt"; DestDir: "{app}\legal"; Flags: ignoreversion
 Source: "..\legal\privacidad.txt"; DestDir: "{app}\legal"; Flags: ignoreversion
 Source: "..\legal\privacidad.txt"; DestDir: "{tmp}"; Flags: dontcopy
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "Ejecutar {#MyAppName}"; Flags: nowait postinstall skipifsilent

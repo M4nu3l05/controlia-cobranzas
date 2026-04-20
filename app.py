@@ -5,7 +5,7 @@ from core.logging_config import configure_logging
 from core.paths import ensure_runtime_dirs
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QFont
+from PyQt6.QtGui import QAction, QFont, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -37,6 +37,19 @@ from auth.auth_service import (
 )
 from auth.session_history_db import close_session
 from legal import LegalDocumentDialog, enforce_legal_acceptance, get_privacy_text, get_terms_text
+
+
+def _app_icon_path() -> str:
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(base_dir, "assets", "app_icon.ico"),
+        os.path.join(base_dir, "app_icon.ico"),
+        os.path.join(os.path.dirname(sys.executable), "app_icon.ico"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return ""
 
 
 class _ColorTabBar(QTabBar):
@@ -380,6 +393,9 @@ class MainWindow(QMainWindow):
         self._session = session
         self._session_closed = False
         self._last_pending_recovery_ids: set[int] = set()
+        icon_path = _app_icon_path()
+        if icon_path:
+            self.setWindowIcon(QIcon(icon_path))
 
         username = session.username if session else "Usuario"
         self.setWindowTitle(f"Controlia Cobranzas  |  {username}")
@@ -421,7 +437,7 @@ class MainWindow(QMainWindow):
             strip_row.setSpacing(10)
             strip_row.addStretch(1)
 
-            lbl_user = QLabel(f"??  {session.username}  ·  {session.email}")
+            lbl_user = QLabel(f"👤  {session.username}  ·  {session.email}")
             lbl_user.setStyleSheet("color:#bfdbfe; font-size:8pt; background:transparent;")
             strip_row.addWidget(lbl_user)
 
@@ -490,24 +506,24 @@ class MainWindow(QMainWindow):
         )
 
         self.tab_dashboard = DashboardWidget(session=session)
-        self.tabs.addTab(self.tab_dashboard, "??  Dashboard")
+        self.tabs.addTab(self.tab_dashboard, "📊  Dashboard")
 
         if session is None or session.is_supervisor_or_above():
             self.tab_conciliacion = ConciliacionTab()
-            self.tabs.addTab(self.tab_conciliacion, "??  Conciliación de Nóminas")
+            self.tabs.addTab(self.tab_conciliacion, "📋  Conciliación de Nóminas")
 
         self.tab_deudores = DeudoresWidget(session=session)
-        self.tabs.addTab(self.tab_deudores, "??  Búsqueda de Deudores")
+        self.tabs.addTab(self.tab_deudores, "🔍  Búsqueda de Deudores")
         self.tab_deudores.datos_actualizados.connect(self.tab_dashboard.refrescar)
         self.tab_dashboard.bd_limpiada.connect(self.tab_deudores.limpiar_empresa_en_vista)
 
         if session is None or session.is_supervisor_or_above():
             self.tab_envios = EnviosWidget(session=session)
-            self.tabs.addTab(self.tab_envios, "??  Envíos Programados")
+            self.tabs.addTab(self.tab_envios, "📧  Envíos Programados")
 
         if session and session.is_supervisor_or_above():
             self.tab_admin_carteras = AdminCarterasWidget(session=session)
-            self.tabs.addTab(self.tab_admin_carteras, "???  Administración de carteras")
+            self.tabs.addTab(self.tab_admin_carteras, "🛠️  Administración de carteras")
             self.tab_admin_carteras.datos_actualizados.connect(self.tab_dashboard.refrescar)
             self.tab_admin_carteras.datos_actualizados.connect(self.tab_deudores.refrescar_datos)
             self.tab_admin_carteras.bd_limpiada.connect(self.tab_deudores.limpiar_empresa_en_vista)
@@ -516,7 +532,7 @@ class MainWindow(QMainWindow):
             from auth.views.users_panel import UsersPanel
 
             self.tab_users = UsersPanel(session=session)
-            self.tabs.addTab(self.tab_users, "??  Usuarios")
+            self.tabs.addTab(self.tab_users, "👥  Usuarios")
 
         layout.addWidget(self.tabs)
         self._init_legal_menu()
@@ -649,6 +665,9 @@ def main():
     configure_logging()
 
     app = QApplication(sys.argv)
+    icon_path = _app_icon_path()
+    if icon_path:
+        app.setWindowIcon(QIcon(icon_path))
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     qss_path = os.path.join(base_dir, "styles.qss")
