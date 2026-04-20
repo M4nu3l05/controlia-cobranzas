@@ -6,6 +6,7 @@
 #define MyAppPublisher "Controlia"
 #define MyAppExeName "ControliaCobranzas.exe"
 #define MyAppId "{{1D6E7720-33C0-4745-BFB7-C1EC5A46A57C}"
+#define MyAppIconFile "..\assets\app_icon.ico"
 
 [Setup]
 AppId={#MyAppId}
@@ -22,6 +23,9 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayIcon={app}\{#MyAppExeName}
+#ifexist MyAppIconFile
+SetupIconFile={#MyAppIconFile}
+#endif
 ArchitecturesInstallIn64BitMode=x64
 PrivilegesRequired=admin
 

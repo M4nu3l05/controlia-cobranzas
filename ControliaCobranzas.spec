@@ -3,6 +3,8 @@
 from pathlib import Path
 
 project_dir = Path.cwd()
+icon_file = project_dir / "assets" / "app_icon.ico"
+icon_path = str(icon_file) if icon_file.exists() else None
 
 datas = [
     (str(project_dir / "styles.qss"), "."),
@@ -44,6 +46,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=icon_path,
 )
 
 coll = COLLECT(
