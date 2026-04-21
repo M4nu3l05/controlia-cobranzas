@@ -157,6 +157,7 @@ def list_destinatarios_service(
         return bool(txt and txt not in {"nan", "none", "n", "—"} and "@" in txt)
 
     email_by_key: dict[tuple[str, str], str] = {}
+    expediente_by_key: dict[tuple[str, str], str] = {}
     detalle_rows = (
         detalle_q.order_by(
             DeudorDetalle.updated_at.desc(),
@@ -168,6 +169,11 @@ def list_destinatarios_service(
         key = (_norm_text(det.empresa), _norm_rut(det.rut_afiliado))
         if not key[0] or not key[1]:
             continue
+
+        expediente = _norm_text(getattr(det, "nro_expediente", ""))
+        if expediente and key not in expediente_by_key:
+            expediente_by_key[key] = expediente
+
         if key in email_by_key and _email_valido(email_by_key[key]):
             continue
         mail = _norm_text(det.mail_afiliado)
@@ -191,6 +197,7 @@ def list_destinatarios_service(
                 nombre_afiliado=row.nombre_afiliado,
                 mail_afiliado=email_by_key.get(key, ""),
                 estado_deudor=row.estado_deudor,
+                nro_expediente=expediente_by_key.get(key, _norm_text(getattr(row, "nro_expediente", ""))),
                 copago=float(row.copago or 0),
                 total_pagos=float(row.total_pagos or 0),
                 saldo_actual=float(row.saldo_actual or 0),
@@ -331,6 +338,17 @@ def _recalcular_resumen_desde_detalle(
     copago_total = float(sum(float(r.copago or 0) for r in detalle_rows))
     total_pagos_total = float(sum(float(r.total_pagos or 0) for r in detalle_rows))
     saldo_total = float(sum(float(r.saldo_actual or 0) for r in detalle_rows))
+    expedientes_validos = [
+        _norm_text(getattr(r, "nro_expediente", ""))
+        for r in detalle_rows
+        if _norm_text(getattr(r, "nro_expediente", ""))
+    ]
+    expedientes_unicos: list[str] = list(dict.fromkeys(expedientes_validos))
+    resumen_expediente = (
+        expedientes_unicos[0]
+        if len(expedientes_unicos) == 1
+        else str(len(detalle_rows))
+    )
 
     estado_deudor = _norm_text(estado_deudor_objetivo) if estado_deudor_objetivo else (
         "Cliente Sin deuda" if saldo_total <= 0.5 else "Pagado"
@@ -349,7 +367,7 @@ def _recalcular_resumen_desde_detalle(
         row.total_pagos = total_pagos_total
         row.saldo_actual = max(0.0, saldo_total)
         row.estado_deudor = estado_deudor
-        row.nro_expediente = str(len(detalle_rows))
+        row.nro_expediente = resumen_expediente
 
     for row in detalle_rows:
         row.estado_deudor = estado_deudor

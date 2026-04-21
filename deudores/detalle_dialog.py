@@ -2100,6 +2100,17 @@ class DetalleDeudorDialog(QDialog):
     def _construir_fila_envio(self) -> dict:
         base = dict(self._fila_resumen)
 
+        def _txt(v) -> str:
+            return str(v or "").strip()
+
+        def _invalido(v: str) -> bool:
+            t = _txt(v).lower()
+            return t in {"", "nan", "none", "n", "—", "-"}
+
+        def _parece_contador(v: str) -> bool:
+            t = _txt(v)
+            return bool(t.isdigit() and int(t) <= 20)
+
         if "Rut_Afiliado" not in base:
             base["Rut_Afiliado"] = self._info_cliente.get("RUT", self._rut)
 
@@ -2120,8 +2131,22 @@ class DetalleDeudorDialog(QDialog):
 
         if self._filas_deuda:
             primera = self._filas_deuda[0]
-            if "Nro_Expediente" not in base:
-                base["Nro_Expediente"] = primera.get("N° Expediente", "") or primera.get("No Licencia", "") or primera.get("Folio LIQ", "")
+            exp_detalle = _txt(
+                primera.get("N° Expediente", "")
+                or primera.get("No Licencia", "")
+                or primera.get("Folio LIQ", "")
+            )
+            exp_base = _txt(base.get("Nro_Expediente", base.get("nro_expediente", "")))
+            empresa = _txt(base.get("_empresa", base.get("empresa", ""))).lower()
+
+            # Prioriza el folio/licencia real del detalle cuando el resumen trae contador (ej: "1")
+            # o viene sin dato.
+            if exp_detalle and (_invalido(exp_base) or _parece_contador(exp_base) or empresa == "cart-56"):
+                base["Nro_Expediente"] = exp_detalle
+                base["nro_expediente"] = exp_detalle
+                base["No_Licencia"] = exp_detalle
+            elif exp_base:
+                base["No_Licencia"] = exp_base
             if "Saldo_Actual" not in base:
                 base["Saldo_Actual"] = primera.get("Saldo Actual ($)", "") or primera.get("Saldo Actual", "")
             if "Copago" not in base:

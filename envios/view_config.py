@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QMessageBox,
     QScrollArea,
     QSpinBox,
     QVBoxLayout,
@@ -190,6 +191,11 @@ class TabConfig(QWidget):
         else:
             self.lbl_estado.setText("✅ Configuración guardada. La contraseña no se almacena en disco.")
 
+        QMessageBox.information(
+            self,
+            "Configuracion guardada",
+            "La configuracion SMTP se guardo correctamente.",
+        )
         self.config_guardada.emit()
 
     def get_config(self) -> dict:

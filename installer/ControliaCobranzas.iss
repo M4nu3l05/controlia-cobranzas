@@ -59,7 +59,8 @@ var
 
 procedure InitializeWizard;
 var
-  PrivacyText: AnsiString;
+  PrivacyTextRaw: AnsiString;
+  PrivacyText: String;
 begin
   PrivacyPage := CreateCustomPage(
     wpLicense,
@@ -77,8 +78,12 @@ begin
   PrivacyMemo.ScrollBars := ssVertical;
 
   ExtractTemporaryFile('privacidad.txt');
-  if LoadStringFromFile(ExpandConstant('{tmp}\privacidad.txt'), PrivacyText) then
-    PrivacyMemo.Text := PrivacyText
+  if LoadStringFromFile(ExpandConstant('{tmp}\privacidad.txt'), PrivacyTextRaw) then
+  begin
+    { privacidad.txt está en UTF-8; decodificamos explícitamente para evitar texto corrupto }
+    PrivacyText := UTF8Decode(PrivacyTextRaw);
+    PrivacyMemo.Text := PrivacyText;
+  end
   else
     PrivacyMemo.Text := 'No fue posible cargar la Política de Privacidad.';
 

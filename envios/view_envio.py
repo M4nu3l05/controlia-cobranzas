@@ -37,7 +37,7 @@ from deudores.gestiones_db import (
     insertar_gestion_manual,
     obtener_estados_deudor_por_rut,
 )
-from auth.auth_service import backend_create_gestion, backend_list_destinatarios
+from auth.auth_service import backend_create_gestion, backend_get_deudor_detalle, backend_list_destinatarios
 from .config import config_completa
 from .plantillas import cargar_plantillas
 from .ui_components import (
@@ -672,6 +672,8 @@ class TabEnvio(QWidget):
                             "Nombre_Afiliado": str(r.get("nombre_afiliado", "")).strip(),
                             "mail_afiliado": str(r.get("mail_afiliado", "")).strip(),
                             "Estado_deudor": str(r.get("estado_deudor", "")).strip(),
+                            "Nro_Expediente": str(r.get("nro_expediente", "")).strip(),
+                            "No_Licencia": str(r.get("nro_expediente", "")).strip(),
                             "Copago": r.get("copago", 0),
                             "Total_Pagos": r.get("total_pagos", 0),
                             "Saldo_Actual": r.get("saldo_actual", 0),
@@ -818,6 +820,11 @@ class TabEnvio(QWidget):
 
         mask = self._df_dest[self._col_email].astype(str).isin(emails_pendientes)
         df_enviar = self._df_dest[mask].copy()
+        if self._usa_backend_envios():
+            asunto_tpl = str(plantilla.get("asunto", "") or "")
+            cuerpo_tpl = str(plantilla.get("cuerpo", "") or "")
+            if "{No_Licencia}" in asunto_tpl or "{No_Licencia}" in cuerpo_tpl:
+                df_enviar = self._enriquecer_no_licencia_para_envio(df_enviar)
         self._envio_payload_by_email.clear()
         self._gestiones_pendientes_registro.clear()
         for _, fila in df_enviar.iterrows():
@@ -848,6 +855,65 @@ class TabEnvio(QWidget):
 
         self.btn_enviar.setEnabled(False)
         self.btn_cancelar.setEnabled(True)
+
+    def _enriquecer_no_licencia_para_envio(self, df_enviar: pd.DataFrame) -> pd.DataFrame:
+        if df_enviar is None or df_enviar.empty:
+            return df_enviar
+
+        df_out = df_enviar.copy()
+        if "No_Licencia" not in df_out.columns:
+            df_out["No_Licencia"] = ""
+        if "Nro_Expediente" not in df_out.columns:
+            df_out["Nro_Expediente"] = ""
+
+        cache: dict[tuple[str, str], str] = {}
+
+        def _txt(v) -> str:
+            return str(v or "").strip()
+
+        def _invalido(v: str) -> bool:
+            t = _txt(v).lower()
+            return t in {"", "nan", "none", "n", "—", "-"}
+
+        def _parece_contador(v: str) -> bool:
+            t = _txt(v)
+            return bool(t.isdigit() and int(t) <= 20)
+
+        for idx, row in df_out.iterrows():
+            empresa = _txt(row.get("_empresa", ""))
+            rut = _txt(row.get("Rut_Afiliado", ""))
+            if not empresa or not rut:
+                continue
+
+            actual = _txt(row.get("No_Licencia", "")) or _txt(row.get("Nro_Expediente", ""))
+            if not (_invalido(actual) or (_parece_contador(actual) and empresa.lower() == "cart-56")):
+                continue
+
+            key = (empresa.lower(), self._normalizar_rut(rut))
+            if key in cache:
+                resolved = cache[key]
+            else:
+                payload, err = backend_get_deudor_detalle(self._session, rut=rut, empresa=empresa)
+                resolved = ""
+                if not err and isinstance(payload, dict):
+                    detalle = payload.get("detalle") or []
+                    for item in detalle:
+                        val = _txt((item or {}).get("nro_expediente", ""))
+                        if not _invalido(val) and not _parece_contador(val):
+                            resolved = val
+                            break
+                    if not resolved:
+                        resumen = payload.get("resumen") or {}
+                        val = _txt((resumen or {}).get("nro_expediente", ""))
+                        if not _invalido(val):
+                            resolved = val
+                cache[key] = resolved
+
+            if resolved:
+                df_out.at[idx, "No_Licencia"] = resolved
+                df_out.at[idx, "Nro_Expediente"] = resolved
+
+        return df_out
 
     def _cancelar(self):
         if self._worker:

@@ -25,6 +25,7 @@ VARIABLES_DISPONIBLES = {
     "{total_pagos}":     "Total de pagos realizados ($)",
     "{empresa}":         "Compañía (Colmena, Consalud, Cruz Blanca)",
     "{nro_expediente}":  "Número de expediente (si aplica)",
+    "{No_Licencia}":     "Numero de licencia (Cart-56)",
     "{ultima_emision}":  "Fecha última emisión",
     "{primera_emision}": "Fecha primera emisión",
 }
@@ -179,6 +180,31 @@ def variables_desde_fila(fila: dict) -> dict:
         v = str(val).strip()
         return v if v not in ("", "nan", "None", "—") else "—"
 
+    no_licencia = _limpio(
+        fila.get(
+            "No_Licencia",
+            fila.get(
+                "no_licencia",
+                fila.get(
+                "No Licencia",
+                fila.get(
+                    "No. Licencia",
+                    fila.get(
+                        "N? Licencia",
+                        fila.get(
+                            "N? Licencia",
+                            fila.get(
+                                "Folio LIQ",
+                                fila.get("Nro_Expediente", fila.get("nro_expediente", "")),
+                            ),
+                        ),
+                    ),
+                ),
+                ),
+            ),
+        )
+    )
+
     return {
         "nombre":          _limpio(fila.get("Nombre_Afiliado", fila.get("Nombre", ""))),
         "rut":             _limpio(fila.get("Rut_Afiliado", fila.get("RUT", ""))),
@@ -186,7 +212,8 @@ def variables_desde_fila(fila: dict) -> dict:
         "copago":          _fmt_monto(fila.get("Copago", "")),
         "total_pagos":     _fmt_monto(fila.get("Total_Pagos", "")),
         "empresa":         _limpio(fila.get("_empresa", fila.get("Compañía", ""))),
-        "nro_expediente":  _limpio(fila.get("Nro_Expediente", "")),
+        "nro_expediente":  _limpio(fila.get("Nro_Expediente", fila.get("nro_expediente", ""))),
+        "No_Licencia":     no_licencia,
         "ultima_emision":  _limpio(fila.get("MAX_Emision_ok", "")),
         "primera_emision": _limpio(fila.get("MIN_Emision_ok", "")),
     }

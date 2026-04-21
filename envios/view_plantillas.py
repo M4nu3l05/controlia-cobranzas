@@ -204,6 +204,11 @@ class TabPlantillas(QWidget):
                 return
 
             self._recargar_desde_fuente(keep_template_id=template_id if template_id > 0 else None)
+            QMessageBox.information(
+                self,
+                "Plantilla guardada",
+                f"La plantilla '{nombre}' se guardo correctamente.",
+            )
             return
 
         self._plantillas[self._idx_actual] = {
@@ -214,6 +219,11 @@ class TabPlantillas(QWidget):
         guardar_plantillas(self._plantillas)
         self._refrescar_lista()
         self.lst.selectRow(self._idx_actual)
+        QMessageBox.information(
+            self,
+            "Plantilla guardada",
+            f"La plantilla '{nombre}' se guardo correctamente.",
+        )
 
     def _nueva(self) -> None:
         self._plantillas.append({"nombre": "Nueva plantilla", "asunto": "", "cuerpo": "", "_id": 0})

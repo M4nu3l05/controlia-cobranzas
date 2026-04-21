@@ -872,7 +872,8 @@ def confirm_password_reset(
     return []
 
 
-# Redefiniciones backend-first para flujo de recuperacion de contrasena.`ndef request_password_reset(email: str) -> Tuple[Optional[str], str]:
+# Redefiniciones backend-first para flujo de recuperacion de contrasena.
+def request_password_reset(email: str) -> Tuple[Optional[str], str]:
     errs = validate_email(email)
     if errs:
         return None, errs[0]

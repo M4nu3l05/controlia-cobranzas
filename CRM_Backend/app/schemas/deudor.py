@@ -32,6 +32,7 @@ class DestinatarioItem(BaseModel):
     nombre_afiliado: str
     mail_afiliado: str
     estado_deudor: str
+    nro_expediente: str
     copago: float
     total_pagos: float
     saldo_actual: float
