@@ -46,6 +46,9 @@ class DeudorDetalleItem(BaseModel):
     dv: str
     rut_completo: str
     nombre_afiliado: str
+    nombre_afil: str = ""
+    rut_afil: str = ""
+    fecha_pago: str = ""
     mail_afiliado: str
     bn: str
     telefono_fijo_afiliado: str

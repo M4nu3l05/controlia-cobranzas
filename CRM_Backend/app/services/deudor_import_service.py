@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 import os
 import re
+import unicodedata
 from collections import Counter
 
 import pandas as pd
@@ -21,6 +22,7 @@ COLUMNAS_RESUMEN_REQUERIDAS = [
 
 COLUMNAS_DETALLE_ESPERADAS = [
     "Rut_Afiliado", "Dv", "Nombre_Afiliado", "mail_afiliado", "BN",
+    "Nombre Afil", "RUT Afil", "Fecha Pago",
     "telefono_fijo_afiliado", "telefono_movil_afiliado", "Nro_Expediente",
     "Fecha_Emision", "Copago", "Total_Pagos", "Saldo_Actual",
     "Cart56_Fecha_Recep", "Cart56_Fecha_Recep_ISA", "Cart56_Dias_Pagar", "Cart56_Mto_Pagar",
@@ -93,16 +95,37 @@ def _first_non_empty(series: pd.Series) -> str:
 
 def _find_column(df: pd.DataFrame, candidates: list[str]) -> str:
     colmap = {str(c).strip().upper(): str(c) for c in df.columns}
+    colmap_norm = {_normalize_column_name(c): str(c) for c in df.columns}
     for cand in candidates:
         found = colmap.get(str(cand).strip().upper())
         if found:
             return found
+        found_norm = colmap_norm.get(_normalize_column_name(cand))
+        if found_norm:
+            return found_norm
     return ""
+
+
+def _normalize_column_name(name: str) -> str:
+    txt = str(name or "").strip().lower()
+    txt = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "", txt)
+
+
+def _coalesce_column(df: pd.DataFrame, target: str, aliases: list[str]) -> None:
+    if target in df.columns:
+        return
+    src = _find_column(df, [target] + aliases)
+    if src:
+        df[target] = df[src]
 
 
 def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy().fillna("")
     out = out.rename(columns={c: str(c).strip() for c in out.columns})
+    _coalesce_column(out, "Nombre Afil", ["Nombre Afiliado", "Nom Afil"])
+    _coalesce_column(out, "RUT Afil", ["Rut Afil", "RUT Afiliado", "Rut Afiliado"])
+    _coalesce_column(out, "Fecha Pago", ["Fecha de Pago", "Fec Pago"])
     if "Rut_Afiliado" in out.columns:
         rut_series = out["Rut_Afiliado"].astype(str)
         dv_series = out["Dv"].astype(str) if "Dv" in out.columns else pd.Series([""] * len(out), index=out.index)
@@ -330,6 +353,39 @@ def _detectar_base_duplicada_por_contenido(
     return ""
 
 
+def _tiene_texto(value: object) -> bool:
+    return bool(_clean_text(value))
+
+
+def _modo_enriquecimiento_campos_afil(
+    *,
+    empresa: str,
+    df_detalle: pd.DataFrame,
+    existentes_detalle: list[DeudorDetalle],
+) -> bool:
+    if str(empresa or "").strip() != "Cart-56":
+        return False
+    if df_detalle is None or df_detalle.empty:
+        return False
+
+    incoming_has_data = bool(
+        df_detalle.get("Nombre Afil", pd.Series(dtype=str)).astype(str).map(_tiene_texto).any()
+        or df_detalle.get("RUT Afil", pd.Series(dtype=str)).astype(str).map(_tiene_texto).any()
+        or df_detalle.get("Fecha Pago", pd.Series(dtype=str)).astype(str).map(_tiene_texto).any()
+    )
+    if not incoming_has_data:
+        return False
+
+    for row in existentes_detalle or []:
+        if not _clean_text(getattr(row, "nombre_afil", "")):
+            return True
+        if not _clean_text(getattr(row, "rut_afil", "")):
+            return True
+        if not _clean_text(getattr(row, "fecha_pago", "")):
+            return True
+    return False
+
+
 def _reparar_estado_inconsistente_empresa(db: Session, empresa: str) -> None:
     empresa_txt = _clean_text(empresa)
     if not empresa_txt:
@@ -388,6 +444,9 @@ def _build_detalle_objects(df: pd.DataFrame, empresa: str, source_file: str, per
                 dv=dv,
                 rut_completo=rut_full,
                 nombre_afiliado=_clean_text(row.get("Nombre_Afiliado", "")),
+                nombre_afil=_clean_text(row.get("Nombre Afil", "")),
+                rut_afil=_clean_text(row.get("RUT Afil", "")),
+                fecha_pago=_date_to_ddmmyyyy(row.get("Fecha Pago", "")),
                 mail_afiliado=_clean_text(row.get("mail_afiliado", "")),
                 bn=_clean_text(row.get("BN", "")),
                 telefono_fijo_afiliado=_clean_text(row.get("telefono_fijo_afiliado", "")),
@@ -430,6 +489,9 @@ def _transform_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
     col_fecha_recep = _find_column(df, ["Fecha Recep", "Fecha Recep "])
     col_fecha_recep_isa = _find_column(df, ["Fecha Recep ISA"])
     col_dias_pagar = _find_column(df, ["Dias Pagar", "Días Pagar", "Dias de Pagar", "Días de Pagar"])
+    col_nombre_afil = _find_column(df, ["Nombre Afil", "Nombre Afiliado", "Nom Afil"])
+    col_rut_afil = _find_column(df, ["RUT Afil", "Rut Afil", "RUT Afiliado", "Rut Afiliado"])
+    col_fecha_pago = _find_column(df, ["Fecha Pago", "Fecha de Pago", "Fec Pago"])
 
     detalle_rows = []
     for _, row in df.iterrows():
@@ -455,6 +517,9 @@ def _transform_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
         monto = _parse_monto(row.get(col_mto_pagar, 0))
         fecha_recep = _date_to_ddmmyyyy(row.get(col_fecha_recep, "")) if col_fecha_recep else ""
         fecha_recep_isa = _date_to_ddmmyyyy(row.get(col_fecha_recep_isa, "")) if col_fecha_recep_isa else ""
+        nombre_afil = _clean_text(row.get(col_nombre_afil, "")) if col_nombre_afil else ""
+        rut_afil = _clean_text(row.get(col_rut_afil, "")) if col_rut_afil else ""
+        fecha_pago = _date_to_ddmmyyyy(row.get(col_fecha_pago, "")) if col_fecha_pago else ""
         periodo_emision = _yyyymm_from_date(row.get(col_fecha_recep_isa, "")) or _yyyymm_from_date(row.get(col_fecha_recep, ""))
         fecha_emision = fecha_recep_isa or fecha_recep
 
@@ -463,6 +528,9 @@ def _transform_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
             "Dv": dv_txt,
             "_RUT_COMPLETO": _rut_completo(rut_txt, dv_txt),
             "Nombre_Afiliado": nombre_emp,
+            "Nombre Afil": nombre_afil,
+            "RUT Afil": rut_afil,
+            "Fecha Pago": fecha_pago,
             "Estado_deudor": "Sin Gestión",
             "BN": email_emp,
             "mail_afiliado": email_emp,
@@ -647,12 +715,6 @@ def import_deudores_excel_service(
 
     _reparar_estado_inconsistente_empresa(db, empresa_txt)
 
-    if _base_ya_cargada(db, empresa_txt, source_file):
-        raise ValueError(
-            f"La base '{os.path.basename(_clean_text(source_file))}' ya fue cargada anteriormente para {empresa_txt}. "
-            "No se puede importar dos veces la misma base de deudores."
-        )
-
     if empresa_txt == "Cart-56":
         xls = pd.ExcelFile(BytesIO(content))
         hoja = xls.sheet_names[0] if xls.sheet_names else 0
@@ -666,11 +728,23 @@ def import_deudores_excel_service(
         .filter(DeudorDetalle.empresa == empresa_txt, DeudorDetalle.is_active.is_(True))
         .all()
     )
+    modo_enriquecimiento = _modo_enriquecimiento_campos_afil(
+        empresa=empresa_txt,
+        df_detalle=df_detalle,
+        existentes_detalle=existentes_detalle,
+    )
+
+    if _base_ya_cargada(db, empresa_txt, source_file) and not modo_enriquecimiento:
+        raise ValueError(
+            f"La base '{os.path.basename(_clean_text(source_file))}' ya fue cargada anteriormente para {empresa_txt}. "
+            "No se puede importar dos veces la misma base de deudores."
+        )
+
     motivo_duplicada = _detectar_base_duplicada_por_contenido(
         df_detalle=df_detalle,
         existentes=existentes_detalle,
     )
-    if motivo_duplicada:
+    if motivo_duplicada and not modo_enriquecimiento:
         raise ValueError(
             f"{motivo_duplicada} No se puede importar dos veces la misma base de deudores."
         )
@@ -698,6 +772,9 @@ def import_deudores_excel_service(
         existente.dv = nuevo.dv or existente.dv
         existente.rut_completo = nuevo.rut_completo or existente.rut_completo
         existente.nombre_afiliado = nuevo.nombre_afiliado or existente.nombre_afiliado
+        existente.nombre_afil = nuevo.nombre_afil or existente.nombre_afil
+        existente.rut_afil = nuevo.rut_afil or existente.rut_afil
+        existente.fecha_pago = nuevo.fecha_pago or existente.fecha_pago
         existente.mail_afiliado = nuevo.mail_afiliado or existente.mail_afiliado
         existente.bn = nuevo.bn or existente.bn
         existente.telefono_fijo_afiliado = nuevo.telefono_fijo_afiliado or existente.telefono_fijo_afiliado

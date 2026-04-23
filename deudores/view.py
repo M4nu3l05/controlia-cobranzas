@@ -13,7 +13,18 @@ from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox, QWidget, QLa
 
 from core.excel_export import write_excel_report
 from core.paths import get_data_dir
-from deudores.database import base_deudores_ya_cargada, cargar_detalle_empresas, cargar_detalle_todas, cargar_empresas, cargar_todas, hay_datos, hay_datos_empresas, EMPRESAS
+from deudores.database import (
+    EMPRESAS,
+    base_deudores_ya_cargada,
+    cargar_detalle_empresa,
+    cargar_detalle_empresas,
+    cargar_detalle_todas,
+    cargar_empresas,
+    cargar_todas,
+    guardar_detalle,
+    hay_datos,
+    hay_datos_empresas,
+)
 from admin_carteras.service import obtener_empresas_asignadas_para_session, session_tiene_restriccion_por_cartera
 from auth.auth_service import (
     backend_create_gestion,
@@ -34,7 +45,7 @@ from .gestiones_db import (
 )
 from .gestiones_worker import CargaGestionesParams, CargaGestionesWorker
 from .panels import build_splitter_layout
-from .schema import COLUMNA_EMPRESA, COLUMNA_RUT, ETIQUETAS
+from .schema import COLUMNA_EMPRESA, COLUMNA_RUT, ETIQUETAS, transformar_cart56_raw
 from .ui_components import DeudoresTableModel, EmpresaFilterProxy
 from .worker import CargaDeudoresParams, CargaDeudoresWorker
 
@@ -55,6 +66,7 @@ class DeudoresWidget(QWidget):
         self._session = session
         self._empresas_asignadas: list[str] = []
         self._tareas_asignadas: list[dict] = []
+        self._cart56_detalle_cache_df: pd.DataFrame | None = None
 
         _, self.lbl_total, self._splitter, self.sidebar, self.table_panel = build_splitter_layout(self, session=session)
         self.table = self.table_panel.table
@@ -698,6 +710,9 @@ class DeudoresWidget(QWidget):
                 "Dv": str(item.get("dv", "")).strip(),
                 "_RUT_COMPLETO": str(item.get("rut_completo", "")).strip(),
                 "Nombre_Afiliado": str(item.get("nombre_afiliado", "")).strip(),
+                "Nombre Afil": str(item.get("nombre_afil", "")).strip(),
+                "RUT Afil": str(item.get("rut_afil", "")).strip(),
+                "Fecha Pago": str(item.get("fecha_pago", "")).strip(),
                 "mail_afiliado": str(item.get("mail_afiliado", "")).strip(),
                 "BN": str(item.get("bn", "")).strip(),
                 "telefono_fijo_afiliado": str(item.get("telefono_fijo_afiliado", "")).strip(),
@@ -717,6 +732,8 @@ class DeudoresWidget(QWidget):
                 "_source_file": str(item.get("source_file", "")).strip(),
                 "_periodo_carga": str(item.get("periodo_carga", "")).strip(),
             })
+        df_detalle = pd.DataFrame(detalle_rows).fillna("")
+        df_detalle = self._enriquecer_detalle_cart56_desde_cache(df_detalle)
         resumen_raw = payload.get("resumen") or {}
         fila_resumen = {
             "_empresa": str((payload.get("empresa") or resumen_raw.get("empresa") or "")).strip(),
@@ -735,7 +752,86 @@ class DeudoresWidget(QWidget):
             "_source_file": str(resumen_raw.get("source_file", "")).strip(),
             "_periodo_carga": str(resumen_raw.get("periodo_carga", "")).strip(),
         }
-        return pd.DataFrame(detalle_rows).fillna(""), fila_resumen
+        return df_detalle, fila_resumen
+
+    def _cache_cart56_detalle_desde_excel(self, excel_path: str) -> None:
+        try:
+            df_raw = pd.read_excel(excel_path, sheet_name=0, dtype=str).fillna("")
+            _, df_detalle = transformar_cart56_raw(df_raw)
+            self._cart56_detalle_cache_df = df_detalle.copy().fillna("")
+            # Persistimos este detalle en la DB local para reutilizarlo entre sesiones/usuarios.
+            guardar_detalle(self._cart56_detalle_cache_df, "Cart-56", source_file=os.path.abspath(excel_path))
+        except Exception:
+            self._cart56_detalle_cache_df = None
+
+    def _enriquecer_detalle_cart56_desde_cache(self, df_detalle: pd.DataFrame) -> pd.DataFrame:
+        if df_detalle is None or df_detalle.empty:
+            return df_detalle
+        if self._cart56_detalle_cache_df is None or self._cart56_detalle_cache_df.empty:
+            try:
+                self._cart56_detalle_cache_df = cargar_detalle_empresa("Cart-56")
+            except Exception:
+                self._cart56_detalle_cache_df = None
+        if self._cart56_detalle_cache_df is None or self._cart56_detalle_cache_df.empty:
+            return df_detalle
+
+        df = df_detalle.copy().fillna("")
+        if "_empresa" in df.columns:
+            empresas = df["_empresa"].astype(str).str.strip().str.lower()
+            if not empresas.eq("cart-56").any():
+                return df
+
+        cache = self._cart56_detalle_cache_df.copy().fillna("")
+
+        def _norm_rut(v: str) -> str:
+            t = str(v or "").strip().replace(".", "")
+            if "-" in t:
+                t = t.split("-", 1)[0]
+            return t.replace("-", "").lstrip("0")
+
+        def _norm_txt(v: str) -> str:
+            return str(v or "").strip()
+
+        map_full: dict[tuple[str, str, str], tuple[str, str, str]] = {}
+        map_reduced: dict[tuple[str, str], tuple[str, str, str]] = {}
+        for _, r in cache.iterrows():
+            rut = _norm_rut(r.get("Rut_Afiliado", ""))
+            exp = _norm_txt(r.get("Nro_Expediente", ""))
+            fem = _norm_txt(r.get("Fecha_Emision", ""))
+            if not rut or not exp:
+                continue
+            vals = (
+                _norm_txt(r.get("Nombre Afil", "")),
+                _norm_txt(r.get("RUT Afil", "")),
+                _norm_txt(r.get("Fecha Pago", "")),
+            )
+            map_full[(rut, exp, fem)] = vals
+            map_reduced[(rut, exp)] = vals
+
+        for idx, row in df.iterrows():
+            has_missing = any(
+                str(row.get(c, "")).strip() in ("", "nan", "None", "—")
+                for c in ("Nombre Afil", "RUT Afil", "Fecha Pago")
+            )
+            if not has_missing:
+                continue
+
+            rut = _norm_rut(row.get("Rut_Afiliado", ""))
+            exp = _norm_txt(row.get("Nro_Expediente", ""))
+            fem = _norm_txt(row.get("Fecha_Emision", ""))
+            vals = map_full.get((rut, exp, fem)) or map_reduced.get((rut, exp))
+            if not vals:
+                continue
+
+            n_afil, rut_afil, fecha_pago = vals
+            if str(row.get("Nombre Afil", "")).strip() in ("", "nan", "None", "—") and n_afil:
+                df.at[idx, "Nombre Afil"] = n_afil
+            if str(row.get("RUT Afil", "")).strip() in ("", "nan", "None", "—") and rut_afil:
+                df.at[idx, "RUT Afil"] = rut_afil
+            if str(row.get("Fecha Pago", "")).strip() in ("", "nan", "None", "—") and fecha_pago:
+                df.at[idx, "Fecha Pago"] = fecha_pago
+
+        return df
 
     def _cargar_desde_backend(self) -> bool:
         if self._sin_carteras_asignadas():
@@ -1228,6 +1324,9 @@ class DeudoresWidget(QWidget):
             return
 
         if self._usa_backend_deudores():
+            if str(empresa).strip().lower() == "cart-56":
+                self._cache_cart56_detalle_desde_excel(path)
+
             def _empresa_fingerprint(rows: list[dict]) -> set[tuple[str, str, str, str]]:
                 out: set[tuple[str, str, str, str]] = set()
                 for it in rows or []:

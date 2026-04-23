@@ -41,6 +41,9 @@ COLS_DETALLE = [
     "Rut_Afiliado",
     "Dv",
     "Nombre_Afiliado",
+    "Nombre Afil",
+    "RUT Afil",
+    "Fecha Pago",
     "mail_afiliado",
     "BN",
     "telefono_fijo_afiliado",
@@ -190,6 +193,30 @@ def _ensure_columns(con: sqlite3.Connection, tabla: str, columnas: list[str], ti
 def _sanitize_incoming_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy().fillna("")
     out = out.rename(columns={c: str(c).strip() for c in out.columns})
+
+    colmap_norm = {
+        re.sub(r"[^a-z0-9]+", "", unicodedata.normalize("NFKD", str(c).strip().lower()).encode("ascii", "ignore").decode("ascii")): str(c)
+        for c in out.columns
+    }
+    alias_map = {
+        "Nombre Afil": ["Nombre Afiliado", "Nom Afil"],
+        "RUT Afil": ["Rut Afil", "RUT Afiliado", "Rut Afiliado"],
+        "Fecha Pago": ["Fecha de Pago", "Fec Pago"],
+    }
+    for canon, aliases in alias_map.items():
+        if canon in out.columns:
+            continue
+        for cand in [canon] + aliases:
+            key = re.sub(
+                r"[^a-z0-9]+",
+                "",
+                unicodedata.normalize("NFKD", str(cand).strip().lower()).encode("ascii", "ignore").decode("ascii"),
+            )
+            real = colmap_norm.get(key, "")
+            if real:
+                out[canon] = out[real]
+                break
+
     if "Rut_Afiliado" in out.columns:
         rut_series = out["Rut_Afiliado"].astype(str)
         dv_series = out["Dv"].astype(str) if "Dv" in out.columns else pd.Series([""] * len(out), index=out.index)
@@ -597,6 +624,25 @@ def base_deudores_ya_cargada(empresa: str, source_file: str) -> bool:
         return False
 
     with _conexion(empresa) as con:
+        requiere_enriquecimiento = False
+        if str(empresa or "").strip().lower() == "cart-56":
+            try:
+                df_det = _read_table(con, TABLA_DETALLE)
+                if not df_det.empty:
+                    for col in ("Nombre Afil", "RUT Afil", "Fecha Pago"):
+                        if col not in df_det.columns:
+                            requiere_enriquecimiento = True
+                            break
+                    if not requiere_enriquecimiento:
+                        for col in ("Nombre Afil", "RUT Afil", "Fecha Pago"):
+                            if (
+                                df_det[col].astype(str).str.strip().replace({"nan": "", "None": ""}).eq("").any()
+                            ):
+                                requiere_enriquecimiento = True
+                                break
+            except Exception:
+                requiere_enriquecimiento = False
+
         for table in (TABLA_DETALLE, TABLA):
             df = _read_table(con, table)
             if df.empty or COL_SOURCE_FILE not in df.columns:
@@ -608,6 +654,8 @@ def base_deudores_ya_cargada(empresa: str, source_file: str) -> bool:
                 .map(lambda value: os.path.basename(str(value).strip()).lower())
             )
             if loaded_names.eq(source_name).any():
+                if requiere_enriquecimiento:
+                    return False
                 return True
 
     return False

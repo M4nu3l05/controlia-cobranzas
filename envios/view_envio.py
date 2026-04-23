@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 
 from deudores.database import (
     EMPRESAS,
+    cargar_detalle_empresa,
     cargar_contactos_empresa,
     cargar_contactos_todas,
     cargar_para_envio,
@@ -823,8 +824,17 @@ class TabEnvio(QWidget):
         if self._usa_backend_envios():
             asunto_tpl = str(plantilla.get("asunto", "") or "")
             cuerpo_tpl = str(plantilla.get("cuerpo", "") or "")
-            if "{No_Licencia}" in asunto_tpl or "{No_Licencia}" in cuerpo_tpl:
-                df_enviar = self._enriquecer_no_licencia_para_envio(df_enviar)
+            tokens = (
+                "{No_Licencia}",
+                "{nombre_afil}",
+                "{rut_afil}",
+                "{fecha_pago}",
+                "{Nombre_Afil}",
+                "{RUT_Afil}",
+                "{Fecha_Pago}",
+            )
+            if any(t in asunto_tpl or t in cuerpo_tpl for t in tokens):
+                df_enviar = self._enriquecer_placeholders_cart56_para_envio(df_enviar)
         self._envio_payload_by_email.clear()
         self._gestiones_pendientes_registro.clear()
         for _, fila in df_enviar.iterrows():
@@ -856,7 +866,7 @@ class TabEnvio(QWidget):
         self.btn_enviar.setEnabled(False)
         self.btn_cancelar.setEnabled(True)
 
-    def _enriquecer_no_licencia_para_envio(self, df_enviar: pd.DataFrame) -> pd.DataFrame:
+    def _enriquecer_placeholders_cart56_para_envio(self, df_enviar: pd.DataFrame) -> pd.DataFrame:
         if df_enviar is None or df_enviar.empty:
             return df_enviar
 
@@ -865,8 +875,14 @@ class TabEnvio(QWidget):
             df_out["No_Licencia"] = ""
         if "Nro_Expediente" not in df_out.columns:
             df_out["Nro_Expediente"] = ""
+        if "Nombre Afil" not in df_out.columns:
+            df_out["Nombre Afil"] = ""
+        if "RUT Afil" not in df_out.columns:
+            df_out["RUT Afil"] = ""
+        if "Fecha Pago" not in df_out.columns:
+            df_out["Fecha Pago"] = ""
 
-        cache: dict[tuple[str, str], str] = {}
+        cache: dict[tuple[str, str], dict] = {}
 
         def _txt(v) -> str:
             return str(v or "").strip()
@@ -879,39 +895,117 @@ class TabEnvio(QWidget):
             t = _txt(v)
             return bool(t.isdigit() and int(t) <= 20)
 
+        detalle_local = pd.DataFrame()
+        try:
+            detalle_local = cargar_detalle_empresa("Cart-56").copy().fillna("")
+        except Exception:
+            detalle_local = pd.DataFrame()
+
+        def _resolver_desde_local(rut_norm: str, exp_ref: str) -> dict:
+            if detalle_local.empty or "Rut_Afiliado" not in detalle_local.columns:
+                return {}
+
+            d = detalle_local.copy()
+            rut_mask = (
+                d["Rut_Afiliado"].astype(str).str.replace(".", "", regex=False).str.replace("-", "", regex=False).str.strip()
+                == rut_norm
+            )
+            d = d.loc[rut_mask].copy()
+            if d.empty:
+                return {}
+
+            if exp_ref and "Nro_Expediente" in d.columns:
+                dd = d.loc[d["Nro_Expediente"].astype(str).str.strip() == exp_ref].copy()
+                if not dd.empty:
+                    d = dd
+
+            r0 = d.iloc[0]
+            return {
+                "No_Licencia": _txt(r0.get("Nro_Expediente", "")),
+                "Nombre Afil": _txt(r0.get("Nombre Afil", "")),
+                "RUT Afil": _txt(r0.get("RUT Afil", "")),
+                "Fecha Pago": _txt(r0.get("Fecha Pago", "")),
+            }
+
         for idx, row in df_out.iterrows():
             empresa = _txt(row.get("_empresa", ""))
             rut = _txt(row.get("Rut_Afiliado", ""))
             if not empresa or not rut:
                 continue
+            if empresa.lower() != "cart-56":
+                continue
 
             actual = _txt(row.get("No_Licencia", "")) or _txt(row.get("Nro_Expediente", ""))
-            if not (_invalido(actual) or (_parece_contador(actual) and empresa.lower() == "cart-56")):
+            faltan_campos = any(
+                _invalido(_txt(row.get(col, "")))
+                for col in ("Nombre Afil", "RUT Afil", "Fecha Pago")
+            )
+            if not (_invalido(actual) or _parece_contador(actual) or faltan_campos):
                 continue
 
             key = (empresa.lower(), self._normalizar_rut(rut))
             if key in cache:
-                resolved = cache[key]
+                resolved_payload = cache[key]
             else:
                 payload, err = backend_get_deudor_detalle(self._session, rut=rut, empresa=empresa)
-                resolved = ""
+                resolved_payload: dict = {}
                 if not err and isinstance(payload, dict):
                     detalle = payload.get("detalle") or []
-                    for item in detalle:
-                        val = _txt((item or {}).get("nro_expediente", ""))
-                        if not _invalido(val) and not _parece_contador(val):
-                            resolved = val
-                            break
-                    if not resolved:
+                    chosen = None
+                    if actual:
+                        for item in detalle:
+                            val = _txt((item or {}).get("nro_expediente", ""))
+                            if val == actual:
+                                chosen = item or {}
+                                break
+                    if chosen is None:
+                        for item in detalle:
+                            val = _txt((item or {}).get("nro_expediente", ""))
+                            if not _invalido(val) and not _parece_contador(val):
+                                chosen = item or {}
+                                break
+                    chosen = chosen or (detalle[0] if detalle else {})
+
+                    resolved_payload = {
+                        "No_Licencia": _txt(chosen.get("nro_expediente", "")),
+                        "Nombre Afil": _txt(chosen.get("nombre_afil", "")),
+                        "RUT Afil": _txt(chosen.get("rut_afil", "")),
+                        "Fecha Pago": _txt(chosen.get("fecha_pago", "")),
+                    }
+                    if _invalido(resolved_payload.get("No_Licencia", "")):
                         resumen = payload.get("resumen") or {}
                         val = _txt((resumen or {}).get("nro_expediente", ""))
                         if not _invalido(val):
-                            resolved = val
-                cache[key] = resolved
+                            resolved_payload["No_Licencia"] = val
 
+                if not resolved_payload:
+                    resolved_payload = _resolver_desde_local(self._normalizar_rut(rut), actual)
+                else:
+                    local_payload = _resolver_desde_local(
+                        self._normalizar_rut(rut),
+                        resolved_payload.get("No_Licencia", "") or actual,
+                    )
+                    for k, v in local_payload.items():
+                        if _invalido(_txt(resolved_payload.get(k, ""))) and not _invalido(_txt(v)):
+                            resolved_payload[k] = v
+                cache[key] = resolved_payload
+
+            resolved = _txt(resolved_payload.get("No_Licencia", ""))
             if resolved:
                 df_out.at[idx, "No_Licencia"] = resolved
                 df_out.at[idx, "Nro_Expediente"] = resolved
+            if _invalido(_txt(row.get("Nombre Afil", ""))):
+                val = _txt(resolved_payload.get("Nombre Afil", ""))
+                if val:
+                    df_out.at[idx, "Nombre Afil"] = val
+            if _invalido(_txt(row.get("RUT Afil", ""))):
+                val = _txt(resolved_payload.get("RUT Afil", ""))
+                if val:
+                    df_out.at[idx, "RUT Afil"] = val
+            if _invalido(_txt(row.get("Fecha Pago", ""))):
+                val = _txt(resolved_payload.get("Fecha Pago", ""))
+                if val:
+                    df_out.at[idx, "Fecha Pago"] = val
 
         return df_out
 

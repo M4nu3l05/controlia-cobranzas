@@ -104,7 +104,7 @@ class TabPlantillas(QWidget):
         role = str(getattr(self._session, "role", "")).strip().lower()
         if not self._es_backend():
             return True
-        return role in {"admin", "supervisor"}
+        return role in {"admin", "supervisor", "ejecutivo"}
 
     def _aplicar_permisos(self) -> None:
         can_edit = self._puede_editar()
@@ -115,7 +115,7 @@ class TabPlantillas(QWidget):
         self.txt_asunto.setReadOnly(not can_edit)
         self.txt_cuerpo.setReadOnly(not can_edit)
         if not can_edit:
-            tip = "Solo supervisor/admin puede modificar plantillas."
+            tip = "No tienes permisos para modificar plantillas."
             self.btn_add.setToolTip(tip)
             self.btn_del.setToolTip(tip)
             self.btn_save.setToolTip(tip)
@@ -176,7 +176,7 @@ class TabPlantillas(QWidget):
 
         if self._es_backend():
             if not self._puede_editar():
-                QMessageBox.warning(self, "Sin permisos", "Solo supervisor/admin puede modificar plantillas.")
+                QMessageBox.warning(self, "Sin permisos", "No tienes permisos para modificar plantillas.")
                 return
 
             if template_id > 0:
@@ -245,7 +245,7 @@ class TabPlantillas(QWidget):
 
         if self._es_backend():
             if not self._puede_editar():
-                QMessageBox.warning(self, "Sin permisos", "Solo supervisor/admin puede eliminar plantillas.")
+                QMessageBox.warning(self, "Sin permisos", "No tienes permisos para eliminar plantillas.")
                 return
             if template_id > 0:
                 err = backend_delete_email_template(self._session, template_id=template_id)

@@ -517,7 +517,7 @@ class MainWindow(QMainWindow):
         self.tab_deudores.datos_actualizados.connect(self.tab_dashboard.refrescar)
         self.tab_dashboard.bd_limpiada.connect(self.tab_deudores.limpiar_empresa_en_vista)
 
-        if session is None or session.is_supervisor_or_above():
+        if session is None or session.is_supervisor_or_above() or session.is_ejecutivo():
             self.tab_envios = EnviosWidget(session=session)
             self.tabs.addTab(self.tab_envios, "📧  Envíos Programados")
 

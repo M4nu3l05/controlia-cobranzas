@@ -22,8 +22,8 @@ from app.services.template_service import (
 router = APIRouter(prefix="/templates", tags=["templates"])
 
 
-def _ensure_admin_or_supervisor(current_user: User) -> None:
-    if current_user.role not in {"admin", "supervisor"}:
+def _ensure_can_manage_templates(current_user: User) -> None:
+    if current_user.role not in {"admin", "supervisor", "ejecutivo"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permiso para modificar plantillas.",
@@ -44,7 +44,7 @@ def create_email_template(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ensure_admin_or_supervisor(current_user)
+    _ensure_can_manage_templates(current_user)
     try:
         return create_email_template_service(db, payload=payload)
     except ValueError as exc:
@@ -58,7 +58,7 @@ def update_email_template(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ensure_admin_or_supervisor(current_user)
+    _ensure_can_manage_templates(current_user)
     try:
         return update_email_template_service(db, template_id=template_id, payload=payload)
     except ValueError as exc:
@@ -71,7 +71,7 @@ def delete_email_template(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    _ensure_admin_or_supervisor(current_user)
+    _ensure_can_manage_templates(current_user)
     try:
         delete_email_template_service(db, template_id=template_id)
         return MessageResponse(message="Plantilla eliminada correctamente.")

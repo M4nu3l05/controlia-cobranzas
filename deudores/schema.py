@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from typing import Iterable
 
 import pandas as pd
@@ -150,6 +152,25 @@ CART56_FECHA_RECEP_ISA_CANDIDATAS: list[str] = [
     "Fecha Recep ISA",
 ]
 
+CART56_NOMBRE_AFIL_CANDIDATAS: list[str] = [
+    "Nombre Afil",
+    "Nombre Afiliado",
+    "Nom Afil",
+]
+
+CART56_RUT_AFIL_CANDIDATAS: list[str] = [
+    "RUT Afil",
+    "Rut Afil",
+    "RUT Afiliado",
+    "Rut Afiliado",
+]
+
+CART56_FECHA_PAGO_CANDIDATAS: list[str] = [
+    "Fecha Pago",
+    "Fecha de Pago",
+    "Fec Pago",
+]
+
 
 # ================================================================
 #  AUXILIARES
@@ -159,12 +180,23 @@ def _col_map_case_insensitive(df: pd.DataFrame) -> dict[str, str]:
     return {str(c).strip().upper(): str(c) for c in df.columns}
 
 
+def _normalizar_nombre_columna(nombre: str) -> str:
+    txt = str(nombre or "").strip().lower()
+    txt = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii")
+    txt = re.sub(r"[^a-z0-9]+", "", txt)
+    return txt
+
+
 def _buscar_columna(df: pd.DataFrame, candidatos: Iterable[str]) -> str:
     mapa = _col_map_case_insensitive(df)
+    mapa_norm = {_normalizar_nombre_columna(c): str(c) for c in df.columns}
     for c in candidatos:
         real = mapa.get(str(c).strip().upper())
         if real:
             return real
+        real_norm = mapa_norm.get(_normalizar_nombre_columna(c))
+        if real_norm:
+            return real_norm
     return ""
 
 
@@ -321,6 +353,9 @@ def transformar_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataF
     col_tel_movil = _buscar_columna(df, CART56_TEL_MOVIL_CANDIDATAS)
     col_fecha_recep = _buscar_columna(df, CART56_FECHA_RECEP_CANDIDATAS)
     col_fecha_recep_isa = _buscar_columna(df, CART56_FECHA_RECEP_ISA_CANDIDATAS)
+    col_nombre_afil = _buscar_columna(df, CART56_NOMBRE_AFIL_CANDIDATAS)
+    col_rut_afil = _buscar_columna(df, CART56_RUT_AFIL_CANDIDATAS)
+    col_fecha_pago = _buscar_columna(df, CART56_FECHA_PAGO_CANDIDATAS)
 
     detalle_rows: list[dict] = []
 
@@ -342,6 +377,9 @@ def transformar_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataF
         monto = _parse_monto(row.get(col_mto_pagar, 0))
         fecha_recep = _normalizar_fecha(row.get(col_fecha_recep, "")) if col_fecha_recep else ""
         fecha_recep_isa = _normalizar_fecha(row.get(col_fecha_recep_isa, "")) if col_fecha_recep_isa else ""
+        nombre_afil = _valor_limpio(row.get(col_nombre_afil, "")) if col_nombre_afil else ""
+        rut_afil = _valor_limpio(row.get(col_rut_afil, "")) if col_rut_afil else ""
+        fecha_pago = _normalizar_fecha(row.get(col_fecha_pago, "")) if col_fecha_pago else ""
         yyyymm_recep = _yyyymm_desde_fecha(row.get(col_fecha_recep, "")) if col_fecha_recep else ""
         yyyymm_recep_isa = _yyyymm_desde_fecha(row.get(col_fecha_recep_isa, "")) if col_fecha_recep_isa else ""
         fecha_emision = fecha_recep_isa or fecha_recep
@@ -353,6 +391,9 @@ def transformar_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataF
                 "Dv": dv_txt,
                 "_RUT_COMPLETO": f"{rut_txt}-{dv_txt}" if dv_txt else rut_txt,
                 "Nombre_Afiliado": nombre_emp,
+                "Nombre Afil": nombre_afil,
+                "RUT Afil": rut_afil,
+                "Fecha Pago": fecha_pago,
                 "Estado_deudor": "Sin Gestión",
                 "BN": email_emp,
                 "mail_afiliado": email_emp,

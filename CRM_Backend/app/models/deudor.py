@@ -53,6 +53,9 @@ class DeudorDetalle(Base):
     dv: Mapped[str] = mapped_column(String(8), nullable=False, default="")
     rut_completo: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
     nombre_afiliado: Mapped[str] = mapped_column(String(255), nullable=False)
+    nombre_afil: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    rut_afil: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    fecha_pago: Mapped[str] = mapped_column(String(40), nullable=False, default="")
 
     mail_afiliado: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     bn: Mapped[str] = mapped_column(String(255), nullable=False, default="")

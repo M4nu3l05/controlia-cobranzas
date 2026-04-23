@@ -207,6 +207,9 @@ def _backend_detalle_response_to_local(payload: dict) -> tuple[pd.DataFrame, dic
             "Dv": str(item.get("dv", "")).strip(),
             "_RUT_COMPLETO": str(item.get("rut_completo", "")).strip(),
             "Nombre_Afiliado": str(item.get("nombre_afiliado", "")).strip(),
+            "Nombre Afil": str(item.get("nombre_afil", "")).strip(),
+            "RUT Afil": str(item.get("rut_afil", "")).strip(),
+            "Fecha Pago": str(item.get("fecha_pago", "")).strip(),
             "mail_afiliado": str(item.get("mail_afiliado", "")).strip(),
             "BN": str(item.get("bn", "")).strip(),
             "telefono_fijo_afiliado": str(item.get("telefono_fijo_afiliado", "")).strip(),
@@ -2159,6 +2162,21 @@ class DetalleDeudorDialog(QDialog):
                 base["MIN_Emision_ok"] = primera.get("Fecha Emisión", "") or primera.get("Fecha Recep", "")
             if "mail_afiliado" not in base or "@" not in str(base.get("mail_afiliado", "")):
                 base["mail_afiliado"] = primera.get("Correo", "") if "@" in str(primera.get("Correo", "")) else self._obtener_email_destino()
+
+            # Variables Cart-56 adicionales para plantillas de correo.
+            nombre_afil = _txt(primera.get("Nombre Afil", "")) or _txt(base.get("nombre_afil", ""))
+            rut_afil = _txt(primera.get("RUT Afil", "")) or _txt(base.get("rut_afil", ""))
+            fecha_pago = _txt(primera.get("Fecha Pago", "")) or _txt(base.get("fecha_pago", ""))
+
+            if nombre_afil:
+                base["Nombre Afil"] = nombre_afil
+                base["nombre_afil"] = nombre_afil
+            if rut_afil:
+                base["RUT Afil"] = rut_afil
+                base["rut_afil"] = rut_afil
+            if fecha_pago:
+                base["Fecha Pago"] = fecha_pago
+                base["fecha_pago"] = fecha_pago
 
         return base
 

@@ -29,6 +29,9 @@ CAMPOS_CLIENTE_BASE: list[tuple[str, str]] = [
 
 COLUMNAS_DETALLE_DEUDA_BASE: list[tuple[str, str]] = [
     ("N° Expediente", "Nro_Expediente"),
+    ("Nombre Afil", "Nombre Afil"),
+    ("RUT Afil", "RUT Afil"),
+    ("Fecha Pago", "Fecha Pago"),
     ("Fecha Emisión", "Fecha_Emision"),
     ("Copago ($)", "Copago"),
     ("Total Pagos ($)", "Total_Pagos"),
@@ -51,6 +54,9 @@ CAMPOS_CLIENTE_CART56: list[tuple[str, str]] = [
 
 COLUMNAS_DETALLE_DEUDA_CART56: list[tuple[str, str]] = [
     ("No Licencia", "Nro_Expediente"),
+    ("Nombre Afil", "Nombre Afil"),
+    ("RUT Afil", "RUT Afil"),
+    ("Fecha Pago", "Fecha Pago"),
     ("Fecha Recep", "Cart56_Fecha_Recep"),
     ("Fecha Recep ISA", "Cart56_Fecha_Recep_ISA"),
     ("Dias Pagar", "Cart56_Dias_Pagar"),
@@ -72,6 +78,7 @@ COLUMNAS_DETALLE_NUMERICAS_BASE: list[str] = [
 
 COLUMNAS_DETALLE_FECHA_BASE: list[str] = [
     "Fecha_Emision",
+    "Fecha Pago",
 ]
 
 COLUMNAS_DETALLE_NUMERICAS_CART56: list[str] = [
@@ -83,6 +90,7 @@ COLUMNAS_DETALLE_NUMERICAS_CART56: list[str] = [
 COLUMNAS_DETALLE_FECHA_CART56: list[str] = [
     "Cart56_Fecha_Recep",
     "Cart56_Fecha_Recep_ISA",
+    "Fecha Pago",
 ]
 
 COLUMNAS_DETALLE_NUMERICAS: list[str] = list(COLUMNAS_DETALLE_NUMERICAS_BASE)
