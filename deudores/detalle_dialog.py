@@ -967,6 +967,9 @@ class DetalleDeudorDialog(QDialog):
         self.lbl_rut_header: QLabel | None = None
         self.lbl_exp: QLabel | None = None
         self.tbl_deuda: QTableView | None = None
+        self.cmb_tipo_envio: QComboBox | None = None
+        self.cmb_trabajador_individual: QComboBox | None = None
+        self.lbl_trabajador_individual: QLabel | None = None
         self.kpi_copago: _KpiCard | None = None
         self.kpi_total_pagos: _KpiCard | None = None
         self.kpi_saldo_actual: _KpiCard | None = None
@@ -1170,6 +1173,21 @@ class DetalleDeudorDialog(QDialog):
         row_tpl.addWidget(self.cmb_plantilla, 1)
         card_mail.body.addLayout(row_tpl)
 
+        row_tipo_envio = QHBoxLayout()
+        row_tipo_envio.addWidget(QLabel("Tipo de envio:"))
+        self.cmb_tipo_envio = QComboBox()
+        self.cmb_tipo_envio.addItems(["Individual", "Consolidado de trabajadores"])
+        self.cmb_tipo_envio.currentIndexChanged.connect(self._on_cambio_tipo_envio_detalle)
+        row_tipo_envio.addWidget(self.cmb_tipo_envio, 1)
+        card_mail.body.addLayout(row_tipo_envio)
+
+        row_trabajador = QHBoxLayout()
+        self.lbl_trabajador_individual = QLabel("Trabajador/Licencia:")
+        row_trabajador.addWidget(self.lbl_trabajador_individual)
+        self.cmb_trabajador_individual = QComboBox()
+        row_trabajador.addWidget(self.cmb_trabajador_individual, 1)
+        card_mail.body.addLayout(row_trabajador)
+
         self.lbl_email_destino = QLabel(_fix_mojibake_text(f"Destino: {self._obtener_email_destino() or 'Sin correo disponible'}"))
         self.lbl_email_destino.setObjectName("MutedLabel")
         self.lbl_email_destino.setWordWrap(True)
@@ -1238,6 +1256,9 @@ class DetalleDeudorDialog(QDialog):
         btn_cerrar.clicked.connect(self.accept)
         btn_row.addWidget(btn_cerrar)
         root.addLayout(btn_row)
+
+        self._refrescar_selector_trabajador_individual()
+        self._on_cambio_tipo_envio_detalle()
 
         self._aplicar_modo_backend()
         self._ajustar_layout_responsivo()
@@ -1639,6 +1660,8 @@ class DetalleDeudorDialog(QDialog):
     def _actualizar_tabla_detalle(self):
         if self.tbl_deuda is not None:
             self.tbl_deuda.setModel(_DeudaModel(self._filas_deuda))
+        self._refrescar_selector_trabajador_individual()
+        self._on_cambio_tipo_envio_detalle()
 
     def _actualizar_kpis_financieros(self):
         self._normalizar_fila_resumen_backend()
@@ -2100,6 +2123,127 @@ class DetalleDeudorDialog(QDialog):
             return self._plantillas[0]
         return self._plantillas[idx]
 
+    def _modo_envio_detalle_consolidado(self) -> bool:
+        combo = getattr(self, "cmb_tipo_envio", None)
+        if combo is None:
+            return False
+        return "consolidado" in str(combo.currentText()).strip().lower()
+
+    def _texto_item_trabajador(self, fila: dict, idx: int) -> str:
+        no_lic = str(
+            fila.get("No Licencia", "")
+            or fila.get("N° Expediente", "")
+            or fila.get("Folio LIQ", "")
+            or "-"
+        ).strip()
+        nombre = str(fila.get("Nombre Afil", "") or fila.get("Nombre Afiliado", "") or "-").strip()
+        rut = str(fila.get("RUT Afil", "") or fila.get("Rut_Afiliado", "") or "-").strip()
+        return f"{idx}. {nombre} | {rut} | Licencia: {no_lic}"
+
+    def _refrescar_selector_trabajador_individual(self) -> None:
+        combo = getattr(self, "cmb_trabajador_individual", None)
+        if combo is None:
+            return
+
+        previo = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        for i, fila in enumerate(self._filas_deuda or []):
+            combo.addItem(self._texto_item_trabajador(fila, i + 1), i)
+        combo.blockSignals(False)
+
+        if combo.count() == 0:
+            combo.addItem("Sin detalle disponible", -1)
+            combo.setEnabled(False)
+            return
+
+        combo.setEnabled(True)
+        if isinstance(previo, int):
+            idx_prev = combo.findData(previo)
+            if idx_prev >= 0:
+                combo.setCurrentIndex(idx_prev)
+
+    def _fila_deuda_para_envio_individual(self) -> dict:
+        filas = self._filas_deuda or []
+        if not filas:
+            return {}
+
+        combo = getattr(self, "cmb_trabajador_individual", None)
+        if combo is None:
+            return dict(filas[0])
+
+        idx_data = combo.currentData()
+        try:
+            idx = int(idx_data)
+        except Exception:
+            idx = 0
+        if idx < 0 or idx >= len(filas):
+            idx = 0
+        return dict(filas[idx])
+
+    def _on_cambio_tipo_envio_detalle(self) -> None:
+        combo = getattr(self, "cmb_trabajador_individual", None)
+        if combo is None:
+            return
+        es_consolidado = self._modo_envio_detalle_consolidado()
+        if getattr(self, "lbl_trabajador_individual", None) is not None:
+            self.lbl_trabajador_individual.setVisible(not es_consolidado)
+        combo.setVisible(not es_consolidado)
+        combo.setEnabled((not es_consolidado) and combo.count() > 0)
+
+    def _lineas_detalle_licencias(self) -> list[str]:
+        def _txt(v) -> str:
+            return str(v or "").strip()
+
+        def _val(v) -> str:
+            t = _txt(v)
+            return t if t.lower() not in {"", "nan", "none", "n", "-"} else "-"
+
+        def _monto(fila: dict) -> str:
+            bruto = (
+                fila.get("Mto Pagar", "")
+                or fila.get("Mto_Pagar", "")
+                or fila.get("Copago ($)", "")
+                or fila.get("Copago", "")
+                or fila.get("Saldo Actual ($)", "")
+                or fila.get("Saldo Actual", "")
+            )
+            txt = _txt(bruto)
+            if not txt or txt.lower() in {"nan", "none", "n", "-"}:
+                return "-"
+            monto_num = _parse_monto(txt)
+            if monto_num <= 0:
+                return _val(bruto)
+            return f"${int(round(monto_num)):,}".replace(",", ".")
+
+        def _linea(fila: dict, idx: int) -> str:
+            no_lic = _val(
+                fila.get("No Licencia", "")
+                or fila.get("N° Expediente", "")
+                or fila.get("Folio LIQ", "")
+            )
+            nom = _val(fila.get("Nombre Afil", ""))
+            rut = _val(fila.get("RUT Afil", ""))
+            fec = _val(fila.get("Fecha Pago", ""))
+            mon = _monto(fila)
+            return (
+                f"Detalle {idx}° trabajador:\n"
+                f"Nombre: {nom}\n"
+                f"Rut: {rut}\n"
+                f"N° Licencia: {no_lic}\n"
+                f"Fecha: {fec}\n"
+                f"Monto: {mon}\n"
+            )
+
+        filas = self._filas_deuda or []
+        if not filas:
+            return ["- Sin detalle de licencias"]
+
+        if self._modo_envio_detalle_consolidado():
+            return [_linea(fila, idx + 1) for idx, fila in enumerate(filas)]
+        fila_ind = self._fila_deuda_para_envio_individual() or filas[0]
+        return [_linea(fila_ind, 1)]
+
     def _construir_fila_envio(self) -> dict:
         base = dict(self._fila_resumen)
 
@@ -2133,7 +2277,11 @@ class DetalleDeudorDialog(QDialog):
             base["telefono_fijo_afiliado"] = self._info_cliente.get("Teléfono Fijo", "")
 
         if self._filas_deuda:
-            primera = self._filas_deuda[0]
+            primera = (
+                self._filas_deuda[0]
+                if self._modo_envio_detalle_consolidado()
+                else self._fila_deuda_para_envio_individual() or self._filas_deuda[0]
+            )
             exp_detalle = _txt(
                 primera.get("N° Expediente", "")
                 or primera.get("No Licencia", "")
@@ -2177,6 +2325,52 @@ class DetalleDeudorDialog(QDialog):
             if fecha_pago:
                 base["Fecha Pago"] = fecha_pago
                 base["fecha_pago"] = fecha_pago
+
+            lineas_detalle = self._lineas_detalle_licencias()
+            base["detalle_licencias"] = "\n".join(lineas_detalle)
+            base["Detalle Licencias"] = base["detalle_licencias"]
+
+            if self._modo_envio_detalle_consolidado():
+                def _norm(v) -> str:
+                    t = _txt(v)
+                    return t if t.lower() not in {"", "nan", "none", "n", "-"} else ""
+
+                def _join_unicos(values: list[str]) -> str:
+                    out: list[str] = []
+                    seen: set[str] = set()
+                    for v in values:
+                        txt = _norm(v)
+                        if not txt or txt in seen:
+                            continue
+                        seen.add(txt)
+                        out.append(txt)
+                    return " | ".join(out)
+
+                licencias = _join_unicos(
+                    [
+                        fila.get("No Licencia", "")
+                        or fila.get("N° Expediente", "")
+                        or fila.get("Folio LIQ", "")
+                        for fila in self._filas_deuda
+                    ]
+                )
+                nombres = _join_unicos([fila.get("Nombre Afil", "") for fila in self._filas_deuda])
+                ruts_afil = _join_unicos([fila.get("RUT Afil", "") for fila in self._filas_deuda])
+                fechas_pago = _join_unicos([fila.get("Fecha Pago", "") for fila in self._filas_deuda])
+
+                if licencias:
+                    base["No_Licencia"] = licencias
+                    base["Nro_Expediente"] = licencias
+                    base["nro_expediente"] = licencias
+                if nombres:
+                    base["Nombre Afil"] = nombres
+                    base["nombre_afil"] = nombres
+                if ruts_afil:
+                    base["RUT Afil"] = ruts_afil
+                    base["rut_afil"] = ruts_afil
+                if fechas_pago:
+                    base["Fecha Pago"] = fechas_pago
+                    base["fecha_pago"] = fechas_pago
 
         return base
 

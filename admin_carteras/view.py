@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QLineEdit,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -27,12 +28,13 @@ from auth.auth_service import (
     backend_clear_all_deudores,
     backend_clear_all_gestiones,
     backend_clear_empresa_deudores,
+    backend_delete_deudor_individual,
     backend_list_cartera_asignaciones,
     backend_save_cartera_asignaciones,
 )
 from core.paths import get_data_dir
-from deudores.database import EMPRESAS, limpiar_empresa, limpiar_todas
-from deudores.gestiones_db import limpiar_gestiones
+from deudores.database import EMPRESAS, limpiar_empresa, limpiar_todas, eliminar_deudor_individual
+from deudores.gestiones_db import limpiar_gestiones, limpiar_gestiones_por_ruts
 
 
 class AdminCarterasWidget(QWidget):
@@ -317,16 +319,29 @@ class AdminCarterasWidget(QWidget):
         row_empresa.addWidget(self.cmb_empresa, 1)
         lay.addLayout(row_empresa)
 
+        row_rut = QHBoxLayout()
+        lbl_rut = QLabel("RUT deudor:")
+        lbl_rut.setStyleSheet("color:#334155; font-weight:700;")
+        self.txt_rut_eliminar = QLineEdit()
+        self.txt_rut_eliminar.setPlaceholderText("Ej: 7606634177 o 76.066.341-7")
+        self.txt_rut_eliminar.setMinimumHeight(36)
+        row_rut.addWidget(lbl_rut)
+        row_rut.addWidget(self.txt_rut_eliminar, 1)
+        lay.addLayout(row_rut)
+
+        self.btn_eliminar_deudor = self._build_action_button("Eliminar deudor individual", "#ef4444")
         self.btn_limpiar_empresa = self._build_action_button("Limpiar base de deudores de empresa", "#dc2626")
         self.btn_limpiar_todas = self._build_action_button("Limpiar todas las cargas", "#b91c1c")
         self.btn_limpiar_gestiones = self._build_action_button("Limpiar gestiones", "#7c3aed")
         self.btn_reiniciar = self._build_action_button("Reiniciar datos de prueba", "#ea580c")
 
+        self.btn_eliminar_deudor.clicked.connect(self._accion_eliminar_deudor_individual)
         self.btn_limpiar_empresa.clicked.connect(self._accion_limpiar_empresa)
         self.btn_limpiar_todas.clicked.connect(self._accion_limpiar_todas)
         self.btn_limpiar_gestiones.clicked.connect(self._accion_limpiar_gestiones)
         self.btn_reiniciar.clicked.connect(self._accion_reiniciar_datos_prueba)
 
+        lay.addWidget(self.btn_eliminar_deudor)
         lay.addWidget(self.btn_limpiar_empresa)
         lay.addWidget(self.btn_limpiar_todas)
         lay.addWidget(self.btn_limpiar_gestiones)
@@ -486,6 +501,71 @@ class AdminCarterasWidget(QWidget):
             return limpiar_gestiones()
         except Exception:
             return False
+
+    def _normalizar_rut(self, rut: str) -> str:
+        txt = str(rut or "").strip().replace(".", "")
+        if "-" in txt:
+            txt = txt.split("-", 1)[0]
+        return txt.replace("-", "").lstrip("0")
+
+    def _accion_eliminar_deudor_individual(self):
+        empresa = self.cmb_empresa.currentText().strip()
+        rut_input = self.txt_rut_eliminar.text().strip() if hasattr(self, "txt_rut_eliminar") else ""
+        rut_norm = self._normalizar_rut(rut_input)
+
+        if not empresa:
+            QMessageBox.warning(self, "Dato requerido", "Debes seleccionar una empresa.")
+            return
+        if not rut_norm:
+            QMessageBox.warning(self, "Dato requerido", "Debes ingresar un RUT válido del deudor.")
+            return
+
+        if not self._confirmar(
+            "Confirmar eliminación individual",
+            (
+                f"Se eliminará el registro completo del deudor '{rut_input}' en la empresa '{empresa}'.\n"
+                "Esta acción borra el deudor de la base de deudores y sus gestiones asociadas.\n\n"
+                "¿Deseas continuar?"
+            ),
+        ):
+            return
+
+        ok = False
+        backend_msg = ""
+        if self._session and getattr(self._session, "auth_source", "") == "backend":
+            backend_msg = backend_delete_deudor_individual(
+                self._session,
+                empresa=empresa,
+                rut=rut_input,
+            )
+            ok = bool(backend_msg) and ("Se eliminó" in backend_msg or "No existían" in backend_msg)
+
+            # Mantiene espejo local consistente aunque el origen sea backend.
+            local_deleted = eliminar_deudor_individual(empresa, rut_input)
+            _ = limpiar_gestiones_por_ruts([rut_input])
+            ok = ok or local_deleted
+        else:
+            local_deleted = eliminar_deudor_individual(empresa, rut_input)
+            gest_deleted = limpiar_gestiones_por_ruts([rut_input])
+            ok = bool(local_deleted or gest_deleted)
+
+        if ok:
+            self._append_log(f"Eliminación individual ejecutada: empresa={empresa}, rut={rut_input}")
+            self.bd_limpiada.emit([empresa])
+            self.datos_actualizados.emit()
+            if hasattr(self, "txt_rut_eliminar"):
+                self.txt_rut_eliminar.clear()
+            QMessageBox.information(
+                self,
+                "Proceso completado",
+                backend_msg or f"✅ Se eliminó el deudor {rut_input} de la empresa {empresa}.",
+            )
+        else:
+            QMessageBox.warning(
+                self,
+                "Sin cambios",
+                backend_msg or "No se encontró el deudor indicado o no se pudo completar la eliminación.",
+            )
 
     def _accion_limpiar_empresa(self):
         empresa = self.cmb_empresa.currentText().strip()

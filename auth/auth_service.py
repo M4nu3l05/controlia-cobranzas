@@ -41,7 +41,7 @@ __all__ = [
     "backend_list_gestiones", "backend_create_gestion", "backend_delete_gestion", "backend_register_pago", "backend_update_deudor_cliente",
     "backend_list_mis_gestiones_asignadas", "backend_marcar_gestion_asignada_realizada",
     "backend_get_user_carteras", "backend_list_cartera_asignaciones", "backend_save_cartera_asignaciones", "backend_list_all_gestiones",
-    "backend_clear_empresa_deudores", "backend_clear_all_deudores", "backend_clear_all_gestiones",
+    "backend_clear_empresa_deudores", "backend_clear_all_deudores", "backend_clear_all_gestiones", "backend_delete_deudor_individual",
     "backend_get_legal_acceptance_status", "backend_register_legal_acceptance", "backend_assisted_reset_password",
     "backend_list_pending_recovery_requests", "backend_reset_pending_recovery_request",
     "backend_list_email_templates", "backend_create_email_template",
@@ -1197,6 +1197,28 @@ def backend_delete_email_template(
             f"/templates/email/{int(template_id)}",
             token=_require_backend_token(session),
         )
+        return ""
+    except ValueError as exc:
+        return str(exc)
+    except requests.RequestException as exc:
+        return _friendly_backend_error(exc)
+
+
+def backend_delete_deudor_individual(
+    session: UserSession,
+    *,
+    empresa: str,
+    rut: str,
+) -> str:
+    try:
+        data = _http_request_auth(
+            "DELETE",
+            f"/deudores/{rut.strip()}",
+            token=_require_backend_token(session),
+            params={"empresa": empresa.strip()},
+        )
+        if isinstance(data, dict):
+            return str(data.get("message", "")).strip()
         return ""
     except ValueError as exc:
         return str(exc)

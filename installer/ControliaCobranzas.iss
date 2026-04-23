@@ -1,8 +1,8 @@
-; Inno Setup script - Controlia Cobranzas
+Ôªø; Inno Setup script - Controlia Cobranzas
 ; Requiere tener compilado: dist\ControliaCobranzas\ControliaCobranzas.exe
 
 #define MyAppName "Controlia Cobranzas"
-#define MyAppVersion "1.0.4"
+#define MyAppVersion "1.0.5"
 #define MyAppPublisher "Controlia"
 #define MyAppExeName "ControliaCobranzas.exe"
 #define MyAppId "{{1D6E7720-33C0-4745-BFB7-C1EC5A46A57C}"
@@ -64,8 +64,8 @@ var
 begin
   PrivacyPage := CreateCustomPage(
     wpLicense,
-    'PolÌtica de Privacidad',
-    'Debes leer y aceptar la PolÌtica de Privacidad para continuar con la instalaciÛn.'
+    'Pol√≠tica de Privacidad',
+    'Debes leer y aceptar la Pol√≠tica de Privacidad para continuar con la instalaci√≥n.'
   );
 
   PrivacyMemo := TRichEditViewer.Create(PrivacyPage);
@@ -80,19 +80,19 @@ begin
   ExtractTemporaryFile('privacidad.txt');
   if LoadStringFromFile(ExpandConstant('{tmp}\privacidad.txt'), PrivacyTextRaw) then
   begin
-    { privacidad.txt est· en UTF-8; decodificamos explÌcitamente para evitar texto corrupto }
+    { privacidad.txt est√° en UTF-8; decodificamos expl√≠citamente para evitar texto corrupto }
     PrivacyText := UTF8Decode(PrivacyTextRaw);
     PrivacyMemo.Text := PrivacyText;
   end
   else
-    PrivacyMemo.Text := 'No fue posible cargar la PolÌtica de Privacidad.';
+    PrivacyMemo.Text := 'No fue posible cargar la Pol√≠tica de Privacidad.';
 
   PrivacyAccepted := TNewCheckBox.Create(PrivacyPage);
   PrivacyAccepted.Parent := PrivacyPage.Surface;
   PrivacyAccepted.Left := 0;
   PrivacyAccepted.Top := PrivacyMemo.Height + 12;
   PrivacyAccepted.Width := PrivacyPage.SurfaceWidth;
-  PrivacyAccepted.Caption := 'He leÌdo y acepto la PolÌtica de Privacidad.';
+  PrivacyAccepted.Caption := 'He le√≠do y acepto la Pol√≠tica de Privacidad.';
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -104,7 +104,7 @@ begin
     if not PrivacyAccepted.Checked then
     begin
       MsgBox(
-        'Debes aceptar la PolÌtica de Privacidad para continuar.',
+        'Debes aceptar la Pol√≠tica de Privacidad para continuar.',
         mbError,
         MB_OK
       );

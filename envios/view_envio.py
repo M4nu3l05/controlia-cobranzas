@@ -80,6 +80,7 @@ class TabEnvio(QWidget):
         self._envio_payload_by_email: dict[str, list[dict]] = {}
         self._gestiones_pendientes_registro: list[dict] = []
         self._plantilla_envio_nombre: str = ""
+        self._modo_envio_ejecucion: str = "individual"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
@@ -217,6 +218,13 @@ class TabEnvio(QWidget):
         # Opciones
         # ---------------------------------------------------------
         card_ops = Card("Opciones", "")
+        row_modo = QHBoxLayout()
+        row_modo.addWidget(QLabel("Modo de envío:"))
+        self.cmb_modo_envio = QComboBox()
+        self.cmb_modo_envio.addItem("Individual (actual)")
+        self.cmb_modo_envio.addItem("Consolidado (todas las licencias)")
+        row_modo.addWidget(self.cmb_modo_envio, 1)
+        card_ops.body.addLayout(row_modo)
         row_pausa = QHBoxLayout()
         row_pausa.addWidget(QLabel("Pausa entre envíos (seg):"))
         self.spn_pausa = QSpinBox()
@@ -460,6 +468,19 @@ class TabEnvio(QWidget):
 
         return None
 
+    def _find_rows_for_email(self, email: str) -> list[int]:
+        key = self._email_key(email)
+        if not key:
+            return []
+        rows: list[int] = []
+        for r in range(self.tbl_log.rowCount()):
+            email_item = self.tbl_log.item(r, _LOG_EMAIL)
+            if not email_item:
+                continue
+            if self._email_key(email_item.text()) == key:
+                rows.append(r)
+        return rows
+
     def _pop_payload_for_email(self, email: str) -> dict | None:
         key = self._email_key(email)
         if not key:
@@ -566,6 +587,161 @@ class TabEnvio(QWidget):
         if columna_metrica == "Saldo_Actual":
             return df["_monto_saldo_actual"]
         return pd.Series(index=df.index, dtype=float)
+
+    def _modo_envio_consolidado(self) -> bool:
+        return "consolidado" in self.cmb_modo_envio.currentText().strip().lower()
+
+    def _txt(self, v) -> str:
+        return str(v or "").strip()
+
+    def _valor_limpio(self, v, default: str = "-") -> str:
+        txt = self._txt(v)
+        if txt.lower() in {"", "nan", "none", "n", "-"}:
+            return default
+        return txt
+
+    def _fmt_monto_detalle(self, v) -> str:
+        nro = self._parse_float(v)
+        if nro is None:
+            return "-"
+        return f"{int(round(nro)):,}".replace(",", ".")
+
+    def _linea_detalle_licencia(self, item: dict) -> str:
+        no_lic = self._valor_limpio(item.get("No_Licencia", ""))
+        nom = self._valor_limpio(item.get("Nombre Afil", ""))
+        rut = self._valor_limpio(item.get("RUT Afil", ""))
+        fec = self._valor_limpio(item.get("Fecha Pago", ""))
+        cop = self._fmt_monto_detalle(item.get("Copago", ""))
+        sal = self._fmt_monto_detalle(item.get("Saldo_Actual", ""))
+        return (
+            f"- Licencia: {no_lic} | Nombre Afil: {nom} | "
+            f"RUT Afil: {rut} | Fecha Pago: {fec} | Copago: ${cop} | Saldo: ${sal}"
+        )
+
+    def _resolver_detalles_deudor(self, rut: str, empresa: str) -> list[dict]:
+        empresa_txt = self._txt(empresa)
+        rut_norm = self._normalizar_rut(rut)
+        if not empresa_txt or not rut_norm:
+            return []
+
+        detalles: list[dict] = []
+        if self._usa_backend_envios():
+            payload, err = backend_get_deudor_detalle(self._session, rut=rut, empresa=empresa_txt)
+            if not err and isinstance(payload, dict):
+                for item in payload.get("detalle") or []:
+                    it = item or {}
+                    detalles.append(
+                        {
+                            "No_Licencia": self._txt(it.get("nro_expediente", "")),
+                            "Nombre Afil": self._txt(it.get("nombre_afil", it.get("nombre_afiliado", ""))),
+                            "RUT Afil": self._txt(it.get("rut_afil", it.get("rut_afiliado", ""))),
+                            "Fecha Pago": self._txt(it.get("fecha_pago", "")),
+                            "Copago": it.get("copago", ""),
+                            "Saldo_Actual": it.get("saldo_actual", ""),
+                        }
+                    )
+
+        if detalles:
+            return detalles
+
+        try:
+            local = cargar_detalle_empresa(empresa_txt).copy().fillna("")
+        except Exception:
+            local = pd.DataFrame()
+
+        if local.empty or "Rut_Afiliado" not in local.columns:
+            return []
+
+        mask = (
+            local["Rut_Afiliado"].astype(str).str.replace(".", "", regex=False).str.replace("-", "", regex=False).str.strip()
+            == rut_norm
+        )
+        subset = local.loc[mask].copy()
+        if subset.empty:
+            return []
+
+        for _, row in subset.iterrows():
+            detalles.append(
+                {
+                    "No_Licencia": self._txt(row.get("Nro_Expediente", row.get("No_Licencia", ""))),
+                    "Nombre Afil": self._txt(row.get("Nombre Afil", row.get("nombre_afil", ""))),
+                    "RUT Afil": self._txt(row.get("RUT Afil", row.get("rut_afil", ""))),
+                    "Fecha Pago": self._txt(row.get("Fecha Pago", row.get("fecha_pago", ""))),
+                    "Copago": row.get("Copago", ""),
+                    "Saldo_Actual": row.get("Saldo_Actual", ""),
+                }
+            )
+        return detalles
+
+    def _construir_df_envio_consolidado(self, df_enviar: pd.DataFrame) -> pd.DataFrame:
+        if df_enviar is None or df_enviar.empty:
+            return pd.DataFrame()
+
+        cache: dict[tuple[str, str], list[dict]] = {}
+        salida: list[dict] = []
+
+        for email, grupo in df_enviar.groupby(df_enviar[self._col_email].astype(str).str.strip(), sort=False):
+            email_txt = self._txt(email)
+            if not email_txt:
+                continue
+
+            base = dict(grupo.iloc[0])
+            detalle_total: list[dict] = []
+            usados: set[tuple[str, str]] = set()
+
+            for _, fila in grupo.iterrows():
+                empresa = self._txt(fila.get("_empresa", ""))
+                rut = self._txt(fila.get("Rut_Afiliado", ""))
+                key = (empresa.lower(), self._normalizar_rut(rut))
+                if not key[0] or not key[1] or key in usados:
+                    continue
+                usados.add(key)
+                if key not in cache:
+                    cache[key] = self._resolver_detalles_deudor(rut=rut, empresa=empresa)
+                detalle_total.extend(cache[key])
+
+            if not detalle_total:
+                for _, fila in grupo.iterrows():
+                    detalle_total.append(
+                        {
+                            "No_Licencia": self._txt(fila.get("No_Licencia", fila.get("Nro_Expediente", ""))),
+                            "Nombre Afil": self._txt(fila.get("Nombre Afil", fila.get("nombre_afil", ""))),
+                            "RUT Afil": self._txt(fila.get("RUT Afil", fila.get("rut_afil", ""))),
+                            "Fecha Pago": self._txt(fila.get("Fecha Pago", fila.get("fecha_pago", ""))),
+                            "Copago": fila.get("Copago", ""),
+                            "Saldo_Actual": fila.get("Saldo_Actual", ""),
+                        }
+                    )
+
+            unicos: list[dict] = []
+            vistos: set[tuple[str, str, str, str]] = set()
+            for item in detalle_total:
+                sig = (
+                    self._txt(item.get("No_Licencia", "")),
+                    self._txt(item.get("RUT Afil", "")),
+                    self._txt(item.get("Nombre Afil", "")),
+                    self._txt(item.get("Fecha Pago", "")),
+                )
+                if sig in vistos:
+                    continue
+                vistos.add(sig)
+                unicos.append(item)
+
+            lineas = [self._linea_detalle_licencia(item) for item in unicos] or ["- Sin detalle de licencias"]
+            base["detalle_licencias"] = "\n".join(lineas)
+            if unicos:
+                primero = unicos[0]
+                base["No_Licencia"] = self._txt(primero.get("No_Licencia", base.get("No_Licencia", "")))
+                base["Nro_Expediente"] = self._txt(primero.get("No_Licencia", base.get("Nro_Expediente", "")))
+                base["Nombre Afil"] = self._txt(primero.get("Nombre Afil", base.get("Nombre Afil", "")))
+                base["RUT Afil"] = self._txt(primero.get("RUT Afil", base.get("RUT Afil", "")))
+                base["Fecha Pago"] = self._txt(primero.get("Fecha Pago", base.get("Fecha Pago", "")))
+
+            salida.append(base)
+
+        if not salida:
+            return pd.DataFrame()
+        return pd.DataFrame(salida).fillna("")
 
     def _aplicar_filtros(self, df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
         if df is None or df.empty:
@@ -832,14 +1008,32 @@ class TabEnvio(QWidget):
                 "{Nombre_Afil}",
                 "{RUT_Afil}",
                 "{Fecha_Pago}",
+                "{detalle_licencias}",
+                "{Detalle_Licencias}",
             )
             if any(t in asunto_tpl or t in cuerpo_tpl for t in tokens):
                 df_enviar = self._enriquecer_placeholders_cart56_para_envio(df_enviar)
+
+        modo_consolidado = self._modo_envio_consolidado()
+        self._modo_envio_ejecucion = "consolidado" if modo_consolidado else "individual"
+        if modo_consolidado:
+            df_enviar = self._construir_df_envio_consolidado(df_enviar)
+
+        if df_enviar.empty:
+            QMessageBox.warning(self, "Sin destinatarios", "No hay destinatarios validos para el modo seleccionado.")
+            return
+
+        if modo_consolidado:
+            self.progress.setMaximum(max(len(df_enviar), 1))
+            self.progress.setValue(0)
+
         self._envio_payload_by_email.clear()
         self._gestiones_pendientes_registro.clear()
         for _, fila in df_enviar.iterrows():
             email_key = self._email_key(str(fila.get(self._col_email, "")).strip())
             if not email_key:
+                continue
+            if modo_consolidado and email_key in self._envio_payload_by_email:
                 continue
             self._envio_payload_by_email.setdefault(email_key, []).append(dict(fila))
 
@@ -1019,6 +1213,12 @@ class TabEnvio(QWidget):
         self.progress.setValue(enviados)
         if email:
             self.lbl_prog.setText(f"Enviando → {nombre} ({email}) [{enviados} / {total}]")
+            if self._modo_envio_ejecucion == "consolidado":
+                for row in self._find_rows_for_email(email):
+                    item = self.tbl_log.item(row, _LOG_ESTADO)
+                    if item and item.text() == _ESTADO_PENDIENTE:
+                        item.setText("📨 Enviando…")
+                return
             row = self._find_row_for_email(email, consume=False)
             if row is not None:
                 item = self.tbl_log.item(row, _LOG_ESTADO)
@@ -1027,10 +1227,6 @@ class TabEnvio(QWidget):
 
     def _on_resultado(self, res: ResultadoEnvio):
         payload = self._pop_payload_for_email(res.email)
-        row = self._find_row_for_email(res.email, consume=True)
-        if row is None:
-            row = self.tbl_log.rowCount()
-            self.tbl_log.insertRow(row)
 
         if res.ok:
             estado, color = _ESTADO_ENVIADO, _COLOR_ENVIADO
@@ -1039,7 +1235,27 @@ class TabEnvio(QWidget):
         else:
             estado, color = _ESTADO_NO_ENVIADO, _COLOR_FALLIDO
 
-        self._set_fila_log(row, res.email, res.nombre, estado, res.mensaje, color)
+        if self._modo_envio_ejecucion == "consolidado":
+            rows = [
+                r
+                for r in self._find_rows_for_email(res.email)
+                if (
+                    self.tbl_log.item(r, _LOG_ESTADO)
+                    and self.tbl_log.item(r, _LOG_ESTADO).text() in (_ESTADO_PENDIENTE, "📨 Enviando…")
+                )
+            ]
+            if not rows:
+                rows = [self._find_row_for_email(res.email, consume=True)]
+            for row in rows:
+                if row is None:
+                    continue
+                self._set_fila_log(row, res.email, res.nombre, estado, res.mensaje, color)
+        else:
+            row = self._find_row_for_email(res.email, consume=True)
+            if row is None:
+                row = self.tbl_log.rowCount()
+                self.tbl_log.insertRow(row)
+            self._set_fila_log(row, res.email, res.nombre, estado, res.mensaje, color)
         if res.ok and isinstance(payload, dict):
             self._gestiones_pendientes_registro.append(payload)
         self._actualizar_contadores()

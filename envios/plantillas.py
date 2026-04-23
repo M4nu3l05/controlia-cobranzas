@@ -29,6 +29,7 @@ VARIABLES_DISPONIBLES = {
     "{nombre_afil}":     "Nombre Afil (Cart-56, por licencia)",
     "{rut_afil}":        "RUT Afil (Cart-56, por licencia)",
     "{fecha_pago}":      "Fecha Pago (Cart-56, por licencia)",
+    "{detalle_licencias}": "Detalle consolidado de licencias/folios (modo consolidado)",
     "{ultima_emision}":  "Fecha última emisión",
     "{primera_emision}": "Fecha primera emisión",
 }
@@ -220,10 +221,16 @@ def variables_desde_fila(fila: dict) -> dict:
         "nombre_afil":     _limpio(fila.get("Nombre Afil", fila.get("nombre_afil", ""))),
         "rut_afil":        _limpio(fila.get("RUT Afil", fila.get("rut_afil", ""))),
         "fecha_pago":      _limpio(fila.get("Fecha Pago", fila.get("fecha_pago", ""))),
+        "detalle_licencias": _limpio(
+            fila.get("detalle_licencias", fila.get("Detalle Licencias", ""))
+        ),
         # Alias para facilitar compatibilidad con estilos de placeholders previos.
         "Nombre_Afil":     _limpio(fila.get("Nombre Afil", fila.get("nombre_afil", ""))),
         "RUT_Afil":        _limpio(fila.get("RUT Afil", fila.get("rut_afil", ""))),
         "Fecha_Pago":      _limpio(fila.get("Fecha Pago", fila.get("fecha_pago", ""))),
+        "Detalle_Licencias": _limpio(
+            fila.get("detalle_licencias", fila.get("Detalle Licencias", ""))
+        ),
         "ultima_emision":  _limpio(fila.get("MAX_Emision_ok", "")),
         "primera_emision": _limpio(fila.get("MIN_Emision_ok", "")),
     }

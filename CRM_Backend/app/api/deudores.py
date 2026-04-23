@@ -17,6 +17,7 @@ from app.schemas.deudor import (
 from app.services.deudor_service import (
     clear_all_deudores_service,
     clear_empresa_deudores_service,
+    delete_deudor_individual_service,
     get_deudor_detalle_service,
     list_destinatarios_service,
     list_deudores_service,
@@ -135,6 +136,30 @@ def update_deudor_cliente(
             telefono_fijo=payload.telefono_fijo,
             telefono_movil=payload.telefono_movil,
         )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
+
+@router.delete("/{rut}", response_model=MessageResponse)
+def delete_deudor_individual(
+    rut: str,
+    empresa: str = Query(default=""),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_admin_or_supervisor(current_user)
+    try:
+        changed = delete_deudor_individual_service(
+            db,
+            empresa=empresa,
+            rut=rut,
+        )
+        if changed:
+            return MessageResponse(message=f"Se eliminó el registro del deudor {rut} en {empresa}.")
+        return MessageResponse(message=f"No existían registros para el deudor {rut} en {empresa}.")
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

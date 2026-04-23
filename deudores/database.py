@@ -890,6 +890,41 @@ def limpiar_todas() -> list[str]:
     return [e for e in EMPRESAS if limpiar_empresa(e)]
 
 
+def eliminar_deudor_individual(empresa: str, rut: str) -> bool:
+    empresa_txt = str(empresa or "").strip()
+    rut_norm = _normalizar_rut(rut)
+    if not empresa_txt or not rut_norm:
+        return False
+
+    path = _db_path(empresa_txt)
+    if not os.path.exists(path):
+        return False
+
+    try:
+        with _conexion(empresa_txt) as con:
+            total = 0
+            for tabla in (TABLA, TABLA_CONTACTOS, TABLA_DETALLE):
+                tabla_existe = con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (tabla,),
+                ).fetchone()
+                if not tabla_existe:
+                    continue
+                cur = con.execute(
+                    f"""
+                    DELETE FROM "{tabla}"
+                    WHERE REPLACE(REPLACE(TRIM(Rut_Afiliado), '.', ''), '-', '') = ?
+                    """,
+                    (rut_norm,),
+                )
+                total += int(cur.rowcount or 0)
+            con.commit()
+        return total > 0
+    except Exception:
+        logger.exception("No se pudo eliminar deudor individual %s en %s", rut, empresa_txt)
+        return False
+
+
 def actualizar_cliente_por_rut(empresa: str, rut_original: str, datos_actualizados: dict) -> bool:
     if not empresa or not str(empresa).strip():
         raise ValueError("No se pudo determinar la empresa del deudor.")

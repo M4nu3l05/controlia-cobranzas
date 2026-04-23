@@ -72,6 +72,51 @@ def clear_all_deudores_service(db: Session) -> list[str]:
     return sorted(set(empresas))
 
 
+def delete_deudor_individual_service(
+    db: Session,
+    *,
+    empresa: str,
+    rut: str,
+) -> bool:
+    empresa_txt = _norm_text(empresa)
+    rut_norm = _norm_rut(rut)
+    if not empresa_txt:
+        raise ValueError("Debes indicar una empresa válida.")
+    if not rut_norm:
+        raise ValueError("Debes indicar un RUT válido.")
+
+    deleted_detalle = (
+        db.query(DeudorDetalle)
+        .filter(
+            func.trim(DeudorDetalle.empresa) == empresa_txt,
+            _rut_db_expr(DeudorDetalle.rut_afiliado) == rut_norm,
+        )
+        .delete(synchronize_session=False)
+    )
+    deleted_resumen = (
+        db.query(DeudorResumen)
+        .filter(
+            func.trim(DeudorResumen.empresa) == empresa_txt,
+            _rut_db_expr(DeudorResumen.rut_afiliado) == rut_norm,
+        )
+        .delete(synchronize_session=False)
+    )
+
+    deleted_gestiones = 0
+    if DeudorGestion is not None:
+        deleted_gestiones = (
+            db.query(DeudorGestion)
+            .filter(
+                func.trim(DeudorGestion.empresa) == empresa_txt,
+                _rut_db_expr(DeudorGestion.rut_afiliado) == rut_norm,
+            )
+            .delete(synchronize_session=False)
+        )
+
+    db.commit()
+    return bool(deleted_detalle or deleted_resumen or deleted_gestiones)
+
+
 def _to_resumen_item(row: DeudorResumen) -> DeudorListItem:
     return DeudorListItem(
         empresa=row.empresa,
