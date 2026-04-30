@@ -583,6 +583,58 @@ class _VistaPreviaEmailDialog(QDialog):
 
 
 _COLS_VIS = ["Tipo", "Estado", "Fecha", "Observación"]
+_COL_OBSERVACION = 3
+
+
+class _ObservacionDialog(QDialog):
+    def __init__(self, *, tipo: str, estado: str, fecha: str, observacion: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Observación completa")
+        self.setModal(True)
+        self.setMinimumSize(560, 360)
+        self.resize(680, 430)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 16)
+        lay.setSpacing(10)
+
+        title = QLabel("Detalle de observación")
+        title.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        title.setStyleSheet("color:#0f172a;")
+        lay.addWidget(title)
+
+        meta = QLabel(
+            f"Tipo: {tipo or '-'}   |   Estado: {estado or '-'}   |   Fecha: {fecha or '-'}"
+        )
+        meta.setObjectName("MutedLabel")
+        meta.setWordWrap(True)
+        lay.addWidget(meta)
+
+        txt = QPlainTextEdit()
+        txt.setReadOnly(True)
+        txt.setPlainText(observacion or "Sin observación registrada.")
+        txt.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        txt.setStyleSheet(
+            """
+            QPlainTextEdit {
+                background:#f8fafc;
+                border:1px solid #cbd5e1;
+                border-radius:10px;
+                padding:10px;
+                color:#0f172a;
+                font-size:10pt;
+            }
+            """
+        )
+        lay.addWidget(txt, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_close = QPushButton("Cerrar")
+        btn_close.setMinimumHeight(34)
+        btn_close.clicked.connect(self.accept)
+        btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
 
 
 class _GestionWidget(QWidget):
@@ -631,7 +683,26 @@ class _GestionWidget(QWidget):
         lay.addLayout(btn_row)
 
         self.tbl.itemSelectionChanged.connect(self._on_sel)
+        self.tbl.cellDoubleClicked.connect(self._abrir_observacion_completa)
         QTimer.singleShot(0, self._cargar)
+
+    def _cell_text(self, row: int, col: int) -> str:
+        item = self.tbl.item(row, col)
+        return item.text().strip() if item is not None else ""
+
+    def _abrir_observacion_completa(self, row: int, col: int) -> None:
+        if col != _COL_OBSERVACION or row < 0:
+            return
+
+        observacion = self._cell_text(row, _COL_OBSERVACION)
+        dlg = _ObservacionDialog(
+            tipo=self._cell_text(row, 0),
+            estado=self._cell_text(row, 1),
+            fecha=self._cell_text(row, 2),
+            observacion=observacion,
+            parent=self,
+        )
+        dlg.exec()
 
     def _cargar(self):
         self.tbl.setRowCount(0)

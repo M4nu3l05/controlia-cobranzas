@@ -9,10 +9,16 @@ import pandas as pd
 from core.excel_export import write_excel_report
 
 
-def build_id(df: pd.DataFrame, col_a: str, col_b: str) -> pd.Series:
+def build_id(df: pd.DataFrame, col_a: str | list[str] | tuple[str, ...], col_b: str | None = None) -> pd.Series:
     """
     Genera una columna ID concatenando dos columnas del DataFrame.
     """
+    if col_b is None and isinstance(col_a, (list, tuple)):
+        if len(col_a) != 2:
+            raise ValueError("build_id requiere exactamente dos columnas.")
+        col_a, col_b = col_a
+    if col_b is None:
+        raise ValueError("build_id requiere exactamente dos columnas.")
     return df[col_a].str.strip() + "_" + df[col_b].str.strip()
 
 

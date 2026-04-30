@@ -80,6 +80,9 @@ class ImportDeudoresResponse(BaseModel):
     empresa: str
     resumen_insertados: int
     detalle_insertados: int
+    detalle_nuevos: int = 0
+    detalle_actualizados: int = 0
+    detalle_omitidos: int = 0
     source_file: str
     periodo_carga: str = ""
 

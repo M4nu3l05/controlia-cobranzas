@@ -272,6 +272,13 @@ def _build_merge_key_detalle(df: pd.DataFrame) -> pd.Series:
     copago = df.get("Copago", pd.Series([""] * len(df), index=df.index)).astype(str).str.strip()
     fallback = fecha + "|" + copago
     expediente_final = expediente.where(expediente != "", fallback)
+
+    if "Cart56_Mto_Pagar" in df.columns:
+        monto_cart56_num = df["Cart56_Mto_Pagar"].apply(_parse_num)
+        copago_num = copago.apply(_parse_num)
+        monto_cart56 = monto_cart56_num.where(monto_cart56_num > 0, copago_num).apply(_fmt_monto_txt)
+        return rut + "||" + expediente_final + "||" + monto_cart56
+
     return rut + "||" + expediente_final
 
 
@@ -654,6 +661,8 @@ def base_deudores_ya_cargada(empresa: str, source_file: str) -> bool:
                 .map(lambda value: os.path.basename(str(value).strip()).lower())
             )
             if loaded_names.eq(source_name).any():
+                if str(empresa or "").strip().lower() == "cart-56":
+                    return False
                 if requiere_enriquecimiento:
                     return False
                 return True

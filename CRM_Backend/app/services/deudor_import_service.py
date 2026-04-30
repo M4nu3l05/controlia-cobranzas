@@ -591,12 +591,18 @@ def _read_general_excel(content: bytes) -> tuple[pd.DataFrame, pd.DataFrame]:
     return df_resumen.fillna(""), df_detalle.fillna("")
 
 
-def _detalle_identity_key(row: DeudorDetalle) -> tuple[str, str, str, str]:
+def _detalle_identity_key(row: DeudorDetalle) -> tuple[str, str, str, str, str]:
     empresa = _clean_text(row.empresa)
     rut = _norm_rut(row.rut_afiliado)
     expediente = _clean_text(row.nro_expediente)
     fecha = _clean_text(row.fecha_emision)
-    return (empresa, rut, expediente, fecha)
+    monto_cart56 = ""
+    if empresa == "Cart-56":
+        raw_monto = float(getattr(row, "cart56_mto_pagar", 0) or 0)
+        if raw_monto <= 0:
+            raw_monto = float(getattr(row, "copago", 0) or 0)
+        monto_cart56 = f"{raw_monto:.2f}"
+    return (empresa, rut, expediente, fecha, monto_cart56)
 
 
 def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
@@ -734,7 +740,7 @@ def import_deudores_excel_service(
         existentes_detalle=existentes_detalle,
     )
 
-    if _base_ya_cargada(db, empresa_txt, source_file) and not modo_enriquecimiento:
+    if _base_ya_cargada(db, empresa_txt, source_file) and not modo_enriquecimiento and empresa_txt != "Cart-56":
         raise ValueError(
             f"La base '{os.path.basename(_clean_text(source_file))}' ya fue cargada anteriormente para {empresa_txt}. "
             "No se puede importar dos veces la misma base de deudores."
@@ -744,7 +750,7 @@ def import_deudores_excel_service(
         df_detalle=df_detalle,
         existentes=existentes_detalle,
     )
-    if motivo_duplicada and not modo_enriquecimiento:
+    if motivo_duplicada and not modo_enriquecimiento and empresa_txt != "Cart-56":
         raise ValueError(
             f"{motivo_duplicada} No se puede importar dos veces la misma base de deudores."
         )
@@ -758,15 +764,26 @@ def import_deudores_excel_service(
 
     insertados = 0
     actualizados = 0
+    omitidos = 0
+    keys_procesadas: set[tuple[str, str, str, str, str]] = set()
 
     for nuevo in detalle_objs:
         key = _detalle_identity_key(nuevo)
+        if key in keys_procesadas:
+            omitidos += 1
+            continue
+        keys_procesadas.add(key)
+
         existente = existentes_map.get(key)
 
         if existente is None:
             db.add(nuevo)
             existentes_map[key] = nuevo
             insertados += 1
+            continue
+
+        if not modo_enriquecimiento:
+            omitidos += 1
             continue
 
         existente.dv = nuevo.dv or existente.dv
@@ -812,6 +829,9 @@ def import_deudores_excel_service(
         "empresa": empresa_txt,
         "resumen_insertados": int(resumen_insertados),
         "detalle_insertados": int(insertados + actualizados),
+        "detalle_nuevos": int(insertados),
+        "detalle_actualizados": int(actualizados),
+        "detalle_omitidos": int(omitidos),
         "source_file": source_file,
         "periodo_carga": periodo_carga,
     }

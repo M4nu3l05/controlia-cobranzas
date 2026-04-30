@@ -1364,6 +1364,25 @@ class DeudoresWidget(QWidget):
             if err:
                 self._set_loading(False)
                 self.sidebar.progress.setVisible(False)
+                err_norm = self._texto_normalizado(err)
+                if str(empresa).strip().lower() == "cart-56" and (
+                    "ya fue cargada" in err_norm
+                    or "no se puede importar dos veces" in err_norm
+                    or "base duplicada" in err_norm
+                ):
+                    QMessageBox.information(
+                        self,
+                        "Actualizacion incremental no disponible en el servidor",
+                        (
+                            "La nomina Cart-56 ya existe en el servidor y el backend activo "
+                            "aun esta usando la proteccion antigua contra duplicados.\n\n"
+                            "Con la correccion nueva, esta carga deberia procesarse como actualizacion incremental, "
+                            "registrando solo los No Licencia + Mto Pagar faltantes y omitiendo los ya existentes.\n\n"
+                            "Para habilitarlo en la aplicacion real, primero hay que desplegar la version actualizada "
+                            "del backend en el servidor."
+                        ),
+                    )
+                    return
                 QMessageBox.critical(self, "Error al cargar base de deudores", err)
                 return
 
@@ -1408,6 +1427,20 @@ class DeudoresWidget(QWidget):
                 f" Base de {empresa} cargada en CRM_Backend. "
                 f"Resumen: {resultado.get('resumen_insertados', 0):,} | "
                 f"Detalle: {resultado.get('detalle_insertados', 0):,}"
+            )
+            detalle_nuevos = int(resultado.get("detalle_nuevos", resultado.get("detalle_insertados", 0)) or 0)
+            detalle_actualizados = int(resultado.get("detalle_actualizados", 0) or 0)
+            detalle_omitidos = int(resultado.get("detalle_omitidos", 0) or 0)
+            QMessageBox.information(
+                self,
+                "Carga actualizada",
+                (
+                    f"Nómina de {empresa} procesada correctamente.\n\n"
+                    f"Registros nuevos: {detalle_nuevos:,}\n"
+                    f"Registros actualizados: {detalle_actualizados:,}\n"
+                    f"Registros omitidos por ya existir: {detalle_omitidos:,}\n"
+                    f"Resumen recalculado: {int(resultado.get('resumen_insertados', 0) or 0):,}"
+                ),
             )
             # Refrescos extra para cargas consecutivas (evita requerir segundo clic).
             QTimer.singleShot(250, self.refrescar_datos)
