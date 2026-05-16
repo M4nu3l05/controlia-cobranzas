@@ -204,16 +204,44 @@ def _fmt_fecha(val: str) -> str:
 def _armar_rut_completo_desde_fila(row) -> str:
     rut = _valor_limpio(row.get("Rut_Afiliado", ""))
     dv = _valor_limpio(row.get("Dv", ""))
-
-    rut = rut.replace(".", "").replace("-", "").lstrip("0")
-
-    if rut and dv:
-        return f"{rut}-{dv}"
-    if rut:
-        return rut
-
     rut_full = _valor_limpio(row.get("_RUT_COMPLETO", ""))
-    return rut_full or "—"
+
+    if rut_full:
+        bruto = rut_full.replace(".", "").replace(" ", "")
+        if "-" in bruto:
+            base, dv_full = bruto.rsplit("-", 1)
+            rut = rut or base
+            dv = dv or dv_full
+        else:
+            rut = rut or bruto
+
+    rut = "".join(
+        ch for ch in rut.replace(".", "").replace("-", "").replace(" ", "").upper()
+        if ch.isdigit() or ch == "K"
+    )
+    dv = "".join(
+        ch for ch in dv.replace(".", "").replace("-", "").replace(" ", "").upper()
+        if ch.isdigit() or ch == "K"
+    )[:1]
+
+    if not dv and len(rut) > 8:
+        dv = rut[-1]
+        rut = rut[:-1]
+
+    while dv and rut.endswith(dv) and len(rut) > 8:
+        rut = rut[:-1]
+
+    rut = rut.lstrip("0")
+    if not rut:
+        return "—"
+
+    grupos = []
+    base = rut
+    while base:
+        grupos.insert(0, base[-3:])
+        base = base[:-3]
+    rut_fmt = ".".join(grupos)
+    return f"{rut_fmt}-{dv}" if dv else rut_fmt
 
 
 def _resolver_email_fila(row) -> str:

@@ -164,7 +164,7 @@ def _formatear_rut_completo(rut: str, dv: str = "", rut_completo: str = "") -> s
     rut_full_txt = str(rut_completo or "").strip()
 
     if rut_full_txt:
-        bruto = rut_full_txt.replace(".", "")
+        bruto = rut_full_txt.replace(".", "").replace(" ", "")
         if "-" in bruto:
             base, dv_from_full = bruto.rsplit("-", 1)
             rut_txt = rut_txt or base.strip()
@@ -172,11 +172,30 @@ def _formatear_rut_completo(rut: str, dv: str = "", rut_completo: str = "") -> s
         else:
             rut_txt = rut_txt or bruto.strip()
 
-    rut_txt = rut_txt.replace(".", "").replace("-", "").strip().lstrip("0")
+    rut_txt = rut_txt.replace(".", "").replace("-", "").replace(" ", "").strip().upper()
+    dv_txt = dv_txt.replace(".", "").replace("-", "").replace(" ", "").strip().upper()
+
+    rut_txt = "".join(ch for ch in rut_txt if ch.isdigit() or ch == "K")
+    dv_txt = "".join(ch for ch in dv_txt if ch.isdigit() or ch == "K")[:1]
+
+    if not dv_txt and len(rut_txt) > 8:
+        dv_txt = rut_txt[-1]
+        rut_txt = rut_txt[:-1]
+
+    while dv_txt and rut_txt.endswith(dv_txt) and len(rut_txt) > 8:
+        rut_txt = rut_txt[:-1]
+
+    rut_txt = rut_txt.lstrip("0")
     if not rut_txt:
         return ""
 
-    return f"{rut_txt}-{dv_txt}" if dv_txt else rut_txt
+    grupos = []
+    base = rut_txt
+    while base:
+        grupos.insert(0, base[-3:])
+        base = base[:-3]
+    rut_fmt = ".".join(grupos)
+    return f"{rut_fmt}-{dv_txt}" if dv_txt else rut_fmt
 
 
 def _abrir_url_en_chrome(url: str) -> None:
