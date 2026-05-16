@@ -41,6 +41,7 @@ class DestinatarioItem(BaseModel):
 
 
 class DeudorDetalleItem(BaseModel):
+    id: int
     empresa: str
     rut_afiliado: str
     dv: str
@@ -94,6 +95,7 @@ class RegistrarPagoRequest(BaseModel):
     monto: float
     observaciones: str = ""
     nombre_afiliado: str = ""
+    detalle_id: int | None = None
 
 
 class RegistrarPagoResponse(BaseModel):

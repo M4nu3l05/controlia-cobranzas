@@ -202,6 +202,8 @@ def _backend_detalle_response_to_local(payload: dict) -> tuple[pd.DataFrame, dic
     detalle_rows = []
     for item in (payload.get("detalle") or []):
         detalle_rows.append({
+            "id": item.get("id"),
+            "_detalle_id": item.get("id"),
             "_empresa": str(item.get("empresa", "")).strip(),
             "Rut_Afiliado": str(item.get("rut_afiliado", "")).strip(),
             "Dv": str(item.get("dv", "")).strip(),
@@ -438,6 +440,7 @@ class _RegistrarPagoDialog(QDialog):
         saldo_actual: str,
         expedientes: list[str],
         saldos_por_expediente: dict[str, str] | None = None,
+        destinos_abono_por_expediente: dict[str, list[dict]] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -450,6 +453,11 @@ class _RegistrarPagoDialog(QDialog):
         self._saldos_por_expediente = {
             str(k).strip(): _parse_monto(v)
             for k, v in (saldos_por_expediente or {}).items()
+            if str(k).strip()
+        }
+        self._destinos_abono_por_expediente = {
+            str(k).strip(): list(v or [])
+            for k, v in (destinos_abono_por_expediente or {}).items()
             if str(k).strip()
         }
 
@@ -481,7 +489,12 @@ class _RegistrarPagoDialog(QDialog):
 
         self.cmb_tipo = QComboBox()
         self.cmb_tipo.addItems(["Abono a la deuda", "Pago total de la deuda"])
+        self.cmb_tipo.currentIndexChanged.connect(self._actualizar_saldo_expediente)
         form.addRow("Tipo de pago:", self.cmb_tipo)
+
+        self.cmb_destino_abono = QComboBox()
+        self.lbl_destino_abono = QLabel("Abonar a:")
+        form.addRow(self.lbl_destino_abono, self.cmb_destino_abono)
 
         self.txt_monto = QLineEdit()
         self.txt_monto.setPlaceholderText("Ej: 150000")
@@ -512,9 +525,21 @@ class _RegistrarPagoDialog(QDialog):
         expediente = self.cmb_expediente.currentText().strip()
         return self._saldos_por_expediente.get(expediente, self._saldo_actual)
 
+    def _destinos_abono_actuales(self) -> list[dict]:
+        expediente = self.cmb_expediente.currentText().strip()
+        return self._destinos_abono_por_expediente.get(expediente, [])
+
     def _actualizar_saldo_expediente(self):
         saldo = self._saldo_expediente_actual()
         self.lbl_saldo.setText(f"Saldo Actual: {_formatear_moneda_chilena(str(saldo))}")
+        self.cmb_destino_abono.clear()
+        destinos = self._destinos_abono_actuales()
+        for destino in destinos:
+            self.cmb_destino_abono.addItem(str(destino.get("label", "")), destino)
+
+        mostrar_destinos = self.cmb_tipo.currentText() == "Abono a la deuda" and len(destinos) > 1
+        self.lbl_destino_abono.setVisible(mostrar_destinos)
+        self.cmb_destino_abono.setVisible(mostrar_destinos)
 
     def _guardar(self):
         expediente = self.cmb_expediente.currentText().strip()
@@ -534,14 +559,23 @@ class _RegistrarPagoDialog(QDialog):
             QMessageBox.warning(self, "Monto inválido", "Monto no corresponde al Saldo Actual, verificar monto de pago")
             return
 
+        if self.cmb_tipo.currentText() == "Abono a la deuda" and self.cmb_destino_abono.isVisible():
+            destino = self.cmb_destino_abono.currentData() or {}
+            saldo_destino = _parse_monto(destino.get("saldo_actual", 0))
+            if monto - saldo_destino > 0.01:
+                QMessageBox.warning(self, "Monto inválido", "El abono no puede superar el saldo del monto seleccionado.")
+                return
+
         self.accept()
 
     def obtener_datos(self) -> dict:
+        destino = self.cmb_destino_abono.currentData() if self.cmb_destino_abono.isVisible() else None
         return {
             "expediente": self.cmb_expediente.currentText().strip(),
             "tipo_pago": self.cmb_tipo.currentText(),
             "monto": _parse_monto(self.txt_monto.text()),
             "observaciones": self.txt_obs.toPlainText().strip(),
+            "detalle_id": (destino or {}).get("detalle_id", ""),
         }
 
 
@@ -2061,7 +2095,7 @@ class DetalleDeudorDialog(QDialog):
         return expedientes
 
     def _saldos_por_expediente(self) -> dict[str, str]:
-        saldos: dict[str, str] = {}
+        saldos: dict[str, float] = {}
         for fila in self._filas_deuda:
             expediente = str(
                 fila.get("N° Expediente", "") or fila.get("No Licencia", "") or fila.get("Folio LIQ", "")
@@ -2073,18 +2107,47 @@ class DetalleDeudorDialog(QDialog):
                 fila.get("Saldo Actual ($)", "") or fila.get("Saldo Actual", "")
             ).strip()
             if saldo:
-                saldos[expediente] = saldo
-        return saldos
+                saldos[expediente] = saldos.get(expediente, 0.0) + _parse_monto(saldo)
+        return {exp: str(saldo) for exp, saldo in saldos.items()}
+
+    def _destinos_abono_por_expediente(self) -> dict[str, list[dict]]:
+        destinos: dict[str, list[dict]] = {}
+        for idx, fila in enumerate(self._filas_deuda, start=1):
+            expediente = str(
+                fila.get("N° Expediente", "") or fila.get("No Licencia", "") or fila.get("Folio LIQ", "")
+            ).strip()
+            if not expediente:
+                continue
+
+            saldo = _parse_monto(fila.get("Saldo Actual ($)", "") or fila.get("Saldo Actual", ""))
+            copago = _parse_monto(fila.get("Copago ($)", "") or fila.get("Mto Pagar", ""))
+            pagos = _parse_monto(fila.get("Total Pagos ($)", "") or fila.get("Pagos", ""))
+            detalle_id = str(fila.get("_detalle_id", "") or fila.get("id", "")).strip()
+            label = (
+                f"{idx}. Monto {_formatear_moneda_chilena(copago)} | "
+                f"Pagado {_formatear_moneda_chilena(pagos)} | "
+                f"Saldo {_formatear_moneda_chilena(saldo)}"
+            )
+            destinos.setdefault(expediente, []).append({
+                "detalle_id": detalle_id,
+                "copago": copago,
+                "total_pagos": pagos,
+                "saldo_actual": saldo,
+                "label": label,
+            })
+        return destinos
 
     def _registrar_pago(self):
         saldo_actual = self._obtener_monto_resumen("Saldo_Actual", "Saldo Actual ($)", "Saldo Actual")
         expedientes = self._expedientes_disponibles()
         saldos_por_expediente = self._saldos_por_expediente()
+        destinos_abono_por_expediente = self._destinos_abono_por_expediente()
 
         dlg = _RegistrarPagoDialog(
             saldo_actual=saldo_actual,
             expedientes=expedientes,
             saldos_por_expediente=saldos_por_expediente,
+            destinos_abono_por_expediente=destinos_abono_por_expediente,
             parent=self,
         )
         if dlg.exec() != QDialog.DialogCode.Accepted:
@@ -2095,6 +2158,7 @@ class DetalleDeudorDialog(QDialog):
         tipo_pago = datos["tipo_pago"]
         monto = datos["monto"]
         observaciones = datos["observaciones"]
+        detalle_id = datos.get("detalle_id", "")
         empresa = self._obtener_empresa_actual()
         nombre = str(self._info_cliente.get("Nombre", "")).strip() or self._rut
 
@@ -2108,6 +2172,7 @@ class DetalleDeudorDialog(QDialog):
                     tipo_pago=tipo_pago,
                     monto=monto,
                     observaciones=observaciones,
+                    detalle_id=detalle_id,
                 )
                 if err:
                     raise ValueError(err)
@@ -2127,6 +2192,7 @@ class DetalleDeudorDialog(QDialog):
                 tipo_pago=tipo_pago,
                 monto=monto,
                 expediente=expediente,
+                detalle_id=detalle_id,
             )
 
             estado_gestion = "Abonado" if str(tipo_pago).strip() == "Abono a la deuda" else "Pagado"

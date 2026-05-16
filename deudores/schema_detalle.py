@@ -333,6 +333,9 @@ def extraer_detalle_deudor(df_detalle_completo, rut: str):
     filas_deuda = []
     for _, row in filas.iterrows():
         entrada = {}
+        for hidden_col in ("_detalle_id", "id"):
+            if hidden_col in row.index:
+                entrada[hidden_col] = _valor_limpio(row.get(hidden_col, ""))
         for etq, col in COLUMNAS_DETALLE_DEUDA:
             if col == "mail_afiliado":
                 entrada[etq] = _resolver_email_fila(row)

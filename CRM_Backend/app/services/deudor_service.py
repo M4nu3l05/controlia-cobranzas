@@ -33,6 +33,14 @@ def _norm_rut(value: str) -> str:
     return txt.replace("-", "").lstrip("0")
 
 
+def _norm_expediente(value: str) -> str:
+    txt = _norm_text(value).replace("\u00a0", " ")
+    txt = "".join(txt.split())
+    if txt.endswith(".0"):
+        txt = txt[:-2]
+    return txt.lower()
+
+
 def _rut_db_expr(column):
     return func.ltrim(
         func.replace(
@@ -46,6 +54,19 @@ def _rut_db_expr(column):
         ),
         "0",
     )
+
+
+def _saldo_pendiente_detalle(row: DeudorDetalle) -> float:
+    saldo = float(getattr(row, "saldo_actual", 0) or 0)
+    saldo_calc = max(
+        float(getattr(row, "copago", 0) or 0) - float(getattr(row, "total_pagos", 0) or 0),
+        0.0,
+    )
+    if saldo <= 0:
+        return saldo_calc
+    if abs(saldo - saldo_calc) > 0.01:
+        return saldo_calc
+    return saldo
 
 
 def clear_empresa_deudores_service(db: Session, *, empresa: str) -> bool:
@@ -139,6 +160,7 @@ def _to_resumen_item(row: DeudorResumen) -> DeudorListItem:
 
 def _to_detalle_item(row: DeudorDetalle) -> DeudorDetalleItem:
     return DeudorDetalleItem(
+        id=int(row.id),
         empresa=row.empresa,
         rut_afiliado=row.rut_afiliado,
         dv=row.dv,
@@ -206,7 +228,7 @@ def list_destinatarios_service(
 
     email_by_key: dict[tuple[str, str], str] = {}
     expediente_by_key: dict[tuple[str, str], str] = {}
-    detalle_rows = (
+    detalle_rows_rut = (
         detalle_q.order_by(
             DeudorDetalle.updated_at.desc(),
             DeudorDetalle.id.desc(),
@@ -433,6 +455,7 @@ def registrar_pago_service(
     monto: float,
     observaciones: str = "",
     nombre_afiliado: str = "",
+    detalle_id: int | None = None,
 ) -> RegistrarPagoResponse:
     empresa_txt = _norm_text(empresa)
     expediente_txt = _norm_text(expediente)
@@ -450,33 +473,57 @@ def registrar_pago_service(
     if monto <= 0:
         raise ValueError("El monto debe ser mayor a 0.")
 
-    detalle_row = (
+    detalle_rows = (
         db.query(DeudorDetalle)
         .filter(
             func.trim(DeudorDetalle.empresa) == empresa_txt,
             _rut_db_expr(DeudorDetalle.rut_afiliado) == rut_norm,
-            func.trim(DeudorDetalle.nro_expediente) == expediente_txt,
         )
         .order_by(DeudorDetalle.id.asc())
-        .first()
+        .all()
     )
-    if not detalle_row:
+    expediente_norm = _norm_expediente(expediente_txt)
+    detalle_rows = [
+        row for row in detalle_rows_rut
+        if _norm_expediente(getattr(row, "nro_expediente", "")) == expediente_norm
+    ]
+    if not detalle_rows:
         raise ValueError("No se encontró el expediente indicado para ese deudor.")
 
-    saldo_actual_detalle = float(detalle_row.saldo_actual or 0)
-    total_pagos_detalle = float(detalle_row.total_pagos or 0)
-
-    if monto - saldo_actual_detalle > 1:
-        raise ValueError("Monto no corresponde al Saldo Actual, verificar monto de pago")
-
-    if "pago total" in tipo_pago_txt.lower() and abs(monto - saldo_actual_detalle) > 1:
-        raise ValueError("Monto no corresponde al Saldo Actual, verificar monto de pago")
-
-    detalle_row.total_pagos = total_pagos_detalle + float(monto)
-    detalle_row.saldo_actual = max(0.0, saldo_actual_detalle - float(monto))
-
     tipo_pago_norm = tipo_pago_txt.lower()
-    estado_por_pago = "Abonado" if "abono" in tipo_pago_norm else "Pagado"
+    if "pago total" in tipo_pago_norm:
+        saldos_por_fila = {int(row.id): _saldo_pendiente_detalle(row) for row in detalle_rows}
+        saldo_expediente = float(sum(saldos_por_fila.values()))
+        if abs(monto - saldo_expediente) > 1:
+            raise ValueError("Monto no corresponde al Saldo Actual, verificar monto de pago")
+
+        detalle_row = detalle_rows[0]
+        for row in detalle_rows:
+            saldo_fila = saldos_por_fila.get(int(row.id), 0.0)
+            if saldo_fila <= 0:
+                continue
+            row.total_pagos = float(row.total_pagos or 0) + saldo_fila
+            row.saldo_actual = 0.0
+    else:
+        if detalle_id is not None:
+            detalle_row = next((row for row in detalle_rows if int(row.id) == int(detalle_id)), None)
+            if detalle_row is None:
+                raise ValueError("No se encontro el monto seleccionado para registrar el abono.")
+        else:
+            if len(detalle_rows) > 1:
+                raise ValueError("Debes seleccionar a que monto de la licencia se registrara el abono.")
+            detalle_row = detalle_rows[0]
+
+        saldo_actual_detalle = _saldo_pendiente_detalle(detalle_row)
+        total_pagos_detalle = float(detalle_row.total_pagos or 0)
+
+        if monto - saldo_actual_detalle > 1:
+            raise ValueError("El abono no puede superar el saldo del monto seleccionado.")
+
+        detalle_row.total_pagos = total_pagos_detalle + float(monto)
+        detalle_row.saldo_actual = max(0.0, saldo_actual_detalle - float(monto))
+
+    estado_por_pago = "Abonado" if "abono" in tipo_pago_norm else "Cliente Sin deuda"
 
     copago_total, total_pagos_total, saldo_total, estado_deudor = _recalcular_resumen_desde_detalle(
         db,

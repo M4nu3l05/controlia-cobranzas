@@ -824,19 +824,24 @@ def backend_register_pago(
     tipo_pago: str,
     monto: float,
     observaciones: str = "",
+    detalle_id: int | str | None = None,
 ) -> Tuple[dict | None, str]:
     try:
+        payload = {
+            "empresa": empresa.strip(),
+            "expediente": expediente.strip(),
+            "tipo_pago": tipo_pago,
+            "monto": float(monto),
+            "observaciones": observaciones,
+        }
+        if detalle_id not in (None, ""):
+            payload["detalle_id"] = int(detalle_id)
+
         data = _http_request_auth(
             "POST",
             f"/deudores/{rut}/pagos",
             token=_require_backend_token(session),
-            payload={
-                "empresa": empresa.strip(),
-                "expediente": expediente.strip(),
-                "tipo_pago": tipo_pago,
-                "monto": float(monto),
-                "observaciones": observaciones,
-            },
+            payload=payload,
         )
         return data if isinstance(data, dict) else None, ""
     except ValueError as exc:

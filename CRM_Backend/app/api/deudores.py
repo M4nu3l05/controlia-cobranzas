@@ -109,6 +109,7 @@ def registrar_pago(
             monto=payload.monto,
             observaciones=payload.observaciones,
             nombre_afiliado=payload.nombre_afiliado,
+            detalle_id=payload.detalle_id,
         )
     except ValueError as exc:
         raise HTTPException(

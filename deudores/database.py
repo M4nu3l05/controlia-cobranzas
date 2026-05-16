@@ -151,6 +151,14 @@ def _normalizar_rut(valor: str) -> str:
     return str(valor).strip().replace(".", "").replace("-", "").lstrip("0")
 
 
+def _normalizar_expediente(valor: str) -> str:
+    txt = str(valor or "").strip().replace("\u00a0", " ")
+    txt = re.sub(r"\s+", "", txt)
+    if txt.endswith(".0"):
+        txt = txt[:-2]
+    return txt.lower()
+
+
 def _parse_num(val: str) -> float:
     try:
         texto = str(val).strip()
@@ -480,7 +488,8 @@ def _obtener_filas_detalle_por_rut_y_expediente(
         .str.lstrip("0")
         .eq(rut_norm)
     )
-    expediente_mask = df_det["Nro_Expediente"].astype(str).str.strip().eq(str(expediente).strip())
+    expediente_norm = _normalizar_expediente(expediente)
+    expediente_mask = df_det["Nro_Expediente"].apply(_normalizar_expediente).eq(expediente_norm)
     return df_det.loc[rut_mask & expediente_mask].copy()
 
 
@@ -683,6 +692,13 @@ def _read_table_if_exists(empresa: str, table: str) -> pd.DataFrame:
             ).fetchone()
             if not row:
                 return pd.DataFrame()
+
+            if table == TABLA_DETALLE:
+                return pd.read_sql(
+                    f'SELECT rowid AS _detalle_id, * FROM "{table}"',
+                    con,
+                    dtype=str,
+                ).fillna("")
 
             return pd.read_sql(f'SELECT * FROM "{table}"', con, dtype=str).fillna("")
     except Exception:
@@ -990,7 +1006,14 @@ def actualizar_cliente_por_rut(empresa: str, rut_original: str, datos_actualizad
     return total_updates > 0
 
 
-def registrar_pago_por_rut(empresa: str, rut: str, tipo_pago: str, monto: float, expediente: str) -> dict:
+def registrar_pago_por_rut(
+    empresa: str,
+    rut: str,
+    tipo_pago: str,
+    monto: float,
+    expediente: str,
+    detalle_id: int | str | None = None,
+) -> dict:
     empresa = str(empresa or "").strip()
     rut_norm = _normalizar_rut(rut)
     expediente = str(expediente or "").strip()
@@ -1019,41 +1042,91 @@ def registrar_pago_por_rut(empresa: str, rut: str, tipo_pago: str, monto: float,
         if filas.empty:
             raise ValueError("No se encontró el expediente seleccionado para este deudor.")
 
-        fila = filas.iloc[0]
-        copago = _parse_num(fila.get("Copago", 0))
-        total_pagos_actual = _parse_num(fila.get("Total_Pagos", 0))
-        saldo_actual = _parse_num(fila.get("Saldo_Actual", 0))
-        if saldo_actual <= 0:
-            saldo_actual = max(copago - total_pagos_actual, 0.0)
-
         tipo_pago_txt = str(tipo_pago or "").strip().lower()
         monto_f = float(monto)
-
-        if tipo_pago_txt == "pago total de la deuda" and round(monto_f, 2) != round(saldo_actual, 2):
-            raise ValueError("Monto no corresponde al Saldo Actual, verificar monto de pago")
-
-        nuevo_total_pagos = total_pagos_actual + monto_f
-        nuevo_saldo = max(copago - nuevo_total_pagos, 0.0)
-        nuevo_estado_detalle = "Cliente Sin deuda" if round(nuevo_saldo, 2) == 0 else "Gestionado"
-
         ahora = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        con.execute(
-            f"""
-            UPDATE "{TABLA_DETALLE}"
-            SET Total_Pagos = ?, Saldo_Actual = ?, Estado_deudor = ?, {COL_FECHA_CARGA} = ?
-            WHERE REPLACE(REPLACE(TRIM(Rut_Afiliado), '.', ''), '-', '') = ?
-              AND TRIM(Nro_Expediente) = ?
-            """,
-            (
-                _fmt_monto_txt(nuevo_total_pagos),
-                _fmt_monto_txt(nuevo_saldo),
-                nuevo_estado_detalle,
-                ahora,
-                rut_norm,
-                expediente,
-            ),
+        filas_calc = filas.copy()
+        filas_calc["_copago_num"] = filas_calc.get("Copago", pd.Series(dtype=str)).apply(_parse_num)
+        filas_calc["_total_pagos_num"] = filas_calc.get("Total_Pagos", pd.Series(dtype=str)).apply(_parse_num)
+        filas_calc["_saldo_actual_num"] = filas_calc.get("Saldo_Actual", pd.Series(dtype=str)).apply(_parse_num)
+        saldo_recalculado = (filas_calc["_copago_num"] - filas_calc["_total_pagos_num"]).clip(lower=0)
+        filas_calc["_saldo_actual_num"] = filas_calc["_saldo_actual_num"].where(
+            filas_calc["_saldo_actual_num"] > 0,
+            saldo_recalculado,
         )
+        filas_calc["_saldo_actual_num"] = filas_calc["_saldo_actual_num"].where(
+            (filas_calc["_saldo_actual_num"] - saldo_recalculado).abs() <= 0.01,
+            saldo_recalculado,
+        )
+
+        if tipo_pago_txt == "pago total de la deuda":
+            saldo_expediente = float(filas_calc["_saldo_actual_num"].sum())
+            if round(monto_f, 2) != round(saldo_expediente, 2):
+                raise ValueError("Monto no corresponde al Saldo Actual, verificar monto de pago")
+
+            for _, fila_pago in filas_calc.iterrows():
+                saldo_fila = float(fila_pago.get("_saldo_actual_num", 0) or 0)
+                if round(saldo_fila, 2) <= 0:
+                    continue
+
+                copago_fila = float(fila_pago.get("_copago_num", 0) or 0)
+                total_actual_fila = float(fila_pago.get("_total_pagos_num", 0) or 0)
+                nuevo_total_fila = total_actual_fila + saldo_fila
+                nuevo_saldo_fila = max(copago_fila - nuevo_total_fila, 0.0)
+
+                con.execute(
+                    f"""
+                    UPDATE "{TABLA_DETALLE}"
+                    SET Total_Pagos = ?, Saldo_Actual = ?, Estado_deudor = ?, {COL_FECHA_CARGA} = ?
+                    WHERE rowid = ?
+                    """,
+                    (
+                        _fmt_monto_txt(nuevo_total_fila),
+                        _fmt_monto_txt(nuevo_saldo_fila),
+                        "Cliente Sin deuda",
+                        ahora,
+                        int(fila_pago.get("_rid_")),
+                    ),
+                )
+        else:
+            filas_objetivo = filas_calc
+            detalle_id_txt = str(detalle_id or "").strip()
+            if detalle_id_txt:
+                filas_objetivo = filas_calc[filas_calc["_rid_"].astype(str).str.strip() == detalle_id_txt]
+
+            if filas_objetivo.empty:
+                raise ValueError("No se encontro el monto seleccionado para registrar el abono.")
+
+            if len(filas_calc) > 1 and not detalle_id_txt:
+                raise ValueError("Debes seleccionar a que monto de la licencia se registrara el abono.")
+
+            fila = filas_objetivo.iloc[0]
+            copago = float(fila.get("_copago_num", 0) or 0)
+            total_pagos_actual = float(fila.get("_total_pagos_num", 0) or 0)
+            saldo_actual = float(fila.get("_saldo_actual_num", 0) or 0)
+
+            if monto_f - saldo_actual > 0.01:
+                raise ValueError("El abono no puede superar el saldo del monto seleccionado.")
+
+            nuevo_total_pagos = total_pagos_actual + monto_f
+            nuevo_saldo = max(copago - nuevo_total_pagos, 0.0)
+            nuevo_estado_detalle = "Cliente Sin deuda" if round(nuevo_saldo, 2) == 0 else "Gestionado"
+
+            con.execute(
+                f"""
+                UPDATE "{TABLA_DETALLE}"
+                SET Total_Pagos = ?, Saldo_Actual = ?, Estado_deudor = ?, {COL_FECHA_CARGA} = ?
+                WHERE rowid = ?
+                """,
+                (
+                    _fmt_monto_txt(nuevo_total_pagos),
+                    _fmt_monto_txt(nuevo_saldo),
+                    nuevo_estado_detalle,
+                    ahora,
+                    int(fila.get("_rid_")),
+                ),
+            )
 
         resultado = _recalcular_resumen_desde_detalle(con, rut_norm)
 
