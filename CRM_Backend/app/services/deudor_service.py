@@ -228,7 +228,7 @@ def list_destinatarios_service(
 
     email_by_key: dict[tuple[str, str], str] = {}
     expediente_by_key: dict[tuple[str, str], str] = {}
-    detalle_rows_rut = (
+    detalle_rows = (
         detalle_q.order_by(
             DeudorDetalle.updated_at.desc(),
             DeudorDetalle.id.desc(),
@@ -473,7 +473,7 @@ def registrar_pago_service(
     if monto <= 0:
         raise ValueError("El monto debe ser mayor a 0.")
 
-    detalle_rows = (
+    detalle_rows_rut = (
         db.query(DeudorDetalle)
         .filter(
             func.trim(DeudorDetalle.empresa) == empresa_txt,
