@@ -636,6 +636,8 @@ class TabEnvio(QWidget):
                             "Nombre Afil": self._txt(it.get("nombre_afil", it.get("nombre_afiliado", ""))),
                             "RUT Afil": self._txt(it.get("rut_afil", it.get("rut_afiliado", ""))),
                             "Fecha Pago": self._txt(it.get("fecha_pago", "")),
+                            "Fecha Recep": self._txt(it.get("cart56_fecha_recep", "")),
+                            "Fecha Recep ISA": self._txt(it.get("cart56_fecha_recep_isa", "")),
                             "Copago": it.get("copago", ""),
                             "Saldo_Actual": it.get("saldo_actual", ""),
                         }
@@ -667,6 +669,8 @@ class TabEnvio(QWidget):
                     "Nombre Afil": self._txt(row.get("Nombre Afil", row.get("nombre_afil", ""))),
                     "RUT Afil": self._txt(row.get("RUT Afil", row.get("rut_afil", ""))),
                     "Fecha Pago": self._txt(row.get("Fecha Pago", row.get("fecha_pago", ""))),
+                    "Fecha Recep": self._txt(row.get("Cart56_Fecha_Recep", row.get("Fecha Recep", ""))),
+                    "Fecha Recep ISA": self._txt(row.get("Cart56_Fecha_Recep_ISA", row.get("Fecha Recep ISA", ""))),
                     "Copago": row.get("Copago", ""),
                     "Saldo_Actual": row.get("Saldo_Actual", ""),
                 }
@@ -708,6 +712,8 @@ class TabEnvio(QWidget):
                             "Nombre Afil": self._txt(fila.get("Nombre Afil", fila.get("nombre_afil", ""))),
                             "RUT Afil": self._txt(fila.get("RUT Afil", fila.get("rut_afil", ""))),
                             "Fecha Pago": self._txt(fila.get("Fecha Pago", fila.get("fecha_pago", ""))),
+                            "Fecha Recep": self._txt(fila.get("Cart56_Fecha_Recep", fila.get("Fecha Recep", ""))),
+                            "Fecha Recep ISA": self._txt(fila.get("Cart56_Fecha_Recep_ISA", fila.get("Fecha Recep ISA", ""))),
                             "Copago": fila.get("Copago", ""),
                             "Saldo_Actual": fila.get("Saldo_Actual", ""),
                         }
@@ -736,6 +742,8 @@ class TabEnvio(QWidget):
                 base["Nombre Afil"] = self._txt(primero.get("Nombre Afil", base.get("Nombre Afil", "")))
                 base["RUT Afil"] = self._txt(primero.get("RUT Afil", base.get("RUT Afil", "")))
                 base["Fecha Pago"] = self._txt(primero.get("Fecha Pago", base.get("Fecha Pago", "")))
+                base["Cart56_Fecha_Recep"] = self._txt(primero.get("Fecha Recep", base.get("Cart56_Fecha_Recep", "")))
+                base["Cart56_Fecha_Recep_ISA"] = self._txt(primero.get("Fecha Recep ISA", base.get("Cart56_Fecha_Recep_ISA", "")))
 
             salida.append(base)
 
@@ -1008,6 +1016,8 @@ class TabEnvio(QWidget):
                 "{Nombre_Afil}",
                 "{RUT_Afil}",
                 "{Fecha_Pago}",
+                "{Fecha_Recep}",
+                "{Fecha_Recep_ISA}",
                 "{detalle_licencias}",
                 "{Detalle_Licencias}",
             )
@@ -1075,6 +1085,10 @@ class TabEnvio(QWidget):
             df_out["RUT Afil"] = ""
         if "Fecha Pago" not in df_out.columns:
             df_out["Fecha Pago"] = ""
+        if "Cart56_Fecha_Recep" not in df_out.columns:
+            df_out["Cart56_Fecha_Recep"] = ""
+        if "Cart56_Fecha_Recep_ISA" not in df_out.columns:
+            df_out["Cart56_Fecha_Recep_ISA"] = ""
 
         cache: dict[tuple[str, str], dict] = {}
 
@@ -1119,6 +1133,8 @@ class TabEnvio(QWidget):
                 "Nombre Afil": _txt(r0.get("Nombre Afil", "")),
                 "RUT Afil": _txt(r0.get("RUT Afil", "")),
                 "Fecha Pago": _txt(r0.get("Fecha Pago", "")),
+                "Cart56_Fecha_Recep": _txt(r0.get("Cart56_Fecha_Recep", r0.get("Fecha Recep", ""))),
+                "Cart56_Fecha_Recep_ISA": _txt(r0.get("Cart56_Fecha_Recep_ISA", r0.get("Fecha Recep ISA", ""))),
             }
 
         for idx, row in df_out.iterrows():
@@ -1132,7 +1148,7 @@ class TabEnvio(QWidget):
             actual = _txt(row.get("No_Licencia", "")) or _txt(row.get("Nro_Expediente", ""))
             faltan_campos = any(
                 _invalido(_txt(row.get(col, "")))
-                for col in ("Nombre Afil", "RUT Afil", "Fecha Pago")
+                for col in ("Nombre Afil", "RUT Afil", "Fecha Pago", "Cart56_Fecha_Recep", "Cart56_Fecha_Recep_ISA")
             )
             if not (_invalido(actual) or _parece_contador(actual) or faltan_campos):
                 continue
@@ -1165,6 +1181,8 @@ class TabEnvio(QWidget):
                         "Nombre Afil": _txt(chosen.get("nombre_afil", "")),
                         "RUT Afil": _txt(chosen.get("rut_afil", "")),
                         "Fecha Pago": _txt(chosen.get("fecha_pago", "")),
+                        "Cart56_Fecha_Recep": _txt(chosen.get("cart56_fecha_recep", "")),
+                        "Cart56_Fecha_Recep_ISA": _txt(chosen.get("cart56_fecha_recep_isa", "")),
                     }
                     if _invalido(resolved_payload.get("No_Licencia", "")):
                         resumen = payload.get("resumen") or {}
@@ -1200,6 +1218,14 @@ class TabEnvio(QWidget):
                 val = _txt(resolved_payload.get("Fecha Pago", ""))
                 if val:
                     df_out.at[idx, "Fecha Pago"] = val
+            if _invalido(_txt(row.get("Cart56_Fecha_Recep", ""))):
+                val = _txt(resolved_payload.get("Cart56_Fecha_Recep", ""))
+                if val:
+                    df_out.at[idx, "Cart56_Fecha_Recep"] = val
+            if _invalido(_txt(row.get("Cart56_Fecha_Recep_ISA", ""))):
+                val = _txt(resolved_payload.get("Cart56_Fecha_Recep_ISA", ""))
+                if val:
+                    df_out.at[idx, "Cart56_Fecha_Recep_ISA"] = val
 
         return df_out
 

@@ -29,6 +29,8 @@ VARIABLES_DISPONIBLES = {
     "{nombre_afil}":     "Nombre Afil (Cart-56, por licencia)",
     "{rut_afil}":        "RUT Afil (Cart-56, por licencia)",
     "{fecha_pago}":      "Fecha Pago (Cart-56, por licencia)",
+    "{Fecha_Recep}":     "Fecha Recep (Cart-56, por licencia)",
+    "{Fecha_Recep_ISA}": "Fecha Recep ISA (Cart-56, por licencia)",
     "{detalle_licencias}": "Detalle consolidado de licencias/folios (modo consolidado)",
     "{ultima_emision}":  "Fecha última emisión",
     "{primera_emision}": "Fecha primera emisión",
@@ -221,6 +223,15 @@ def variables_desde_fila(fila: dict) -> dict:
         "nombre_afil":     _limpio(fila.get("Nombre Afil", fila.get("nombre_afil", ""))),
         "rut_afil":        _limpio(fila.get("RUT Afil", fila.get("rut_afil", ""))),
         "fecha_pago":      _limpio(fila.get("Fecha Pago", fila.get("fecha_pago", ""))),
+        "Fecha_Recep":     _limpio(
+            fila.get("Fecha Recep", fila.get("Cart56_Fecha_Recep", fila.get("fecha_recep", "")))
+        ),
+        "Fecha_Recep_ISA": _limpio(
+            fila.get(
+                "Fecha Recep ISA",
+                fila.get("Cart56_Fecha_Recep_ISA", fila.get("fecha_recep_isa", "")),
+            )
+        ),
         "detalle_licencias": _limpio(
             fila.get("detalle_licencias", fila.get("Detalle Licencias", ""))
         ),

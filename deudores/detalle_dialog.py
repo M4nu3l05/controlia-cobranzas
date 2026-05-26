@@ -2471,6 +2471,8 @@ class DetalleDeudorDialog(QDialog):
             nombre_afil = _txt(primera.get("Nombre Afil", "")) or _txt(base.get("nombre_afil", ""))
             rut_afil = _txt(primera.get("RUT Afil", "")) or _txt(base.get("rut_afil", ""))
             fecha_pago = _txt(primera.get("Fecha Pago", "")) or _txt(base.get("fecha_pago", ""))
+            fecha_recep = _txt(primera.get("Fecha Recep", "")) or _txt(base.get("Cart56_Fecha_Recep", ""))
+            fecha_recep_isa = _txt(primera.get("Fecha Recep ISA", "")) or _txt(base.get("Cart56_Fecha_Recep_ISA", ""))
 
             if nombre_afil:
                 base["Nombre Afil"] = nombre_afil
@@ -2481,6 +2483,12 @@ class DetalleDeudorDialog(QDialog):
             if fecha_pago:
                 base["Fecha Pago"] = fecha_pago
                 base["fecha_pago"] = fecha_pago
+            if fecha_recep:
+                base["Fecha Recep"] = fecha_recep
+                base["Cart56_Fecha_Recep"] = fecha_recep
+            if fecha_recep_isa:
+                base["Fecha Recep ISA"] = fecha_recep_isa
+                base["Cart56_Fecha_Recep_ISA"] = fecha_recep_isa
 
             lineas_detalle = self._lineas_detalle_licencias()
             base["detalle_licencias"] = "\n".join(lineas_detalle)
@@ -2513,6 +2521,8 @@ class DetalleDeudorDialog(QDialog):
                 nombres = _join_unicos([fila.get("Nombre Afil", "") for fila in self._filas_deuda])
                 ruts_afil = _join_unicos([fila.get("RUT Afil", "") for fila in self._filas_deuda])
                 fechas_pago = _join_unicos([fila.get("Fecha Pago", "") for fila in self._filas_deuda])
+                fechas_recep = _join_unicos([fila.get("Fecha Recep", "") for fila in self._filas_deuda])
+                fechas_recep_isa = _join_unicos([fila.get("Fecha Recep ISA", "") for fila in self._filas_deuda])
 
                 if licencias:
                     base["No_Licencia"] = licencias
@@ -2527,6 +2537,12 @@ class DetalleDeudorDialog(QDialog):
                 if fechas_pago:
                     base["Fecha Pago"] = fechas_pago
                     base["fecha_pago"] = fechas_pago
+                if fechas_recep:
+                    base["Fecha Recep"] = fechas_recep
+                    base["Cart56_Fecha_Recep"] = fechas_recep
+                if fechas_recep_isa:
+                    base["Fecha Recep ISA"] = fechas_recep_isa
+                    base["Cart56_Fecha_Recep_ISA"] = fechas_recep_isa
 
         return base
 
