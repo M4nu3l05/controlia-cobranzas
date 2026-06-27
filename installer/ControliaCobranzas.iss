@@ -2,7 +2,7 @@
 ; Requiere tener compilado: dist\ControliaCobranzas\ControliaCobranzas.exe
 
 #define MyAppName "Controlia Cobranzas"
-#define MyAppVersion "2.0.0"
+#define MyAppVersion "2.0.1"
 #define MyAppPublisher "Controlia"
 #define MyAppExeName "ControliaCobranzas.exe"
 #define MyAppId "{{1D6E7720-33C0-4745-BFB7-C1EC5A46A57C}"
