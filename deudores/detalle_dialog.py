@@ -65,6 +65,11 @@ from admin_carteras.service import (
 )
 
 
+def _normalizar_nombre_cartera(valor: str) -> str:
+    texto = str(valor or "").strip().lower()
+    return "".join(ch for ch in texto if ch.isalnum())
+
+
 def _formatear_moneda_chilena(valor) -> str:
     try:
         if valor is None:
@@ -1766,15 +1771,20 @@ class DetalleDeudorDialog(QDialog):
             empresas = obtener_empresas_asignadas_para_session(self._session)
         except Exception:
             empresas = []
-        return {str(emp or "").strip().lower() for emp in empresas if str(emp or "").strip()}
+        return {_normalizar_nombre_cartera(emp) for emp in empresas if str(emp or "").strip()}
 
     def _obtener_asignacion_empresa(self, empresa: str) -> dict:
         emp = str(empresa or "").strip()
         if not emp:
             return {}
+        emp_norm = _normalizar_nombre_cartera(emp)
 
         asignacion = obtener_asignacion_por_empresa_local(emp)
-        if asignacion:
+        if asignacion and (
+            asignacion.get("user_id")
+            or str(asignacion.get("email", "")).strip()
+            or str(asignacion.get("username", "")).strip()
+        ):
             return asignacion
 
         if self._usa_backend_deudores():
@@ -1784,7 +1794,7 @@ class DetalleDeudorDialog(QDialog):
                 rows, err = [], "error"
             if not err:
                 for row in rows or []:
-                    if str(row.get("empresa", "")).strip().lower() == emp.lower():
+                    if _normalizar_nombre_cartera(row.get("empresa", "")) == emp_norm:
                         return {
                             "empresa": str(row.get("empresa", "")).strip(),
                             "user_id": row.get("user_id"),
@@ -1796,11 +1806,12 @@ class DetalleDeudorDialog(QDialog):
     def _puede_operar_en_empresa_actual(self) -> bool:
         if not self._es_usuario_ejecutiva():
             return True
-        empresa = str(self._obtener_empresa_actual() or "").strip().lower()
+        empresa = str(self._obtener_empresa_actual() or "").strip()
         if not empresa:
             return False
+        empresa_norm = _normalizar_nombre_cartera(empresa)
 
-        if empresa in self._empresas_asignadas_sesion():
+        if empresa_norm in self._empresas_asignadas_sesion():
             return True
 
         asignacion = self._obtener_asignacion_empresa(empresa)
@@ -1815,7 +1826,7 @@ class DetalleDeudorDialog(QDialog):
                 return True
             return False
 
-        return empresa in self._empresas_asignadas_sesion()
+        return empresa_norm in self._empresas_asignadas_sesion()
 
     def _actualizar_permisos_cartera(self) -> None:
         can_operate = self._puede_operar_en_empresa_actual()

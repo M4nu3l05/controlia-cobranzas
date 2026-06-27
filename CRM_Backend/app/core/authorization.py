@@ -18,6 +18,10 @@ def _normalize_company(value: str) -> str:
     return str(value or "").strip()
 
 
+def _company_key(value: str) -> str:
+    return "".join(ch for ch in str(value or "").strip().lower() if ch.isalnum())
+
+
 def is_privileged_operator(user: User) -> bool:
     return str(user.role or "").strip().lower() in {ROLE_ADMIN, ROLE_SUPERVISOR}
 
@@ -27,19 +31,32 @@ def assigned_user_id_for_company(db: Session, company: str) -> int | None:
     if not company_txt:
         return None
 
-    row = db.execute(
+    rows = db.execute(
         text(
             """
-            SELECT user_id
+            SELECT empresa, user_id
             FROM cartera_asignaciones
-            WHERE LOWER(TRIM(empresa)) = LOWER(:empresa)
             """
         ),
-        {"empresa": company_txt},
-    ).first()
-    if not row or row[0] is None:
+    ).all()
+    company_key = _company_key(company_txt)
+    for row in rows:
+        if _company_key(row[0]) == company_key and row[1] is not None:
+            return int(row[1])
+    return None
+
+
+def assigned_company_name(db: Session, company: str) -> str | None:
+    company_txt = _normalize_company(company)
+    if not company_txt:
         return None
-    return int(row[0])
+    rows = db.execute(text("SELECT empresa FROM cartera_asignaciones")).all()
+    company_key = _company_key(company_txt)
+    for row in rows:
+        empresa = _normalize_company(row[0])
+        if _company_key(empresa) == company_key:
+            return empresa
+    return None
 
 
 def can_operate_company(db: Session, user: User, company: str) -> bool:
@@ -66,7 +83,7 @@ def can_operate_company(db: Session, user: User, company: str) -> bool:
             LIMIT 1
             """
         ),
-        {"empresa": _normalize_company(company), "user_id": int(user.id)},
+        {"empresa": assigned_company_name(db, company) or _normalize_company(company), "user_id": int(user.id)},
     ).first()
     return replacement is not None
 

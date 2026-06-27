@@ -171,6 +171,34 @@ def ensure_cartera_assignments_table(db: Session) -> None:
             updated_by TEXT
         )
     """))
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        existing_columns = {
+            str(row[1])
+            for row in db.execute(text("PRAGMA table_info(cartera_asignaciones)")).all()
+        }
+    else:
+        existing_columns = {
+            str(row[0])
+            for row in db.execute(
+                text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'cartera_asignaciones'
+                """)
+            ).all()
+        }
+
+    for column_name, column_type in {
+        "email": "TEXT",
+        "username": "TEXT",
+        "updated_at": "TEXT",
+        "updated_by": "TEXT",
+    }.items():
+        if column_name not in existing_columns:
+            db.execute(
+                text(f"ALTER TABLE cartera_asignaciones ADD COLUMN {column_name} {column_type}")
+            )
     db.commit()
 
 

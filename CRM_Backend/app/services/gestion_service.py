@@ -463,26 +463,28 @@ def _resolver_asignacion_por_empresa(db: Session, *, empresa: str) -> int | None
     empresa_txt = _norm_text(empresa)
     if not empresa_txt:
         return None
+    empresa_key = "".join(ch for ch in empresa_txt.lower() if ch.isalnum())
     try:
-        row = db.execute(
+        rows = db.execute(
             text(
                 """
-                SELECT user_id
+                SELECT empresa, user_id
                 FROM cartera_asignaciones
-                WHERE empresa = :empresa
                 """
             ),
-            {"empresa": empresa_txt},
-        ).fetchone()
+        ).fetchall()
     except Exception:
         db.rollback()
         return None
-    if not row or row[0] is None:
-        return None
-    try:
-        return int(row[0])
-    except Exception:
-        return None
+    for row in rows:
+        row_key = "".join(ch for ch in _norm_text(row[0]).lower() if ch.isalnum())
+        if row_key != empresa_key or row[1] is None:
+            continue
+        try:
+            return int(row[1])
+        except Exception:
+            return None
+    return None
 
 
 def list_gestiones_asignadas_para_usuario_service(

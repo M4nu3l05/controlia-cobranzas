@@ -28,7 +28,11 @@ from app.models.gestion import DeudorGestion
 from app.schemas.deudor import RegistrarPagoRequest
 from app.schemas.gestion import GestionCreateRequest
 from app.services.gestion_service import marcar_gestion_asignada_realizada_service
-from app.services.user_service import list_cartera_assignments_service, save_cartera_assignments_service
+from app.services.user_service import (
+    ensure_cartera_assignments_table,
+    list_cartera_assignments_service,
+    save_cartera_assignments_service,
+)
 from fastapi import HTTPException
 
 
@@ -117,6 +121,26 @@ def test_derivacion_solo_puede_ir_a_responsable_de_cartera(db):
             company="Cart-56",
             requested_user_id=11,
         )
+
+
+def test_derivacion_resuelve_cartera_aunque_cambie_guion_o_espacios(db):
+    assert resolve_derivation_target(
+        db,
+        company="Cart 56",
+        requested_user_id=10,
+    ) == 10
+    assert can_operate_company(db, _user(10, "ejecutivo"), " CART 56 ")
+
+
+def test_asignaciones_compatibles_con_tabla_legacy_sin_columnas_nuevas(db):
+    ensure_cartera_assignments_table(db)
+    rows = list_cartera_assignments_service(
+        db,
+        executor=_user(11, "ejecutivo"),
+    )
+    assert rows[0].empresa == "Cart-56"
+    assert rows[0].user_id == 10
+    assert rows[0].email == ""
 
 
 def test_ejecutiva_puede_consultar_asignaciones_para_derivar_pero_no_modificar():
