@@ -25,6 +25,7 @@ from app.schemas.operations import ReplacementCreateRequest
 from app.services.deudor_service import update_deudor_cliente_service
 from app.services.gestion_service import (
     create_gestion_service,
+    delete_gestion_service,
     marcar_gestion_asignada_realizada_service,
 )
 from app.services.operations_service import create_replacement_service
@@ -156,6 +157,29 @@ def test_derivacion_guarda_plazo_y_notifica_resultado(operation_context):
         user_id=otra.id,
         notification_type="derivation_completed",
     ).count() == 1
+
+
+def test_eliminar_derivacion_limpia_tracking_asociado(operation_context):
+    db, _, _, titular, otra = operation_context
+    item = create_gestion_service(
+        db,
+        rut="11111111",
+        payload=GestionCreateRequest(
+            empresa="Cart-56",
+            nombre_afiliado="Persona Demo",
+            tipo_gestion="Manual",
+            estado="Gestion asignada",
+            fecha_gestion="01/01/2026",
+            observacion="Contacto recibido por otra cartera",
+            assigned_to_user_id=titular.id,
+        ),
+        executor=otra,
+    )
+    assert db.query(DerivationTracking).filter_by(gestion_id=item.id).count() == 1
+
+    delete_gestion_service(db, gestion_id=item.id, executor=titular)
+
+    assert db.query(DerivationTracking).filter_by(gestion_id=item.id).count() == 0
 
 
 def test_reemplazo_temporal_habilita_cartera_sin_compartir_credenciales(operation_context):

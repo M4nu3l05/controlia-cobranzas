@@ -382,6 +382,9 @@ def delete_gestion_service(db: Session, *, gestion_id: int, executor: User) -> N
         return
 
     require_company_operation(db, executor, empresa)
+    db.query(DerivationTracking).filter(
+        DerivationTracking.gestion_id == int(row.id)
+    ).delete(synchronize_session=False)
     db.delete(row)
     db.commit()
 
