@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
+from app.core.authorization import AuthorizationError, require_company_operation
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.deudor import (
@@ -100,8 +101,10 @@ def registrar_pago(
     current_user: User = Depends(get_current_user),
 ):
     try:
+        require_company_operation(db, current_user, payload.empresa)
         return registrar_pago_service(
             db,
+            executor=current_user,
             rut=rut,
             empresa=payload.empresa,
             expediente=payload.expediente,
@@ -110,7 +113,18 @@ def registrar_pago(
             observaciones=payload.observaciones,
             nombre_afiliado=payload.nombre_afiliado,
             detalle_id=payload.detalle_id,
+            fecha_efectiva=payload.fecha_efectiva,
+            idempotency_key=payload.idempotency_key,
+            distribucion=payload.distribucion,
+            comprobante_nombre=payload.comprobante_nombre,
+            comprobante_tipo=payload.comprobante_tipo,
+            comprobante_base64=payload.comprobante_base64,
         )
+    except AuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -128,6 +142,7 @@ def update_deudor_cliente(
     try:
         return update_deudor_cliente_service(
             db,
+            executor=current_user,
             rut=rut,
             empresa=payload.empresa,
             rut_nuevo=payload.rut,
@@ -137,6 +152,11 @@ def update_deudor_cliente(
             telefono_fijo=payload.telefono_fijo,
             telefono_movil=payload.telefono_movil,
         )
+    except AuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

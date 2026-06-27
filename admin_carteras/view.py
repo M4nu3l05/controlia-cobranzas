@@ -4,12 +4,17 @@ import os
 import sqlite3
 from datetime import datetime
 
-from PyQt6.QtCore import Qt, pyqtSignal
+import pandas as pd
+
+from PyQt6.QtCore import QDateTime, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QComboBox,
+    QDateTimeEdit,
     QFrame,
+    QFileDialog,
     QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLineEdit,
     QLabel,
@@ -18,6 +23,8 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QTextEdit,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -30,9 +37,14 @@ from auth.auth_service import (
     backend_clear_empresa_deudores,
     backend_delete_deudor_individual,
     backend_list_cartera_asignaciones,
+    backend_list_customer_change_audit,
+    backend_create_replacement,
+    backend_end_replacement,
+    backend_list_replacements,
     backend_save_cartera_asignaciones,
 )
 from core.paths import get_data_dir
+from core.excel_export import write_excel_report
 from deudores.database import EMPRESAS, limpiar_empresa, limpiar_todas, eliminar_deudor_individual
 from deudores.gestiones_db import limpiar_gestiones, limpiar_gestiones_por_ruts
 
@@ -86,6 +98,13 @@ class AdminCarterasWidget(QWidget):
 
         self._build_limpieza_ui()
         self._build_asignacion_ui()
+
+        self.card_reemplazos = self._build_card(
+            "Reemplazos temporales",
+            "Otorga acceso operativo por un periodo sin compartir credenciales.",
+        )
+        body.addWidget(self.card_reemplazos)
+        self._build_reemplazos_ui()
 
         self.card_log = self._build_card(
             "📋  Bitácora administrativa",
@@ -334,18 +353,179 @@ class AdminCarterasWidget(QWidget):
         self.btn_limpiar_todas = self._build_action_button("Limpiar todas las cargas", "#b91c1c")
         self.btn_limpiar_gestiones = self._build_action_button("Limpiar gestiones", "#7c3aed")
         self.btn_reiniciar = self._build_action_button("Reiniciar datos de prueba", "#ea580c")
+        self.btn_exportar_auditoria = self._build_action_button("Descargar auditoría de cambios", "#0369a1")
 
         self.btn_eliminar_deudor.clicked.connect(self._accion_eliminar_deudor_individual)
         self.btn_limpiar_empresa.clicked.connect(self._accion_limpiar_empresa)
         self.btn_limpiar_todas.clicked.connect(self._accion_limpiar_todas)
         self.btn_limpiar_gestiones.clicked.connect(self._accion_limpiar_gestiones)
         self.btn_reiniciar.clicked.connect(self._accion_reiniciar_datos_prueba)
+        self.btn_exportar_auditoria.clicked.connect(self._accion_exportar_auditoria)
 
         lay.addWidget(self.btn_eliminar_deudor)
         lay.addWidget(self.btn_limpiar_empresa)
         lay.addWidget(self.btn_limpiar_todas)
         lay.addWidget(self.btn_limpiar_gestiones)
         lay.addWidget(self.btn_reiniciar)
+        lay.addWidget(self.btn_exportar_auditoria)
+
+    def _accion_exportar_auditoria(self):
+        if not self._session or getattr(self._session, "auth_source", "") != "backend":
+            QMessageBox.warning(self, "Auditoría", "La auditoría central requiere conexión al backend de pruebas.")
+            return
+
+        empresa = self.cmb_empresa.currentText().strip() if hasattr(self, "cmb_empresa") else ""
+        rows, err = backend_list_customer_change_audit(self._session, empresa=empresa)
+        if err:
+            QMessageBox.warning(self, "Auditoría", err)
+            return
+        if not rows:
+            QMessageBox.information(self, "Auditoría", "No existen cambios registrados para exportar.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Guardar auditoría de cambios",
+            f"auditoria_cambios_{empresa or 'todas'}.xlsx",
+            "Excel (*.xlsx)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+
+        columns = {
+            "empresa": "Cartera",
+            "rut_original": "RUT",
+            "field_name": "Campo",
+            "old_value": "Valor anterior",
+            "new_value": "Valor nuevo",
+            "changed_by_username": "Modificado por",
+            "changed_at": "Fecha modificación",
+        }
+        df = pd.DataFrame(rows).rename(columns=columns)
+        visible = [name for name in columns.values() if name in df.columns]
+        write_excel_report(path, {"Auditoría": df[visible]})
+        QMessageBox.information(self, "Auditoría", f"Reporte guardado correctamente en:\n{path}")
+
+    def _build_reemplazos_ui(self):
+        lay = self.card_reemplazos.layout()
+        form = QGridLayout()
+
+        self.cmb_reemplazo_empresa = QComboBox()
+        self.cmb_reemplazo_empresa.addItems(EMPRESAS)
+        self.cmb_reemplazo_usuario = QComboBox()
+        self._replacement_users: list[dict] = []
+        for user in self._obtener_ejecutivos_activos():
+            self._replacement_users.append(user)
+            self.cmb_reemplazo_usuario.addItem(
+                f"{user.get('username', '')} ({user.get('email', '')})",
+                int(user.get("id", 0) or 0),
+            )
+
+        self.dt_reemplazo_inicio = QDateTimeEdit(QDateTime.currentDateTime())
+        self.dt_reemplazo_inicio.setCalendarPopup(True)
+        self.dt_reemplazo_inicio.setDisplayFormat("dd/MM/yyyy HH:mm")
+        self.dt_reemplazo_fin = QDateTimeEdit(QDateTime.currentDateTime().addDays(1))
+        self.dt_reemplazo_fin.setCalendarPopup(True)
+        self.dt_reemplazo_fin.setDisplayFormat("dd/MM/yyyy HH:mm")
+        self.txt_reemplazo_motivo = QLineEdit()
+        self.txt_reemplazo_motivo.setPlaceholderText("Vacaciones, licencia u otro motivo")
+
+        form.addWidget(QLabel("Cartera:"), 0, 0)
+        form.addWidget(self.cmb_reemplazo_empresa, 0, 1)
+        form.addWidget(QLabel("Reemplazante:"), 0, 2)
+        form.addWidget(self.cmb_reemplazo_usuario, 0, 3)
+        form.addWidget(QLabel("Inicio:"), 1, 0)
+        form.addWidget(self.dt_reemplazo_inicio, 1, 1)
+        form.addWidget(QLabel("Término:"), 1, 2)
+        form.addWidget(self.dt_reemplazo_fin, 1, 3)
+        form.addWidget(QLabel("Motivo:"), 2, 0)
+        form.addWidget(self.txt_reemplazo_motivo, 2, 1, 1, 3)
+        lay.addLayout(form)
+
+        self.btn_crear_reemplazo = self._build_action_button("Crear reemplazo temporal", "#0f766e")
+        self.btn_crear_reemplazo.clicked.connect(self._crear_reemplazo)
+        lay.addWidget(self.btn_crear_reemplazo)
+
+        self.tbl_reemplazos = QTableWidget(0, 6)
+        self.tbl_reemplazos.setHorizontalHeaderLabels(
+            ["Cartera", "Titular", "Reemplazante", "Inicio", "Término", "Estado"]
+        )
+        self.tbl_reemplazos.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.tbl_reemplazos.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_reemplazos.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.tbl_reemplazos.setMinimumHeight(180)
+        lay.addWidget(self.tbl_reemplazos)
+
+        self.btn_finalizar_reemplazo = self._build_action_button("Finalizar reemplazo seleccionado", "#b45309")
+        self.btn_finalizar_reemplazo.clicked.connect(self._finalizar_reemplazo)
+        lay.addWidget(self.btn_finalizar_reemplazo)
+
+    def _cargar_reemplazos(self):
+        if not hasattr(self, "tbl_reemplazos"):
+            return
+        if not self._session or getattr(self._session, "auth_source", "") != "backend":
+            self.tbl_reemplazos.setRowCount(0)
+            return
+        rows, err = backend_list_replacements(self._session)
+        if err:
+            self._append_log(f"No se pudieron cargar reemplazos: {err}")
+            return
+        self.tbl_reemplazos.setRowCount(len(rows))
+        for index, row in enumerate(rows):
+            values = [
+                row.get("empresa", ""),
+                row.get("titular_username", ""),
+                row.get("replacement_username", ""),
+                row.get("starts_at", ""),
+                row.get("ends_at", ""),
+                "Activo" if bool(row.get("is_active")) else "Finalizado",
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, int(row.get("id", 0) or 0))
+                    item.setData(Qt.ItemDataRole.UserRole + 1, bool(row.get("is_active")))
+                self.tbl_reemplazos.setItem(index, column, item)
+
+    def _crear_reemplazo(self):
+        user_id = int(self.cmb_reemplazo_usuario.currentData() or 0)
+        if not user_id:
+            QMessageBox.warning(self, "Reemplazos", "Selecciona una ejecutiva reemplazante.")
+            return
+        _, err = backend_create_replacement(
+            self._session,
+            empresa=self.cmb_reemplazo_empresa.currentText().strip(),
+            replacement_user_id=user_id,
+            starts_at=self.dt_reemplazo_inicio.dateTime().toString(Qt.DateFormat.ISODate),
+            ends_at=self.dt_reemplazo_fin.dateTime().toString(Qt.DateFormat.ISODate),
+            reason=self.txt_reemplazo_motivo.text().strip(),
+        )
+        if err:
+            QMessageBox.warning(self, "Reemplazos", err)
+            return
+        self.txt_reemplazo_motivo.clear()
+        self._cargar_reemplazos()
+        self._append_log("Reemplazo temporal creado correctamente.")
+
+    def _finalizar_reemplazo(self):
+        row = self.tbl_reemplazos.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Reemplazos", "Selecciona un reemplazo.")
+            return
+        item = self.tbl_reemplazos.item(row, 0)
+        replacement_id = int(item.data(Qt.ItemDataRole.UserRole) or 0) if item else 0
+        is_active = bool(item.data(Qt.ItemDataRole.UserRole + 1)) if item else False
+        if not replacement_id or not is_active:
+            QMessageBox.information(self, "Reemplazos", "El reemplazo ya está finalizado.")
+            return
+        err = backend_end_replacement(self._session, replacement_id=replacement_id)
+        if err:
+            QMessageBox.warning(self, "Reemplazos", err)
+            return
+        self._cargar_reemplazos()
+        self._append_log("Reemplazo temporal finalizado.")
 
     def _build_asignacion_ui(self):
         lay = self.card_asignacion.layout()
@@ -663,6 +843,7 @@ class AdminCarterasWidget(QWidget):
             ok_gest = self._limpiar_gestiones_locales()
             self._limpiar_asignaciones()
         self._cargar_asignaciones()
+        self._cargar_reemplazos()
 
         self._append_log(
             "Reinicio de datos de prueba ejecutado. "

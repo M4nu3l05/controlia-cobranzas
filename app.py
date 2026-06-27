@@ -32,6 +32,8 @@ from admin_carteras import AdminCarterasWidget
 
 from auth.auth_service import (
     backend_close_session,
+    backend_list_notifications,
+    backend_mark_notification_read,
     backend_list_pending_recovery_requests,
     backend_reset_pending_recovery_request,
 )
@@ -156,7 +158,7 @@ class TemporaryPasswordDialog(QDialog):
     def __init__(self, *, username: str, temp_password: str, parent=None):
         super().__init__(parent)
         self._temp_password = str(temp_password or "")
-        self.setWindowTitle("Contrasena temporal generada")
+        self.setWindowTitle("Contraseña temporal generada")
         self.setMinimumWidth(520)
 
         layout = QVBoxLayout(self)
@@ -164,8 +166,8 @@ class TemporaryPasswordDialog(QDialog):
         layout.setSpacing(10)
 
         msg = QLabel(
-            "Comparte esta contrasena por canal seguro. "
-            "El usuario debera cambiarla al iniciar sesion."
+            "Comparte esta contraseña por canal seguro. "
+            "El usuario deberá cambiarla al iniciar sesión."
         )
         msg.setWordWrap(True)
         msg.setStyleSheet("color:#334155; font-size:9pt;")
@@ -194,7 +196,7 @@ class TemporaryPasswordDialog(QDialog):
         )
         row.addWidget(self.password_edit, 1)
 
-        self.btn_copy = QPushButton("Copiar contrasena")
+        self.btn_copy = QPushButton("Copiar contraseña")
         self.btn_copy.setMinimumHeight(38)
         self.btn_copy.setStyleSheet(
             """
@@ -230,14 +232,14 @@ class TemporaryPasswordDialog(QDialog):
 
     def _copy_password(self):
         QApplication.clipboard().setText(self._temp_password)
-        self.lbl_status.setText("Contrasena copiada al portapapeles.")
+        self.lbl_status.setText("Contraseña copiada al portapapeles.")
 
 
 class RecoveryNotificationsDialog(QDialog):
     def __init__(self, session, parent=None):
         super().__init__(parent)
         self._session = session
-        self.setWindowTitle("Solicitudes de recuperacion")
+        self.setWindowTitle("Solicitudes de recuperación")
         self.setMinimumSize(760, 420)
 
         layout = QVBoxLayout(self)
@@ -249,8 +251,8 @@ class RecoveryNotificationsDialog(QDialog):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Aqui veras solicitudes de recuperacion segun tu rol. "
-            "Usa el boton \"Reestablecer\" para generar contrasena temporal."
+            "Aquí verás solicitudes de recuperación según tu rol. "
+            "Usa el botón \"Restablecer\" para generar una contraseña temporal."
         )
         subtitle.setWordWrap(True)
         subtitle.setStyleSheet("color:#64748b; font-size:9pt;")
@@ -339,7 +341,7 @@ class RecoveryNotificationsDialog(QDialog):
             self.table.setItem(r, 2, QTableWidgetItem(target_role_label))
             self.table.setItem(r, 3, QTableWidgetItem(requested_at))
 
-            btn_reset = QPushButton("Reestablecer")
+            btn_reset = QPushButton("Restablecer")
             btn_reset.setMinimumHeight(30)
             btn_reset.setStyleSheet(
                 """
@@ -360,8 +362,8 @@ class RecoveryNotificationsDialog(QDialog):
     def _do_reset(self, request_id: int):
         resp = QMessageBox.question(
             self,
-            "Reestablecer contrasena",
-            "Deseas generar una contrasena temporal para esta solicitud?",
+            "Restablecer contraseña",
+            "¿Deseas generar una contraseña temporal para esta solicitud?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if resp != QMessageBox.StandardButton.Yes:
@@ -378,7 +380,7 @@ class RecoveryNotificationsDialog(QDialog):
         username = str(user.get("username", "") or "")
         temp_password = str(payload.get("temporary_password", "") or "")
         if not temp_password:
-            QMessageBox.warning(self, "Sin contrasena temporal", "El backend no devolvio una contrasena temporal.")
+            QMessageBox.warning(self, "Sin contraseña temporal", "El backend no devolvió una contraseña temporal.")
             self.reload()
             return
 
@@ -387,12 +389,99 @@ class RecoveryNotificationsDialog(QDialog):
         self.reload()
 
 
+class OperationalNotificationsDialog(QDialog):
+    def __init__(self, session, parent=None):
+        super().__init__(parent)
+        self._session = session
+        self.setWindowTitle("Notificaciones operativas")
+        self.resize(820, 420)
+
+        layout = QVBoxLayout(self)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Estado", "Fecha", "Tipo", "Cartera", "Detalle"])
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.table, 1)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        btn_read = QPushButton("Marcar seleccionada como leída")
+        btn_read.clicked.connect(self._mark_selected_read)
+        actions.addWidget(btn_read)
+        btn_close = QPushButton("Cerrar")
+        btn_close.clicked.connect(self.accept)
+        actions.addWidget(btn_close)
+        layout.addLayout(actions)
+        self._load()
+
+    def _load(self):
+        rows, err = backend_list_notifications(self._session, unread_only=False)
+        if err:
+            QMessageBox.warning(self, "Notificaciones", err)
+            return
+        self.table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            status_item = QTableWidgetItem("Leída" if bool(row.get("is_read")) else "Pendiente")
+            status_item.setData(Qt.ItemDataRole.UserRole, int(row.get("id", 0) or 0))
+            self.table.setItem(row_index, 0, status_item)
+            self.table.setItem(row_index, 1, QTableWidgetItem(str(row.get("created_at", ""))))
+            self.table.setItem(row_index, 2, QTableWidgetItem(str(row.get("title", row.get("notification_type", "")))))
+            self.table.setItem(row_index, 3, QTableWidgetItem(str(row.get("empresa", ""))))
+            self.table.setItem(row_index, 4, QTableWidgetItem(str(row.get("message", ""))))
+
+    def _mark_selected_read(self):
+        row_index = self.table.currentRow()
+        if row_index < 0:
+            return
+        item = self.table.item(row_index, 0)
+        notification_id = int(item.data(Qt.ItemDataRole.UserRole) or 0) if item else 0
+        if not notification_id:
+            return
+        err = backend_mark_notification_read(self._session, notification_id=notification_id)
+        if err:
+            QMessageBox.warning(self, "Notificaciones", err)
+            return
+        self._load()
+
+
+_TOP_BADGE_STYLE = """
+QLabel {
+    background: %s;
+    color: %s;
+    border: 1px solid %s;
+    border-radius: 6px;
+    padding: 0 12px;
+    font-size: 8pt;
+    font-weight: 700;
+}
+"""
+
+_TOP_BUTTON_STYLE = """
+QPushButton {
+    background: %s;
+    color: %s;
+    border: 1px solid %s;
+    border-radius: 6px;
+    padding: 0 12px;
+    font-size: 8pt;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: %s;
+    color: #ffffff;
+}
+"""
+
+
 class MainWindow(QMainWindow):
     def __init__(self, session=None):
         super().__init__()
         self._session = session
         self._session_closed = False
         self._last_pending_recovery_ids: set[int] = set()
+        self._notification_count = 0
+        self._recovery_count = 0
         icon_path = _app_icon_path()
         if icon_path:
             self.setWindowIcon(QIcon(icon_path))
@@ -442,39 +531,33 @@ class MainWindow(QMainWindow):
             strip_row.addWidget(lbl_user)
 
             lbl_role = QLabel(role_label)
-            lbl_role.setMinimumHeight(22)
-            lbl_role.setStyleSheet(
-                f"background:{rb}; color:{rf}; border-radius:4px;"
-                f" padding:0 8px; font-size:7.5pt; font-weight:700;"
-            )
+            lbl_role.setMinimumHeight(30)
+            lbl_role.setStyleSheet(_TOP_BADGE_STYLE % (rb, rf, "#3b82f6"))
             strip_row.addWidget(lbl_role)
+
+            self._btn_notifications = QPushButton("🔔 Notificaciones")
+            self._btn_notifications.setMinimumHeight(30)
+            self._btn_notifications.setStyleSheet(self._top_button_style(active=False))
+            self._btn_notifications.clicked.connect(self._open_operational_notifications)
+            strip_row.addWidget(self._btn_notifications)
 
             self._btn_recovery = None
             self._recovery_poll_timer = None
             if session.role in {"admin", "supervisor"}:
                 self._btn_recovery = QPushButton("🔔 Recuperaciones")
-                self._btn_recovery.setMinimumHeight(26)
-                self._btn_recovery.setStyleSheet(
-                    """
-                    QPushButton {
-                        background: #1d4ed8; color: #e0ecff;
-                        border: 1px solid #3b82f6; border-radius: 4px;
-                        padding: 0 8px; font-size: 8pt; font-weight:600;
-                    }
-                    QPushButton:hover { background: #2563eb; color: white; }
-                    """
-                )
+                self._btn_recovery.setMinimumHeight(30)
+                self._btn_recovery.setStyleSheet(self._top_button_style(active=False))
                 self._btn_recovery.clicked.connect(self._open_recovery_dialog)
                 strip_row.addWidget(self._btn_recovery)
 
             btn_logout = QPushButton("Cerrar sesión")
-            btn_logout.setMinimumHeight(26)
+            btn_logout.setMinimumHeight(30)
             btn_logout.setStyleSheet(
                 """
                 QPushButton {
                     background: transparent; color: #93c5fd;
-                    border: 1px solid #3b82f6; border-radius: 4px;
-                    padding: 0 8px; font-size: 8pt;
+                    border: 1px solid #3b82f6; border-radius: 6px;
+                    padding: 0 12px; font-size: 8pt;
                 }
                 QPushButton:hover { background: #1d4ed8; color: white; }
                 """
@@ -537,6 +620,19 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.tabs)
         self._init_legal_menu()
         self._init_recovery_notifications()
+        self._init_operational_notifications()
+
+    def _top_button_style(self, *, active: bool) -> str:
+        if active:
+            return _TOP_BUTTON_STYLE % ("#f59e0b", "#111827", "#fbbf24", "#d97706")
+        return _TOP_BUTTON_STYLE % ("#1d4ed8", "#e0ecff", "#3b82f6", "#2563eb")
+
+    def _set_top_button_state(self, button: QPushButton | None, *, text: str, count: int) -> None:
+        if button is None:
+            return
+        count = max(0, int(count or 0))
+        button.setText(f"{text} ({count})" if count else text)
+        button.setStyleSheet(self._top_button_style(active=count > 0))
 
     def _init_legal_menu(self):
         menu_ayuda = self.menuBar().addMenu("Ayuda")
@@ -606,24 +702,26 @@ class MainWindow(QMainWindow):
         self._last_pending_recovery_ids = pending_ids
 
         if getattr(self, "_btn_recovery", None) is not None:
-            if pending_ids:
-                self._btn_recovery.setText(f"🔔 Recuperaciones ({len(pending_ids)})")
-            else:
-                self._btn_recovery.setText("🔔 Recuperaciones")
+            self._recovery_count = len(pending_ids)
+            self._set_top_button_state(
+                self._btn_recovery,
+                text="🔔 Recuperaciones",
+                count=self._recovery_count,
+            )
 
         if show_popup and pending_ids:
             QMessageBox.information(
                 self,
-                "Notificacion de recuperacion",
+                "Notificación de recuperación",
                 f"Tienes {len(pending_ids)} solicitud(es) pendientes.\n"
-                "Presiona \"Reestablecer\" para generar la contrasena temporal.",
+                "Presiona \"Restablecer\" para generar la contraseña temporal.",
             )
             self._open_recovery_dialog()
         elif (not show_popup) and new_ids:
             QMessageBox.information(
                 self,
                 "Nueva solicitud",
-                "Recibiste una nueva solicitud de recuperacion de contrasena.",
+                "Recibiste una nueva solicitud de recuperación de contraseña.",
             )
 
     def _open_recovery_dialog(self):
@@ -632,6 +730,33 @@ class MainWindow(QMainWindow):
         dlg = RecoveryNotificationsDialog(self._session, self)
         dlg.exec()
         self._check_recovery_notifications(show_popup=False)
+
+    def _init_operational_notifications(self):
+        if not self._session or getattr(self._session, "auth_source", "") != "backend":
+            return
+        QTimer.singleShot(1600, self._check_operational_notifications)
+        self._operational_notification_timer = QTimer(self)
+        self._operational_notification_timer.setInterval(60000)
+        self._operational_notification_timer.timeout.connect(self._check_operational_notifications)
+        self._operational_notification_timer.start()
+
+    def _check_operational_notifications(self):
+        rows, err = backend_list_notifications(self._session, unread_only=True)
+        if err:
+            return
+        if getattr(self, "_btn_notifications", None) is not None:
+            self._notification_count = len(rows)
+            self._set_top_button_state(
+                self._btn_notifications,
+                text="🔔 Notificaciones",
+                count=self._notification_count,
+            )
+
+    def _open_operational_notifications(self):
+        if not self._session:
+            return
+        OperationalNotificationsDialog(self._session, self).exec()
+        self._check_operational_notifications()
 
     def _logout(self):
         resp = QMessageBox.question(

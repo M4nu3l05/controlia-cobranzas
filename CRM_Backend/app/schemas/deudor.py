@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 from pydantic import BaseModel, Field
 
 
@@ -86,6 +88,35 @@ class ImportDeudoresResponse(BaseModel):
     detalle_omitidos: int = 0
     source_file: str
     periodo_carga: str = ""
+    detalle_birlados: int = 0
+    import_batch_id: int | None = None
+
+
+class BirladoPreviewItem(BaseModel):
+    detalle_id: int
+    rut_afiliado: str
+    rut_completo: str = ""
+    nombre_afiliado: str = ""
+    nro_expediente: str = ""
+    fecha_emision: str = ""
+    saldo_actual: float = 0
+    estado_actual: str = ""
+
+
+class ImportDeudoresPreviewResponse(BaseModel):
+    empresa: str
+    source_file: str
+    file_sha256: str
+    periodo_carga: str = ""
+    registros_archivo: int
+    nuevos_estimados: int
+    existentes_estimados: int
+    birlados: list[BirladoPreviewItem] = Field(default_factory=list)
+
+
+class PaymentAllocationRequest(BaseModel):
+    detalle_id: int
+    monto: int = Field(gt=0)
 
 
 class RegistrarPagoRequest(BaseModel):
@@ -96,6 +127,12 @@ class RegistrarPagoRequest(BaseModel):
     observaciones: str = ""
     nombre_afiliado: str = ""
     detalle_id: int | None = None
+    fecha_efectiva: date = Field(default_factory=date.today)
+    idempotency_key: str = Field(min_length=8, max_length=64)
+    distribucion: list[PaymentAllocationRequest] = Field(default_factory=list)
+    comprobante_nombre: str = ""
+    comprobante_tipo: str = ""
+    comprobante_base64: str = ""
 
 
 class RegistrarPagoResponse(BaseModel):
@@ -109,6 +146,8 @@ class RegistrarPagoResponse(BaseModel):
     saldo_resumen: float
     total_pagos_resumen: float
     estado_deudor: str
+    transaction_id: str = ""
+    idempotent_replay: bool = False
 
 
 class ActualizarClienteRequest(BaseModel):

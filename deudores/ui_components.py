@@ -5,6 +5,7 @@ from PyQt6.QtCore import Qt, QSortFilterProxyModel
 from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout
 
+from core.text_utils import fix_mojibake_text
 from .schema import COLUMNA_EMPRESA
 
 EMPRESA_COLORES = {
@@ -56,7 +57,7 @@ class DeudoresTableModel(QStandardItemModel):
             self._emp_idx = -1
 
         for row_data in df[self._cols_vis].itertuples(index=False):
-            items = [QStandardItem(str(v)) for v in row_data]
+            items = [QStandardItem(fix_mojibake_text(v)) for v in row_data]
             empresa_val = str(row_data[self._emp_idx]) if self._emp_idx >= 0 else ""
             color = EMPRESA_COLORES.get(empresa_val)
             for item in items:

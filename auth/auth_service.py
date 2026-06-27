@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import os
+import base64
+import mimetypes
 import re
 import sys
 import time
@@ -46,6 +48,9 @@ __all__ = [
     "backend_list_pending_recovery_requests", "backend_reset_pending_recovery_request",
     "backend_list_email_templates", "backend_create_email_template",
     "backend_update_email_template", "backend_delete_email_template",
+    "backend_list_notifications", "backend_mark_notification_read",
+    "backend_list_customer_change_audit", "backend_list_replacements",
+    "backend_create_replacement", "backend_end_replacement",
     "backend_close_session",
 ]
 
@@ -608,6 +613,8 @@ def backend_import_deudores(
     *,
     empresa: str,
     excel_path: str,
+    expected_file_sha256: str,
+    confirm_birlados: bool = False,
 ) -> Tuple[dict | None, str]:
     try:
         token = _require_backend_token(session)
@@ -616,7 +623,11 @@ def backend_import_deudores(
             data = _http_multipart_auth(
                 "/deudores/import",
                 token=token,
-                data={"empresa": empresa},
+                data={
+                    "empresa": empresa,
+                    "expected_file_sha256": expected_file_sha256,
+                    "confirm_birlados": "true" if confirm_birlados else "false",
+                },
                 files={
                     "file": (
                         filename,
@@ -624,6 +635,31 @@ def backend_import_deudores(
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     )
                 },
+            )
+        return data if isinstance(data, dict) else None, ""
+    except ValueError as exc:
+        return None, str(exc)
+    except requests.RequestException as exc:
+        return None, _friendly_backend_error(exc)
+    except OSError as exc:
+        return None, f"No se pudo abrir el archivo Excel: {exc}"
+
+
+def backend_preview_import_deudores(
+    session: UserSession,
+    *,
+    empresa: str,
+    excel_path: str,
+) -> Tuple[dict | None, str]:
+    try:
+        token = _require_backend_token(session)
+        filename = os.path.basename(excel_path)
+        with open(excel_path, "rb") as fh:
+            data = _http_multipart_auth(
+                "/deudores/import/preview",
+                token=token,
+                data={"empresa": empresa},
+                files={"file": (filename, fh, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
             )
         return data if isinstance(data, dict) else None, ""
     except ValueError as exc:
@@ -825,6 +861,10 @@ def backend_register_pago(
     monto: float,
     observaciones: str = "",
     detalle_id: int | str | None = None,
+    fecha_efectiva: str = "",
+    idempotency_key: str = "",
+    distribucion: list[dict] | None = None,
+    comprobante_path: str = "",
 ) -> Tuple[dict | None, str]:
     try:
         payload = {
@@ -833,9 +873,20 @@ def backend_register_pago(
             "tipo_pago": tipo_pago,
             "monto": float(monto),
             "observaciones": observaciones,
+            "fecha_efectiva": fecha_efectiva,
+            "idempotency_key": idempotency_key,
+            "distribucion": list(distribucion or []),
         }
         if detalle_id not in (None, ""):
             payload["detalle_id"] = int(detalle_id)
+        if comprobante_path:
+            receipt_path = Path(comprobante_path)
+            content = receipt_path.read_bytes()
+            if len(content) > 5 * 1024 * 1024:
+                raise ValueError("El comprobante no puede superar 5 MB.")
+            payload["comprobante_nombre"] = receipt_path.name
+            payload["comprobante_tipo"] = mimetypes.guess_type(receipt_path.name)[0] or "application/octet-stream"
+            payload["comprobante_base64"] = base64.b64encode(content).decode("ascii")
 
         data = _http_request_auth(
             "POST",
@@ -1240,6 +1291,115 @@ def backend_close_session(session: UserSession) -> str:
             "/auth/logout",
             token=_require_backend_token(session),
             payload={"session_history_id": getattr(session, "session_history_id", None)},
+        )
+        return ""
+    except ValueError as exc:
+        return str(exc)
+    except requests.RequestException as exc:
+        return _friendly_backend_error(exc)
+
+
+def backend_list_notifications(
+    session: UserSession,
+    *,
+    unread_only: bool = False,
+) -> Tuple[list[dict], str]:
+    try:
+        data = _http_request_auth(
+            "GET",
+            "/operations/notifications/me",
+            token=_require_backend_token(session),
+            params={"unread_only": bool(unread_only)},
+        )
+        return data if isinstance(data, list) else [], ""
+    except ValueError as exc:
+        return [], str(exc)
+    except requests.RequestException as exc:
+        return [], _friendly_backend_error(exc)
+
+
+def backend_mark_notification_read(session: UserSession, *, notification_id: int) -> str:
+    try:
+        _http_request_auth(
+            "POST",
+            f"/operations/notifications/{int(notification_id)}/read",
+            token=_require_backend_token(session),
+        )
+        return ""
+    except ValueError as exc:
+        return str(exc)
+    except requests.RequestException as exc:
+        return _friendly_backend_error(exc)
+
+
+def backend_list_customer_change_audit(
+    session: UserSession,
+    *,
+    empresa: str = "",
+) -> Tuple[list[dict], str]:
+    try:
+        data = _http_request_auth(
+            "GET",
+            "/operations/customer-changes",
+            token=_require_backend_token(session),
+            params={"empresa": empresa},
+        )
+        return data if isinstance(data, list) else [], ""
+    except ValueError as exc:
+        return [], str(exc)
+    except requests.RequestException as exc:
+        return [], _friendly_backend_error(exc)
+
+
+def backend_list_replacements(session: UserSession) -> Tuple[list[dict], str]:
+    try:
+        data = _http_request_auth(
+            "GET",
+            "/operations/replacements",
+            token=_require_backend_token(session),
+        )
+        return data if isinstance(data, list) else [], ""
+    except ValueError as exc:
+        return [], str(exc)
+    except requests.RequestException as exc:
+        return [], _friendly_backend_error(exc)
+
+
+def backend_create_replacement(
+    session: UserSession,
+    *,
+    empresa: str,
+    replacement_user_id: int,
+    starts_at: str,
+    ends_at: str,
+    reason: str = "",
+) -> Tuple[dict | None, str]:
+    try:
+        data = _http_request_auth(
+            "POST",
+            "/operations/replacements",
+            token=_require_backend_token(session),
+            payload={
+                "empresa": empresa,
+                "replacement_user_id": int(replacement_user_id),
+                "starts_at": starts_at,
+                "ends_at": ends_at,
+                "reason": reason,
+            },
+        )
+        return data if isinstance(data, dict) else None, ""
+    except ValueError as exc:
+        return None, str(exc)
+    except requests.RequestException as exc:
+        return None, _friendly_backend_error(exc)
+
+
+def backend_end_replacement(session: UserSession, *, replacement_id: int) -> str:
+    try:
+        _http_request_auth(
+            "POST",
+            f"/operations/replacements/{int(replacement_id)}/end",
+            token=_require_backend_token(session),
         )
         return ""
     except ValueError as exc:

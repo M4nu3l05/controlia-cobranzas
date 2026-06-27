@@ -67,14 +67,16 @@ class EnviosWidget(QWidget):
 
         self.tab_config = TabConfig()
         self.tab_plantillas = TabPlantillas(session=session)
-        self.tab_envio = TabEnvio(
-            get_config_fn=self.tab_config.get_config,
-            get_plantilla_fn=self.tab_plantillas.get_plantilla_actual,
-            session=session,
-        )
+        self.tab_envio = None
 
         self.tabs.addTab(self.tab_config, "⚙️ Configuración SMTP")
         self.tabs.addTab(self.tab_plantillas, "📝 Plantillas")
-        self.tabs.addTab(self.tab_envio, "📤 Envío")
+        if session is not None and str(getattr(session, "role", "")).strip().lower() == "supervisor":
+            self.tab_envio = TabEnvio(
+                get_config_fn=self.tab_config.get_config,
+                get_plantilla_fn=self.tab_plantillas.get_plantilla_actual,
+                session=session,
+            )
+            self.tabs.addTab(self.tab_envio, "📤 Envío masivo")
 
         layout.addWidget(self.tabs)

@@ -54,6 +54,8 @@ Al ejecutar, la app crea estas carpetas:
 
 Cada base SQLite ahora tiene una tabla `schema_migrations`. Cuando la app abre una conexión, revisa la versión aplicada y ejecuta las migraciones pendientes en orden.
 
+El backend PostgreSQL utiliza además `backend_schema_migrations`. El procedimiento de pruebas, respaldo y restauración previo a producción está en [ETAPA_5_VALIDACION_LOCAL.md](ETAPA_5_VALIDACION_LOCAL.md).
+
 Para agregar una nueva migración:
 
 1. Crea una función que reciba `sqlite3.Connection`.

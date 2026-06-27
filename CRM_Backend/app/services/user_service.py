@@ -228,6 +228,13 @@ def get_user_carteras_service(
             SELECT empresa
             FROM cartera_asignaciones
             WHERE user_id = :user_id
+            UNION
+            SELECT empresa
+            FROM cartera_temporary_replacements
+            WHERE replacement_user_id = :user_id
+              AND is_active = TRUE
+              AND starts_at <= CURRENT_TIMESTAMP
+              AND ends_at >= CURRENT_TIMESTAMP
             ORDER BY empresa
         """),
         {"user_id": int(target_user_id)},

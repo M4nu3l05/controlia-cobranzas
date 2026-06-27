@@ -33,5 +33,5 @@ if errorlevel 1 (
 
 echo.
 echo Build completado.
-echo Ejecutable: dist\Controlia Cobranzas\Controlia Cobranzas.exe
+echo Ejecutable: dist\ControliaCobranzas\ControliaCobranzas.exe
 endlocal

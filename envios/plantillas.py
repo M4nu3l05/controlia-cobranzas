@@ -13,6 +13,7 @@ import re
 
 from auth.auth_service import backend_list_email_templates
 from core.paths import get_data_dir
+from core.text_utils import fix_mojibake_text
 
 # ────────────────────────────────────────────────────────────────
 #  Variables disponibles (se muestran como ayuda en el editor)
@@ -183,7 +184,7 @@ def variables_desde_fila(fila: dict) -> dict:
     Las claves del dict deben coincidir con las variables sin llaves.
     """
     def _limpio(val):
-        v = str(val).strip()
+        v = fix_mojibake_text(val).strip()
         return v if v not in ("", "nan", "None", "—") else "—"
 
     no_licencia = _limpio(

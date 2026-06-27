@@ -217,8 +217,8 @@ class DeudoresSidebar(QWidget):
             "Gestiones asignadas",
             "Solo para ejecutivos. Marca como realizada cuando finalices la gestión.",
         )
-        self.tbl_tareas = QTableWidget(0, 3)
-        self.tbl_tareas.setHorizontalHeaderLabels(["Realizada", "RUT", "Nombre"])
+        self.tbl_tareas = QTableWidget(0, 4)
+        self.tbl_tareas.setHorizontalHeaderLabels(["Realizada", "RUT", "Nombre", "Plazo"])
         self.tbl_tareas.verticalHeader().setVisible(False)
         self.tbl_tareas.setAlternatingRowColors(True)
         self.tbl_tareas.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -226,6 +226,7 @@ class DeudoresSidebar(QWidget):
         self.tbl_tareas.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.tbl_tareas.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.tbl_tareas.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.tbl_tareas.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.tbl_tareas.setMinimumHeight(220)
         self.card_tareas.body.addWidget(self.tbl_tareas)
 

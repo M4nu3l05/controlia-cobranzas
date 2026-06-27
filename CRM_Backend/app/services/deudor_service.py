@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import uuid
+from datetime import date
+
 from sqlalchemy import or_, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.deudor import DeudorDetalle, DeudorResumen
+from app.models.operations import CustomerChangeAudit
+from app.models.payment import PaymentAllocation, PaymentReceipt, PaymentReversal, PaymentTransaction
+from app.models.user import User
+from app.core.authorization import assigned_user_id_for_company, require_supervisor
+from app.core.text_utils import fix_mojibake_text
+from app.services.operations_service import create_notification
 try:
     from app.models.gestion import DeudorGestion
 except Exception:  # pragma: no cover
@@ -23,7 +35,7 @@ from app.schemas.deudor import (
 
 
 def _norm_text(value: str) -> str:
-    return str(value or "").strip()
+    return fix_mojibake_text(value).strip()
 
 
 def _norm_rut(value: str) -> str:
@@ -448,6 +460,7 @@ def _recalcular_resumen_desde_detalle(
 def registrar_pago_service(
     db: Session,
     *,
+    executor: User,
     rut: str,
     empresa: str,
     expediente: str,
@@ -456,6 +469,12 @@ def registrar_pago_service(
     observaciones: str = "",
     nombre_afiliado: str = "",
     detalle_id: int | None = None,
+    fecha_efectiva: date | None = None,
+    idempotency_key: str = "",
+    distribucion: list | None = None,
+    comprobante_nombre: str = "",
+    comprobante_tipo: str = "",
+    comprobante_base64: str = "",
 ) -> RegistrarPagoResponse:
     empresa_txt = _norm_text(empresa)
     expediente_txt = _norm_text(expediente)
@@ -463,6 +482,9 @@ def registrar_pago_service(
     observaciones_txt = _norm_text(observaciones)
     nombre_txt = _norm_text(nombre_afiliado)
     rut_norm = _norm_rut(rut)
+    idempotency_txt = _norm_text(idempotency_key)
+    amount_clp = int(round(float(monto or 0)))
+    effective_date = fecha_efectiva or date.today()
 
     if not empresa_txt:
         raise ValueError("Debes indicar la empresa.")
@@ -470,8 +492,61 @@ def registrar_pago_service(
         raise ValueError("Debes indicar un RUT válido.")
     if not expediente_txt:
         raise ValueError("Debes indicar el expediente.")
-    if monto <= 0:
+    if amount_clp <= 0:
         raise ValueError("El monto debe ser mayor a 0.")
+    if len(idempotency_txt) < 8:
+        raise ValueError("La operacion de pago no tiene un identificador idempotente valido.")
+
+    existing_transaction = db.query(PaymentTransaction).filter(
+        PaymentTransaction.idempotency_key == idempotency_txt
+    ).first()
+    if existing_transaction is not None:
+        if (
+            existing_transaction.empresa != empresa_txt
+            or existing_transaction.rut_afiliado != rut_norm
+            or int(existing_transaction.amount_clp) != amount_clp
+            or existing_transaction.payment_type != tipo_pago_txt
+            or existing_transaction.effective_date != effective_date
+            or int(existing_transaction.registered_by_user_id) != int(executor.id)
+        ):
+            raise ValueError("El identificador del pago ya fue utilizado con datos diferentes.")
+        resumen = db.query(DeudorResumen).filter(
+            func.trim(DeudorResumen.empresa) == empresa_txt,
+            _rut_db_expr(DeudorResumen.rut_afiliado) == rut_norm,
+        ).first()
+        expediente_rows = db.query(DeudorDetalle).filter(
+            func.trim(DeudorDetalle.empresa) == empresa_txt,
+            _rut_db_expr(DeudorDetalle.rut_afiliado) == rut_norm,
+            func.trim(DeudorDetalle.nro_expediente) == expediente_txt,
+        ).all()
+        return RegistrarPagoResponse(
+            ok=True,
+            empresa=empresa_txt,
+            rut=rut_norm,
+            expediente=expediente_txt,
+            tipo_pago=existing_transaction.payment_type,
+            monto=float(existing_transaction.amount_clp),
+            saldo_expediente=float(sum(_saldo_pendiente_detalle(row) for row in expediente_rows)),
+            saldo_resumen=float(getattr(resumen, "saldo_actual", 0) or 0),
+            total_pagos_resumen=float(getattr(resumen, "total_pagos", 0) or 0),
+            estado_deudor=_norm_text(getattr(resumen, "estado_deudor", "")),
+            transaction_id=existing_transaction.public_id,
+            idempotent_replay=True,
+        )
+
+    receipt_content = b""
+    receipt_name = _norm_text(comprobante_nombre)
+    if comprobante_base64:
+        try:
+            receipt_content = base64.b64decode(comprobante_base64, validate=True)
+        except Exception as exc:
+            raise ValueError("El comprobante adjunto no tiene un formato valido.") from exc
+        if len(receipt_content) > 5 * 1024 * 1024:
+            raise ValueError("El comprobante no puede superar 5 MB.")
+        if not receipt_name:
+            raise ValueError("Debes indicar el nombre del comprobante adjunto.")
+        if not receipt_name.lower().endswith((".pdf", ".jpg", ".jpeg", ".png")):
+            raise ValueError("El comprobante debe ser PDF, JPG o PNG.")
 
     detalle_rows_rut = (
         db.query(DeudorDetalle)
@@ -491,37 +566,66 @@ def registrar_pago_service(
         raise ValueError("No se encontró el expediente indicado para ese deudor.")
 
     tipo_pago_norm = tipo_pago_txt.lower()
-    if "pago total" in tipo_pago_norm:
-        saldos_por_fila = {int(row.id): _saldo_pendiente_detalle(row) for row in detalle_rows}
-        saldo_expediente = float(sum(saldos_por_fila.values()))
-        if abs(monto - saldo_expediente) > 1:
-            raise ValueError("Monto no corresponde al Saldo Actual, verificar monto de pago")
+    detail_by_id = {int(row.id): row for row in detalle_rows_rut}
+    allocation_plan: list[tuple[DeudorDetalle, int]] = []
 
-        detalle_row = detalle_rows[0]
-        for row in detalle_rows:
-            saldo_fila = saldos_por_fila.get(int(row.id), 0.0)
-            if saldo_fila <= 0:
-                continue
-            row.total_pagos = float(row.total_pagos or 0) + saldo_fila
-            row.saldo_actual = 0.0
+    if distribucion:
+        seen_ids: set[int] = set()
+        for allocation in distribucion:
+            allocation_detail_id = int(
+                getattr(allocation, "detalle_id", None)
+                if not isinstance(allocation, dict)
+                else allocation.get("detalle_id")
+            )
+            allocation_amount = int(
+                getattr(allocation, "monto", 0)
+                if not isinstance(allocation, dict)
+                else allocation.get("monto", 0)
+            )
+            if allocation_detail_id in seen_ids:
+                raise ValueError("Un concepto no puede repetirse en la distribucion del pago.")
+            row = detail_by_id.get(allocation_detail_id)
+            if row is None:
+                raise ValueError("La distribucion contiene un concepto que no pertenece al deudor.")
+            seen_ids.add(allocation_detail_id)
+            allocation_plan.append((row, allocation_amount))
+        if sum(value for _, value in allocation_plan) != amount_clp:
+            raise ValueError("La suma de la distribucion debe coincidir con el monto del pago.")
+    elif "pago total" in tipo_pago_norm:
+        saldos_por_fila = {int(row.id): int(round(_saldo_pendiente_detalle(row))) for row in detalle_rows}
+        saldo_expediente = sum(saldos_por_fila.values())
+        if amount_clp != saldo_expediente:
+            raise ValueError("Monto no corresponde al Saldo Actual, verificar monto de pago")
+        allocation_plan = [
+            (row, saldos_por_fila[int(row.id)])
+            for row in detalle_rows
+            if saldos_por_fila[int(row.id)] > 0
+        ]
     else:
         if detalle_id is not None:
-            detalle_row = next((row for row in detalle_rows if int(row.id) == int(detalle_id)), None)
-            if detalle_row is None:
+            detalle_row = detail_by_id.get(int(detalle_id))
+            if detalle_row is None or detalle_row not in detalle_rows:
                 raise ValueError("No se encontro el monto seleccionado para registrar el abono.")
         else:
             if len(detalle_rows) > 1:
                 raise ValueError("Debes seleccionar a que monto de la licencia se registrara el abono.")
             detalle_row = detalle_rows[0]
+        allocation_plan = [(detalle_row, amount_clp)]
 
-        saldo_actual_detalle = _saldo_pendiente_detalle(detalle_row)
-        total_pagos_detalle = float(detalle_row.total_pagos or 0)
+    if not allocation_plan:
+        raise ValueError("El pago no tiene conceptos pendientes para distribuir.")
 
-        if monto - saldo_actual_detalle > 1:
-            raise ValueError("El abono no puede superar el saldo del monto seleccionado.")
+    allocation_snapshots: list[tuple[DeudorDetalle, int, int, int]] = []
+    for row, allocation_amount in allocation_plan:
+        balance_before = int(round(_saldo_pendiente_detalle(row)))
+        if allocation_amount <= 0 or allocation_amount > balance_before:
+            raise ValueError("La distribucion no puede superar el saldo de un concepto.")
+        balance_after = balance_before - allocation_amount
+        row.total_pagos = float(row.total_pagos or 0) + allocation_amount
+        row.saldo_actual = float(balance_after)
+        allocation_snapshots.append((row, allocation_amount, balance_before, balance_after))
 
-        detalle_row.total_pagos = total_pagos_detalle + float(monto)
-        detalle_row.saldo_actual = max(0.0, saldo_actual_detalle - float(monto))
+    detalle_row = allocation_plan[0][0]
 
     estado_por_pago = "Abonado" if "abono" in tipo_pago_norm else "Cliente Sin deuda"
 
@@ -532,12 +636,51 @@ def registrar_pago_service(
         estado_deudor_objetivo=estado_por_pago,
     )
 
+    transaction = PaymentTransaction(
+        public_id=str(uuid.uuid4()),
+        idempotency_key=idempotency_txt,
+        empresa=empresa_txt,
+        rut_afiliado=rut_norm,
+        payment_type=tipo_pago_txt,
+        amount_clp=amount_clp,
+        effective_date=effective_date,
+        observations=observaciones_txt,
+        registered_by_user_id=int(executor.id),
+        registered_by_username=_norm_text(getattr(executor, "username", "")),
+        status="confirmed",
+    )
+    db.add(transaction)
+    db.flush()
+    for row, allocation_amount, balance_before, balance_after in allocation_snapshots:
+        db.add(
+            PaymentAllocation(
+                transaction_id=int(transaction.id),
+                deudor_detalle_id=int(row.id),
+                expediente=_norm_text(row.nro_expediente),
+                amount_clp=allocation_amount,
+                balance_before_clp=balance_before,
+                balance_after_clp=balance_after,
+            )
+        )
+    if receipt_content:
+        db.add(
+            PaymentReceipt(
+                transaction_id=int(transaction.id),
+                filename=receipt_name,
+                content_type=_norm_text(comprobante_tipo) or "application/octet-stream",
+                sha256=hashlib.sha256(receipt_content).hexdigest(),
+                size_bytes=len(receipt_content),
+                content=receipt_content,
+            )
+        )
+
     if DeudorGestion is not None:
         estado_gestion = "Abonado" if "abono" in tipo_pago_norm else "Pagado"
         nombre_gestion = nombre_txt or detalle_row.nombre_afiliado or rut_norm
         observacion_gestion = (
             f"Pago registrado | Empresa: {empresa_txt} | Expediente: {expediente_txt} | "
-            f"Tipo: {tipo_pago_txt} | Monto: {float(monto):.2f}"
+            f"Tipo: {tipo_pago_txt} | Monto: {amount_clp:.2f} | "
+            f"Transaccion: {transaction.public_id} | Fecha efectiva: {effective_date.isoformat()}"
         )
         if observaciones_txt:
             observacion_gestion += f" | Observaciones: {observaciones_txt}"
@@ -556,7 +699,33 @@ def registrar_pago_service(
             )
         )
 
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        concurrent = db.query(PaymentTransaction).filter(
+            PaymentTransaction.idempotency_key == idempotency_txt
+        ).first()
+        if concurrent is None:
+            raise
+        return registrar_pago_service(
+            db,
+            executor=executor,
+            rut=rut,
+            empresa=empresa,
+            expediente=expediente,
+            tipo_pago=tipo_pago,
+            monto=monto,
+            observaciones=observaciones,
+            nombre_afiliado=nombre_afiliado,
+            detalle_id=detalle_id,
+            fecha_efectiva=effective_date,
+            idempotency_key=idempotency_txt,
+            distribucion=distribucion,
+            comprobante_nombre=comprobante_nombre,
+            comprobante_tipo=comprobante_tipo,
+            comprobante_base64=comprobante_base64,
+        )
 
     return RegistrarPagoResponse(
         ok=True,
@@ -564,11 +733,13 @@ def registrar_pago_service(
         rut=rut_norm,
         expediente=expediente_txt,
         tipo_pago=tipo_pago_txt,
-        monto=float(monto),
-        saldo_expediente=float(detalle_row.saldo_actual or 0),
+        monto=float(amount_clp),
+        saldo_expediente=float(sum(_saldo_pendiente_detalle(row) for row in detalle_rows)),
         saldo_resumen=float(saldo_total),
         total_pagos_resumen=float(total_pagos_total),
         estado_deudor=estado_deudor,
+        transaction_id=transaction.public_id,
+        idempotent_replay=False,
     )
 
 
@@ -829,9 +1000,72 @@ def revertir_pago_backend_service(
 
 
 
+def reverse_payment_transaction_service(
+    db: Session,
+    *,
+    transaction_public_id: str,
+    executor: User,
+    reason: str = "",
+) -> tuple[float, float, float, str]:
+    require_supervisor(executor, action="revertir un pago")
+    transaction = db.query(PaymentTransaction).filter(
+        PaymentTransaction.public_id == _norm_text(transaction_public_id)
+    ).first()
+    if not transaction:
+        raise ValueError("La transaccion de pago no existe.")
+    if transaction.status != "confirmed":
+        raise ValueError("La transaccion ya fue revertida o no se encuentra confirmada.")
+
+    allocations = db.query(PaymentAllocation).filter(
+        PaymentAllocation.transaction_id == int(transaction.id)
+    ).all()
+    if not allocations:
+        raise ValueError("La transaccion no contiene una distribucion recuperable.")
+
+    for allocation in allocations:
+        detail = db.query(DeudorDetalle).filter(
+            DeudorDetalle.id == int(allocation.deudor_detalle_id)
+        ).first()
+        if not detail:
+            raise ValueError("No se encontro uno de los conceptos asociados al pago.")
+        current_paid = int(round(float(detail.total_pagos or 0)))
+        allocation_amount = int(allocation.amount_clp)
+        if current_paid < allocation_amount:
+            raise ValueError(
+                "El pago no puede revertirse porque los saldos fueron modificados de forma incompatible."
+            )
+        detail.total_pagos = float(current_paid - allocation_amount)
+        detail.saldo_actual = float(
+            min(
+                int(round(float(detail.copago or 0))),
+                int(round(float(detail.saldo_actual or 0))) + allocation_amount,
+            )
+        )
+
+    transaction.status = "reversed"
+    db.add(transaction)
+    db.add(
+        PaymentReversal(
+            transaction_id=int(transaction.id),
+            reason=_norm_text(reason) or "Reversa solicitada desde el historial de gestiones.",
+            reversed_by_user_id=int(executor.id),
+            reversed_by_username=_norm_text(getattr(executor, "username", "")),
+        )
+    )
+    result = _recalcular_resumen_desde_detalle(
+        db,
+        empresa=transaction.empresa,
+        rut_norm=transaction.rut_afiliado,
+        estado_deudor_objetivo=None,
+    )
+    db.commit()
+    return result
+
+
 def update_deudor_cliente_service(
     db: Session,
     *,
+    executor: User,
     rut: str,
     empresa: str,
     rut_nuevo: str,
@@ -875,6 +1109,17 @@ def update_deudor_cliente_service(
     if not resumen_rows and not detalle_rows:
         raise ValueError("No se encontró el cliente para actualizar.")
 
+    resumen_fuente = resumen_rows[0] if resumen_rows else None
+    detalle_fuente = detalle_rows[0] if detalle_rows else None
+    old_values = {
+        "rut": _norm_text(getattr(resumen_fuente or detalle_fuente, "rut_completo", "")),
+        "nombre": _norm_text(getattr(resumen_fuente or detalle_fuente, "nombre_afiliado", "")),
+        "correo": _norm_text(getattr(detalle_fuente, "mail_afiliado", "")),
+        "correo_excel": _norm_text(getattr(detalle_fuente or resumen_fuente, "bn", "")),
+        "telefono_fijo": _norm_text(getattr(detalle_fuente, "telefono_fijo_afiliado", "")),
+        "telefono_movil": _norm_text(getattr(detalle_fuente, "telefono_movil_afiliado", "")),
+    }
+
     if "-" in str(rut_nuevo):
         partes = str(rut_nuevo).replace(".", "").split("-", 1)
         rut_actualizado = _norm_rut(partes[0])
@@ -890,6 +1135,14 @@ def update_deudor_cliente_service(
     correo_excel_txt = _norm_text(correo_excel)
     telefono_fijo_txt = _norm_text(telefono_fijo)
     telefono_movil_txt = _norm_text(telefono_movil)
+    new_values = {
+        "rut": rut_completo_nuevo,
+        "nombre": nombre_txt,
+        "correo": correo_txt,
+        "correo_excel": correo_excel_txt,
+        "telefono_fijo": telefono_fijo_txt,
+        "telefono_movil": telefono_movil_txt,
+    }
 
     for row in resumen_rows:
         row.rut_afiliado = rut_actualizado
@@ -920,6 +1173,40 @@ def update_deudor_cliente_service(
         for row in gestion_rows:
             row.rut_afiliado = rut_actualizado
             row.nombre_afiliado = nombre_txt
+
+    changed_fields: list[str] = []
+    for field_name, new_value in new_values.items():
+        old_value = old_values.get(field_name, "")
+        if old_value == new_value:
+            continue
+        changed_fields.append(field_name)
+        db.add(
+            CustomerChangeAudit(
+                empresa=empresa_txt,
+                rut_original=rut_original,
+                field_name=field_name,
+                old_value=old_value,
+                new_value=new_value,
+                changed_by_user_id=int(executor.id),
+                changed_by_username=_norm_text(getattr(executor, "username", "")),
+            )
+        )
+
+    owner_user_id = assigned_user_id_for_company(db, empresa_txt)
+    if changed_fields and owner_user_id is not None and int(owner_user_id) != int(executor.id):
+        create_notification(
+            db,
+            user_id=owner_user_id,
+            notification_type="customer_data_changed",
+            title="Datos de cliente actualizados",
+            message=(
+                f"{_norm_text(getattr(executor, 'username', 'Otro usuario'))} modifico "
+                f"{', '.join(changed_fields)} del RUT {rut_original}."
+            ),
+            empresa=empresa_txt,
+            rut_afiliado=rut_actualizado,
+            related_entity_type="customer",
+        )
 
     db.commit()
 

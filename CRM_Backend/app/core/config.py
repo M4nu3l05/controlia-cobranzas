@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +39,18 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @model_validator(mode="after")
+    def validate_production_safety(self):
+        if self.app_env.strip().lower() != "production":
+            return self
+        if self.app_debug:
+            raise ValueError("APP_DEBUG debe ser false en producción.")
+        if len(self.jwt_secret_key.strip()) < 32 or "cambia_esto" in self.jwt_secret_key.lower():
+            raise ValueError("JWT_SECRET_KEY debe ser una clave productiva de al menos 32 caracteres.")
+        if self.first_admin_password == "Admin1234" or len(self.first_admin_password) < 12:
+            raise ValueError("FIRST_ADMIN_PASSWORD productiva debe tener al menos 12 caracteres y no usar el valor inicial.")
+        return self
 
 
 @lru_cache

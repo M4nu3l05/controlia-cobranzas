@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from io import BytesIO
+import hashlib
 import os
 import re
 import unicodedata
 from collections import Counter
+from datetime import datetime
 
 import pandas as pd
 from sqlalchemy.orm import Session
 
 from app.models.deudor import DeudorDetalle, DeudorResumen
+from app.models.operations import DebtorBirladoTransition, DebtorImportBatch
+from app.models.user import User
+from app.core.text_utils import fix_mojibake_text
 
 EMPRESAS_VALIDAS = ["Colmena", "Consalud", "Cruz Blanca", "Cart-56"]
 HOJA_RESUMEN = "RESUMEN"
@@ -31,7 +36,7 @@ COLUMNAS_DETALLE_ESPERADAS = [
 
 
 def _clean_text(value) -> str:
-    txt = str(value or "").strip()
+    txt = fix_mojibake_text(value).strip()
     return "" if txt.lower() in ("", "nan", "none", "nat", "n") else txt
 
 
@@ -240,9 +245,8 @@ def _periodo_from_source_or_df(source_file: str, df_resumen: pd.DataFrame | None
     if year_from_data and month_from_name:
         return f"{year_from_data}{month_from_name}"
 
-    # 🔥 NUEVO: fallback mínimo
     if month_from_name:
-        return f"2026{month_from_name}"  # puedes ajustar el año si quieres dinámico
+        return f"{datetime.now().year}{month_from_name}"
 
     return ""
 
@@ -615,10 +619,12 @@ def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
         .all()
     )
 
-    estado_existente = {
-        _norm_rut(row.rut_afiliado): _clean_text(row.estado_deudor) or "Sin Gestión"
-        for row in db.query(DeudorResumen).filter(DeudorResumen.empresa == empresa).all()
-    }
+    estado_existente = {}
+    for row in db.query(DeudorResumen).filter(DeudorResumen.empresa == empresa).all():
+        estado = _clean_text(row.estado_deudor) or "Sin Gestión"
+        # Birlado describe ausencia de la nómina; no debe sobrevivir si vuelve a estar activo.
+        if estado.lower() != "birlado":
+            estado_existente[_norm_rut(row.rut_afiliado)] = estado
 
     grupos = {}
     for row in detalle_rows:
@@ -706,12 +712,120 @@ def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
     return len(resumen_objs)
 
 
+def _parse_import_content(*, empresa: str, content: bytes, source_file: str):
+    if empresa == "Cart-56":
+        xls = pd.ExcelFile(BytesIO(content))
+        hoja = xls.sheet_names[0] if xls.sheet_names else 0
+        df_raw = _normalize_dataframe(pd.read_excel(BytesIO(content), sheet_name=hoja, dtype=str))
+        df_resumen, df_detalle = _transform_cart56_raw(df_raw)
+    else:
+        df_resumen, df_detalle = _read_general_excel(content)
+    periodo = _periodo_from_source_or_df(source_file, df_resumen, df_detalle)
+    return df_resumen, df_detalle, periodo
+
+
+def _missing_active_details(
+    existentes: list[DeudorDetalle],
+    detalle_objs: list[DeudorDetalle],
+) -> list[DeudorDetalle]:
+    incoming_keys = {_detalle_identity_key(row) for row in detalle_objs}
+    return [
+        row for row in existentes
+        if bool(row.is_active) and _detalle_identity_key(row) not in incoming_keys
+    ]
+
+
+def preview_deudores_excel_service(
+    db: Session,
+    *,
+    empresa: str,
+    content: bytes,
+    source_file: str,
+) -> dict:
+    empresa_txt = _clean_text(empresa)
+    if empresa_txt not in EMPRESAS_VALIDAS:
+        raise ValueError(f"Empresa no válida. Opciones: {', '.join(EMPRESAS_VALIDAS)}")
+    if not content:
+        raise ValueError("El archivo recibido está vacío.")
+
+    df_resumen, df_detalle, periodo = _parse_import_content(
+        empresa=empresa_txt, content=content, source_file=source_file
+    )
+    detalle_objs = _build_detalle_objects(df_detalle, empresa_txt, source_file, periodo)
+    existentes = db.query(DeudorDetalle).filter(DeudorDetalle.empresa == empresa_txt).all()
+    existentes_map = {_detalle_identity_key(row): row for row in existentes}
+    # Una carga sin hoja DETALLE no prueba que las obligaciones hayan sido retiradas.
+    missing = _missing_active_details(existentes, detalle_objs) if detalle_objs else []
+    unique_incoming = {_detalle_identity_key(row) for row in detalle_objs}
+
+    return {
+        "empresa": empresa_txt,
+        "source_file": source_file,
+        "file_sha256": hashlib.sha256(content).hexdigest(),
+        "periodo_carga": periodo,
+        "registros_archivo": len(unique_incoming),
+        "nuevos_estimados": sum(1 for key in unique_incoming if key not in existentes_map),
+        "existentes_estimados": sum(1 for key in unique_incoming if key in existentes_map),
+        "birlados": [
+            {
+                "detalle_id": int(row.id),
+                "rut_afiliado": row.rut_afiliado,
+                "rut_completo": row.rut_completo,
+                "nombre_afiliado": row.nombre_afiliado,
+                "nro_expediente": row.nro_expediente,
+                "fecha_emision": row.fecha_emision,
+                "saldo_actual": float(row.saldo_actual or 0),
+                "estado_actual": row.estado_deudor,
+            }
+            for row in missing
+        ],
+    }
+
+
+def _add_birlado_only_summaries(db: Session, *, empresa: str) -> int:
+    active_ruts = {
+        _norm_rut(rut) for (rut,) in db.query(DeudorDetalle.rut_afiliado).filter(
+            DeudorDetalle.empresa == empresa, DeudorDetalle.is_active.is_(True)
+        ).distinct().all()
+    }
+    current_ruts = {
+        _norm_rut(rut) for (rut,) in db.query(DeudorResumen.rut_afiliado).filter(
+            DeudorResumen.empresa == empresa
+        ).all()
+    }
+    inactive = db.query(DeudorDetalle).filter(
+        DeudorDetalle.empresa == empresa, DeudorDetalle.is_active.is_(False)
+    ).all()
+    rows_by_rut: dict[str, list[DeudorDetalle]] = {}
+    for row in inactive:
+        rut = _norm_rut(row.rut_afiliado)
+        if rut and rut not in active_ruts and rut not in current_ruts:
+            rows_by_rut.setdefault(rut, []).append(row)
+    for rut, rows in rows_by_rut.items():
+        row = rows[-1]
+        expedientes = {x.nro_expediente for x in rows if _clean_text(x.nro_expediente)}
+        db.add(DeudorResumen(
+            empresa=empresa, rut_afiliado=rut, dv=row.dv,
+            rut_completo=row.rut_completo or _rut_completo(rut, row.dv),
+            nombre_afiliado=row.nombre_afiliado, estado_deudor="Birlado",
+            bn=row.bn, nro_expediente=str(len(expedientes)) if expedientes else "",
+            copago=sum(float(x.copago or 0) for x in rows),
+            total_pagos=sum(float(x.total_pagos or 0) for x in rows),
+            saldo_actual=sum(float(x.saldo_actual or 0) for x in rows), source_file=row.source_file,
+            periodo_carga=row.periodo_carga,
+        ))
+    return len(rows_by_rut)
+
+
 def import_deudores_excel_service(
     db: Session,
     *,
     empresa: str,
     content: bytes,
     source_file: str,
+    executor: User,
+    expected_file_sha256: str,
+    confirm_birlados: bool,
 ) -> dict:
     empresa_txt = str(empresa or "").strip()
     if empresa_txt not in EMPRESAS_VALIDAS:
@@ -719,15 +833,15 @@ def import_deudores_excel_service(
     if not content:
         raise ValueError("El archivo recibido está vacío.")
 
+    actual_hash = hashlib.sha256(content).hexdigest()
+    if not expected_file_sha256 or actual_hash != expected_file_sha256.strip().lower():
+        raise ValueError("El archivo cambió después de la vista previa. Debes revisarlo nuevamente antes de confirmar.")
+
     _reparar_estado_inconsistente_empresa(db, empresa_txt)
 
-    if empresa_txt == "Cart-56":
-        xls = pd.ExcelFile(BytesIO(content))
-        hoja = xls.sheet_names[0] if xls.sheet_names else 0
-        df_raw = _normalize_dataframe(pd.read_excel(BytesIO(content), sheet_name=hoja, dtype=str))
-        df_resumen, df_detalle = _transform_cart56_raw(df_raw)
-    else:
-        df_resumen, df_detalle = _read_general_excel(content)
+    df_resumen, df_detalle, periodo_carga = _parse_import_content(
+        empresa=empresa_txt, content=content, source_file=source_file
+    )
 
     existentes_detalle = (
         db.query(DeudorDetalle)
@@ -755,11 +869,16 @@ def import_deudores_excel_service(
             f"{motivo_duplicada} No se puede importar dos veces la misma base de deudores."
         )
 
-    periodo_carga = _periodo_from_source_or_df(source_file, df_resumen, df_detalle)
     resumen_objs = _build_resumen_objects(df_resumen, empresa_txt, source_file, periodo_carga)
     detalle_objs = _build_detalle_objects(df_detalle, empresa_txt, source_file, periodo_carga)
 
     existentes = db.query(DeudorDetalle).filter(DeudorDetalle.empresa == empresa_txt).all()
+    detalles_birlados = _missing_active_details(existentes, detalle_objs) if detalle_objs else []
+    if detalles_birlados and not confirm_birlados:
+        raise ValueError(
+            f"La carga retirará {len(detalles_birlados)} obligaciones. "
+            "Debes revisar la vista previa y confirmar el cambio a Birlado."
+        )
     existentes_map = {_detalle_identity_key(row): row for row in existentes}
 
     insertados = 0
@@ -782,9 +901,14 @@ def import_deudores_excel_service(
             insertados += 1
             continue
 
-        if not modo_enriquecimiento:
+        if not modo_enriquecimiento and bool(existente.is_active):
             omitidos += 1
             continue
+
+        if not bool(existente.is_active):
+            existente.is_active = True
+            if _clean_text(existente.estado_deudor).lower() == "birlado":
+                existente.estado_deudor = nuevo.estado_deudor or "Sin Gestión"
 
         existente.dv = nuevo.dv or existente.dv
         existente.rut_completo = nuevo.rut_completo or existente.rut_completo
@@ -818,7 +942,34 @@ def import_deudores_excel_service(
 
         actualizados += 1
 
+    batch = DebtorImportBatch(
+        empresa=empresa_txt,
+        source_file=os.path.basename(source_file),
+        file_sha256=actual_hash,
+        imported_by_user_id=executor.id,
+        imported_by_username=executor.username,
+        new_count=insertados,
+        updated_count=actualizados,
+        omitted_count=omitidos,
+        birlado_count=len(detalles_birlados),
+    )
+    db.add(batch)
+    db.flush()
+    for row in detalles_birlados:
+        previous_status = _clean_text(row.estado_deudor)
+        row.is_active = False
+        row.estado_deudor = "Birlado"
+        db.add(DebtorBirladoTransition(
+            import_batch_id=batch.id,
+            detalle_id=row.id,
+            empresa=empresa_txt,
+            rut_afiliado=row.rut_afiliado,
+            nro_expediente=row.nro_expediente,
+            previous_status=previous_status,
+        ))
+
     resumen_insertados = _rebuild_resumen_from_detalle(db, empresa=empresa_txt)
+    resumen_insertados += _add_birlado_only_summaries(db, empresa=empresa_txt)
     if resumen_insertados == 0 and resumen_objs:
         db.query(DeudorResumen).filter(DeudorResumen.empresa == empresa_txt).delete(synchronize_session=False)
         db.bulk_save_objects(resumen_objs)
@@ -834,4 +985,6 @@ def import_deudores_excel_service(
         "detalle_omitidos": int(omitidos),
         "source_file": source_file,
         "periodo_carga": periodo_carga,
+        "detalle_birlados": len(detalles_birlados),
+        "import_batch_id": batch.id,
     }

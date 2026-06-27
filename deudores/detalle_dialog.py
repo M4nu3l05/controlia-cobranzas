@@ -5,6 +5,7 @@
 import datetime
 import os
 import subprocess
+import uuid
 
 import pandas as pd
 
@@ -15,7 +16,8 @@ from PyQt6.QtWidgets import (
     QTableView, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QSizePolicy, QPushButton, QGridLayout,
     QSplitter, QWidget, QComboBox, QLineEdit, QDateEdit,
-    QTextEdit, QMessageBox, QFormLayout, QPlainTextEdit, QInputDialog, QScrollArea
+    QTextEdit, QMessageBox, QFormLayout, QPlainTextEdit, QInputDialog, QScrollArea,
+    QFileDialog, QCheckBox
 )
 
 from .schema_detalle import COLUMNAS_DETALLE_DEUDA, extraer_detalle_deudor
@@ -47,6 +49,7 @@ from envios.config import (
 from envios.plantillas import cargar_plantillas, renderizar, variables_desde_fila
 from envios.worker import EnvioParams, EnvioWorker, ResultadoEnvio
 from envios.history_db import registrar_historial_envio
+from core.text_utils import fix_mojibake_text
 from auth.auth_service import (
     backend_get_deudor_detalle,
     backend_list_gestiones,
@@ -120,23 +123,7 @@ def _parse_monto(valor) -> float:
 
 
 def _fix_mojibake_text(value: object) -> str:
-    txt = str(value or "")
-    if not txt:
-        return ""
-    # Intenta reparar texto mal recodificado (mojibake) en 1-2 pasadas.
-    for _ in range(2):
-        try:
-            fixed = txt.encode("latin1").decode("utf-8")
-        except Exception:
-            break
-        if fixed == txt:
-            break
-        txt = fixed
-    # Normalizaciones frecuentes de fallback.
-    txt = txt.replace("Tel?fono", "Teléfono")
-    txt = txt.replace("gestin", "gestión")
-    txt = txt.replace("â€”", "—").replace("â€“", "–")
-    return txt
+    return fix_mojibake_text(value)
 
 
 def _limpiar_telefono_para_whatsapp(numero: str) -> str:
@@ -464,9 +451,11 @@ class _RegistrarPagoDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle("Registrar pago")
-        self.setMinimumSize(500, 380)
-        self.resize(540, 430)
+        self.setMinimumSize(500, 440)
+        self.resize(560, 500)
         self.setModal(True)
+        self._idempotency_key = str(uuid.uuid4())
+        self._receipt_path = ""
 
         self._saldo_actual = _parse_monto(saldo_actual)
         self._saldos_por_expediente = {
@@ -515,9 +504,38 @@ class _RegistrarPagoDialog(QDialog):
         self.lbl_destino_abono = QLabel("Abonar a:")
         form.addRow(self.lbl_destino_abono, self.cmb_destino_abono)
 
+        self.chk_distribuir = QCheckBox("Distribuir el pago entre varios conceptos")
+        self.chk_distribuir.toggled.connect(self._actualizar_modo_distribucion)
+        form.addRow("", self.chk_distribuir)
+
+        self.tbl_distribucion = QTableWidget(0, 4)
+        self.tbl_distribucion.setHorizontalHeaderLabels(["Expediente", "Concepto", "Saldo", "Monto a aplicar"])
+        self.tbl_distribucion.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.tbl_distribucion.setMinimumHeight(150)
+        self.tbl_distribucion.setVisible(False)
+        form.addRow("Distribución:", self.tbl_distribucion)
+
         self.txt_monto = QLineEdit()
         self.txt_monto.setPlaceholderText("Ej: 150000")
         form.addRow("Monto:", self.txt_monto)
+
+        self.date_effective = QDateEdit(QDate.currentDate())
+        self.date_effective.setCalendarPopup(True)
+        self.date_effective.setDisplayFormat("dd/MM/yyyy")
+        form.addRow("Fecha efectiva:", self.date_effective)
+
+        receipt_widget = QWidget()
+        receipt_layout = QHBoxLayout(receipt_widget)
+        receipt_layout.setContentsMargins(0, 0, 0, 0)
+        receipt_layout.setSpacing(6)
+        self.txt_receipt = QLineEdit()
+        self.txt_receipt.setReadOnly(True)
+        self.txt_receipt.setPlaceholderText("Opcional: PDF, JPG o PNG (máx. 5 MB)")
+        btn_receipt = QPushButton("Seleccionar")
+        btn_receipt.clicked.connect(self._seleccionar_comprobante)
+        receipt_layout.addWidget(self.txt_receipt, 1)
+        receipt_layout.addWidget(btn_receipt)
+        form.addRow("Comprobante:", receipt_widget)
 
         self.txt_obs = QTextEdit()
         self.txt_obs.setPlaceholderText("Ej: Transferencia banco X, N° operación, comentario, etc.")
@@ -539,6 +557,56 @@ class _RegistrarPagoDialog(QDialog):
         lay.addLayout(btns)
 
         self._actualizar_saldo_expediente()
+        self._cargar_distribucion()
+
+    def _cargar_distribucion(self):
+        rows: list[tuple[str, dict]] = []
+        for expediente, destinos in self._destinos_abono_por_expediente.items():
+            for destino in destinos:
+                if _parse_monto(destino.get("saldo_actual", 0)) > 0:
+                    rows.append((expediente, destino))
+        self.tbl_distribucion.setRowCount(len(rows))
+        for row_index, (expediente, destino) in enumerate(rows):
+            exp_item = QTableWidgetItem(expediente)
+            exp_item.setData(Qt.ItemDataRole.UserRole, int(destino.get("detalle_id", 0) or 0))
+            concept_item = QTableWidgetItem(str(destino.get("label", "")))
+            balance = int(round(_parse_monto(destino.get("saldo_actual", 0))))
+            balance_item = QTableWidgetItem(_formatear_moneda_chilena(balance))
+            balance_item.setData(Qt.ItemDataRole.UserRole, balance)
+            amount_item = QTableWidgetItem("0")
+            for item in (exp_item, concept_item, balance_item):
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.tbl_distribucion.setItem(row_index, 0, exp_item)
+            self.tbl_distribucion.setItem(row_index, 1, concept_item)
+            self.tbl_distribucion.setItem(row_index, 2, balance_item)
+            self.tbl_distribucion.setItem(row_index, 3, amount_item)
+
+    def _actualizar_modo_distribucion(self, enabled: bool):
+        self.tbl_distribucion.setVisible(enabled)
+        self.cmb_expediente.setEnabled(not enabled)
+        self.cmb_tipo.setEnabled(not enabled)
+        if enabled:
+            self.cmb_tipo.setCurrentText("Abono a la deuda")
+        self._actualizar_saldo_expediente()
+
+    def _seleccionar_comprobante(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Seleccionar comprobante",
+            "",
+            "Comprobantes (*.pdf *.jpg *.jpeg *.png)",
+        )
+        if not path:
+            return
+        try:
+            if os.path.getsize(path) > 5 * 1024 * 1024:
+                QMessageBox.warning(self, "Comprobante", "El archivo no puede superar 5 MB.")
+                return
+        except OSError:
+            QMessageBox.warning(self, "Comprobante", "No fue posible leer el archivo seleccionado.")
+            return
+        self._receipt_path = path
+        self.txt_receipt.setText(os.path.basename(path))
 
     def _saldo_expediente_actual(self) -> float:
         expediente = self.cmb_expediente.currentText().strip()
@@ -556,7 +624,11 @@ class _RegistrarPagoDialog(QDialog):
         for destino in destinos:
             self.cmb_destino_abono.addItem(str(destino.get("label", "")), destino)
 
-        mostrar_destinos = self.cmb_tipo.currentText() == "Abono a la deuda" and len(destinos) > 1
+        mostrar_destinos = (
+            not self.chk_distribuir.isChecked()
+            and self.cmb_tipo.currentText() == "Abono a la deuda"
+            and len(destinos) > 1
+        )
         self.lbl_destino_abono.setVisible(mostrar_destinos)
         self.cmb_destino_abono.setVisible(mostrar_destinos)
 
@@ -585,16 +657,55 @@ class _RegistrarPagoDialog(QDialog):
                 QMessageBox.warning(self, "Monto inválido", "El abono no puede superar el saldo del monto seleccionado.")
                 return
 
+        if self.chk_distribuir.isChecked():
+            distributed_total = 0
+            for row_index in range(self.tbl_distribucion.rowCount()):
+                amount = int(round(_parse_monto(self.tbl_distribucion.item(row_index, 3).text())))
+                balance = int(self.tbl_distribucion.item(row_index, 2).data(Qt.ItemDataRole.UserRole) or 0)
+                if amount < 0 or amount > balance:
+                    QMessageBox.warning(
+                        self,
+                        "Distribución inválida",
+                        "Ningún monto distribuido puede superar el saldo del concepto.",
+                    )
+                    return
+                distributed_total += amount
+            if distributed_total != int(round(monto)):
+                QMessageBox.warning(
+                    self,
+                    "Distribución inválida",
+                    "La suma distribuida debe coincidir exactamente con el monto del pago.",
+                )
+                return
+
         self.accept()
 
     def obtener_datos(self) -> dict:
         destino = self.cmb_destino_abono.currentData() if self.cmb_destino_abono.isVisible() else None
+        distribucion: list[dict] = []
+        if self.chk_distribuir.isChecked():
+            for row_index in range(self.tbl_distribucion.rowCount()):
+                amount = int(round(_parse_monto(self.tbl_distribucion.item(row_index, 3).text())))
+                if amount <= 0:
+                    continue
+                distribucion.append(
+                    {
+                        "detalle_id": int(
+                            self.tbl_distribucion.item(row_index, 0).data(Qt.ItemDataRole.UserRole) or 0
+                        ),
+                        "monto": amount,
+                    }
+                )
         return {
             "expediente": self.cmb_expediente.currentText().strip(),
             "tipo_pago": self.cmb_tipo.currentText(),
             "monto": _parse_monto(self.txt_monto.text()),
             "observaciones": self.txt_obs.toPlainText().strip(),
             "detalle_id": (destino or {}).get("detalle_id", ""),
+            "fecha_efectiva": self.date_effective.date().toString("yyyy-MM-dd"),
+            "idempotency_key": self._idempotency_key,
+            "comprobante_path": self._receipt_path,
+            "distribucion": distribucion,
         }
 
 
@@ -830,7 +941,16 @@ class _GestionWidget(QWidget):
             return
         _, origen = self._ids.get(self.tbl.row(rows[0]), ("", ""))
         origen_txt = str(origen or "").strip().lower()
-        self.btn_del.setEnabled(not origen_txt.startswith("excel"))
+        row_index = self.tbl.row(rows[0])
+        is_payment = self._cell_text(row_index, 0).strip().lower() == "pago"
+        role = str(getattr(self._session, "role", "") or "").strip().lower()
+        if is_payment:
+            self.btn_del.setText("↩ Revertir pago")
+            self.btn_del.setEnabled(role == "supervisor")
+            self.btn_del.setToolTip("Solo el supervisor puede revertir pagos confirmados")
+        else:
+            self.btn_del.setText("🗑  Eliminar manual")
+            self.btn_del.setEnabled(not origen_txt.startswith("excel"))
 
     def _eliminar(self):
         if not self._allow_delete_manual:
@@ -847,15 +967,21 @@ class _GestionWidget(QWidget):
         ri = self.tbl.row(rows[0])
         gid, origen = self._ids.get(ri, ("", ""))
         origen_txt = str(origen or "").strip().lower()
+        is_payment = self._cell_text(ri, 0).strip().lower() == "pago"
 
         if origen_txt.startswith("excel"):
             QMessageBox.warning(self, "No permitido", "No se pueden eliminar gestiones cargadas desde Excel.")
             return
 
+        confirmation_text = (
+            "¿Revertir este pago? El movimiento original permanecerá en el historial."
+            if is_payment
+            else "¿Eliminar esta gestión?"
+        )
         if QMessageBox.question(
             self,
             "Confirmar",
-            "¿Eliminar esta gestión?",
+            confirmation_text,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         ) != QMessageBox.StandardButton.Yes:
             return
@@ -1674,6 +1800,9 @@ class DetalleDeudorDialog(QDialog):
         if not empresa:
             return False
 
+        if empresa in self._empresas_asignadas_sesion():
+            return True
+
         asignacion = self._obtener_asignacion_empresa(empresa)
         if asignacion:
             user_id_actual = int(getattr(self._session, "user_id", 0) or 0)
@@ -2178,6 +2307,10 @@ class DetalleDeudorDialog(QDialog):
         monto = datos["monto"]
         observaciones = datos["observaciones"]
         detalle_id = datos.get("detalle_id", "")
+        fecha_efectiva = datos.get("fecha_efectiva", "")
+        idempotency_key = datos.get("idempotency_key", "")
+        comprobante_path = datos.get("comprobante_path", "")
+        distribucion = datos.get("distribucion", [])
         empresa = self._obtener_empresa_actual()
         nombre = str(self._info_cliente.get("Nombre", "")).strip() or self._rut
 
@@ -2192,6 +2325,10 @@ class DetalleDeudorDialog(QDialog):
                     monto=monto,
                     observaciones=observaciones,
                     detalle_id=detalle_id,
+                    fecha_efectiva=fecha_efectiva,
+                    idempotency_key=idempotency_key,
+                    comprobante_path=comprobante_path,
+                    distribucion=distribucion,
                 )
                 if err:
                     raise ValueError(err)

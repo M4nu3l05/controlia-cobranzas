@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
+from app.core.authorization import AuthorizationError
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.gestion import GestionCreateRequest, GestionItem
@@ -75,7 +76,17 @@ def create_gestion(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return create_gestion_service(db, rut=rut, payload=payload)
+        return create_gestion_service(
+            db,
+            rut=rut,
+            payload=payload,
+            executor=current_user,
+        )
+    except AuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -90,8 +101,17 @@ def delete_gestion(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        delete_gestion_service(db, gestion_id=gestion_id)
+        delete_gestion_service(
+            db,
+            gestion_id=gestion_id,
+            executor=current_user,
+        )
         return {"ok": True}
+    except AuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -111,6 +131,11 @@ def marcar_gestion_realizada(
             gestion_id=gestion_id,
             executor=current_user,
         )
+    except AuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=str(exc),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

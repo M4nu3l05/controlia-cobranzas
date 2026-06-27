@@ -51,7 +51,7 @@ class _TempPasswordDialog(QDialog):
     def __init__(self, *, username: str, temp_password: str, parent=None):
         super().__init__(parent)
         self._temp_password = str(temp_password or "")
-        self.setWindowTitle("Contrasena temporal generada")
+        self.setWindowTitle("Contraseña temporal generada")
         self.setMinimumWidth(520)
 
         lay = QVBoxLayout(self)
@@ -59,8 +59,8 @@ class _TempPasswordDialog(QDialog):
         lay.setSpacing(10)
 
         info = QLabel(
-            "Comparte esta contrasena por canal seguro. "
-            "El usuario debera cambiarla al iniciar sesion."
+            "Comparte esta contraseña por canal seguro. "
+            "El usuario deberá cambiarla al iniciar sesión."
         )
         info.setWordWrap(True)
         info.setStyleSheet("color:#334155; font-size:9pt;")
@@ -84,7 +84,7 @@ class _TempPasswordDialog(QDialog):
         )
         row.addWidget(self.edit, 1)
 
-        btn_copy = QPushButton("Copiar contrasena")
+        btn_copy = QPushButton("Copiar contraseña")
         btn_copy.setMinimumHeight(38)
         btn_copy.setStyleSheet(_BTN_PRIMARY)
         btn_copy.clicked.connect(self._copy)
@@ -106,7 +106,7 @@ class _TempPasswordDialog(QDialog):
 
     def _copy(self):
         QApplication.clipboard().setText(self._temp_password)
-        self.lbl_ok.setText("Contrasena copiada al portapapeles.")
+        self.lbl_ok.setText("Contraseña copiada al portapapeles.")
 
 
 def _badge(role: str) -> QLabel:

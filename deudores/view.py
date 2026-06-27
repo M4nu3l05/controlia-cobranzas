@@ -12,7 +12,7 @@ from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox, QWidget, QLabel, QComboBox, QTableWidgetItem
 
 from core.excel_export import write_excel_report
-from core.paths import get_data_dir
+from core.paths import get_data_dir, get_exports_dir
 from deudores.database import (
     EMPRESAS,
     base_deudores_ya_cargada,
@@ -30,6 +30,7 @@ from auth.auth_service import (
     backend_create_gestion,
     backend_get_deudor_detalle,
     backend_import_deudores,
+    backend_preview_import_deudores,
     backend_list_all_gestiones,
     backend_list_deudores,
     backend_list_mis_gestiones_asignadas,
@@ -255,6 +256,8 @@ class DeudoresWidget(QWidget):
                     "nombre": self._row_get(row, "nombre_afiliado", "Nombre_Afiliado", "nombre", "Nombre"),
                     "empresa": empresa,
                     "observacion": observacion,
+                    "due_at": self._row_get(row, "derivation_due_at", default=""),
+                    "is_overdue": bool(row.get("derivation_is_overdue", False)),
                 }
             )
         return tareas, ""
@@ -342,6 +345,11 @@ class DeudoresWidget(QWidget):
             nombre_item = QTableWidgetItem(str(tarea.get("nombre", "")))
             nombre_item.setToolTip(str(tarea.get("observacion", "")))
             s.tbl_tareas.setItem(ri, 2, nombre_item)
+
+            due_text = "Vencida" if bool(tarea.get("is_overdue")) else str(tarea.get("due_at", ""))[:16]
+            due_item = QTableWidgetItem(due_text or "24 h")
+            due_item.setToolTip(str(tarea.get("due_at", "")))
+            s.tbl_tareas.setItem(ri, 3, due_item)
 
         s.btn_marcar_tareas.setEnabled(bool(tareas))
 
@@ -1327,6 +1335,64 @@ class DeudoresWidget(QWidget):
             if str(empresa).strip().lower() == "cart-56":
                 self._cache_cart56_detalle_desde_excel(path)
 
+            self.sidebar.progress.setVisible(True)
+            self.sidebar.progress.setValue(8)
+            self._set_loading(True)
+            preview, preview_err = backend_preview_import_deudores(
+                self._session, empresa=empresa, excel_path=path
+            )
+            if preview_err or not preview:
+                self._set_loading(False)
+                self.sidebar.progress.setVisible(False)
+                QMessageBox.critical(self, "No se pudo revisar la carga", preview_err or "Respuesta vacía del servidor.")
+                return
+
+            birlados = list(preview.get("birlados", []) or [])
+            while True:
+                dialog = QMessageBox(self)
+                dialog.setIcon(QMessageBox.Icon.Warning if birlados else QMessageBox.Icon.Information)
+                dialog.setWindowTitle("Vista previa de carga mensual")
+                dialog.setText(
+                    f"Empresa: {empresa}\n"
+                    f"Registros únicos en el archivo: {int(preview.get('registros_archivo', 0) or 0):,}\n"
+                    f"Nuevos estimados: {int(preview.get('nuevos_estimados', 0) or 0):,}\n"
+                    f"Ya existentes: {int(preview.get('existentes_estimados', 0) or 0):,}\n"
+                    f"Obligaciones que cambiarán a Birlado: {len(birlados):,}"
+                )
+                dialog.setInformativeText(
+                    "Revisa el detalle antes de confirmar. La aplicación no conserva una copia del Excel original."
+                )
+                confirm_btn = dialog.addButton("Confirmar carga", QMessageBox.ButtonRole.AcceptRole)
+                export_btn = dialog.addButton("Exportar detalle", QMessageBox.ButtonRole.ActionRole)
+                export_btn.setEnabled(bool(birlados))
+                cancel_btn = dialog.addButton("Cancelar", QMessageBox.ButtonRole.RejectRole)
+                dialog.exec()
+                clicked = dialog.clickedButton()
+                if clicked is export_btn:
+                    default_name = os.path.join(
+                        str(get_exports_dir()),
+                        f"Birlados_{empresa}_{datetime.datetime.now():%Y%m%d_%H%M}.xlsx",
+                    )
+                    export_path, _ = QFileDialog.getSaveFileName(
+                        self, "Exportar detalle de Birlados", default_name, "Excel (*.xlsx)"
+                    )
+                    if export_path:
+                        report = pd.DataFrame(birlados).rename(columns={
+                            "rut_completo": "RUT", "nombre_afiliado": "Nombre",
+                            "nro_expediente": "Expediente", "fecha_emision": "Fecha emisión",
+                            "saldo_actual": "Saldo actual", "estado_actual": "Estado anterior",
+                        })
+                        report = report.drop(columns=["detalle_id", "rut_afiliado"], errors="ignore")
+                        write_excel_report(export_path, {"Birlados": report})
+                        QMessageBox.information(self, "Detalle exportado", f"Archivo guardado en:\n{export_path}")
+                    continue
+                if clicked is confirm_btn:
+                    break
+                if clicked is cancel_btn or clicked is None:
+                    self._set_loading(False)
+                    self.sidebar.progress.setVisible(False)
+                    return
+
             def _empresa_fingerprint(rows: list[dict]) -> set[tuple[str, str, str, str]]:
                 out: set[tuple[str, str, str, str]] = set()
                 for it in rows or []:
@@ -1348,15 +1414,25 @@ class DeudoresWidget(QWidget):
             )
             pre_fp = _empresa_fingerprint(pre_items or [])
 
-            self.sidebar.progress.setVisible(True)
             self.sidebar.progress.setValue(15)
-            self._set_loading(True)
-            resultado, err = backend_import_deudores(self._session, empresa=empresa, excel_path=path)
+            resultado, err = backend_import_deudores(
+                self._session,
+                empresa=empresa,
+                excel_path=path,
+                expected_file_sha256=str(preview.get("file_sha256", "")),
+                confirm_birlados=True,
+            )
             if err:
                 # Reintento corto para absorber latencias/transientes de red/backend.
                 QApplication.processEvents()
                 sleep(0.25)
-                resultado, err_retry = backend_import_deudores(self._session, empresa=empresa, excel_path=path)
+                resultado, err_retry = backend_import_deudores(
+                    self._session,
+                    empresa=empresa,
+                    excel_path=path,
+                    expected_file_sha256=str(preview.get("file_sha256", "")),
+                    confirm_birlados=True,
+                )
                 if not err_retry:
                     err = ""
                 else:
@@ -1439,6 +1515,7 @@ class DeudoresWidget(QWidget):
                     f"Registros nuevos: {detalle_nuevos:,}\n"
                     f"Registros actualizados: {detalle_actualizados:,}\n"
                     f"Registros omitidos por ya existir: {detalle_omitidos:,}\n"
+                    f"Registros cambiados a Birlado: {int(resultado.get('detalle_birlados', 0) or 0):,}\n"
                     f"Resumen recalculado: {int(resultado.get('resumen_insertados', 0) or 0):,}"
                 ),
             )

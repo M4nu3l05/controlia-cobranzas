@@ -1,15 +1,27 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from app.models.deudor import DeudorDetalle, DeudorResumen
 from app.models.gestion import DeudorGestion
+from app.models.operations import DerivationTracking
 from app.models.user import User
 from app.schemas.gestion import GestionCreateRequest, GestionItem
-from app.services.deudor_service import revertir_pago_backend_service
+from app.core.authorization import (
+    AuthorizationError,
+    is_derivation,
+    require_company_operation,
+    require_supervisor,
+    resolve_derivation_target,
+)
+from app.services.deudor_service import (
+    reverse_payment_transaction_service,
+    revertir_pago_backend_service,
+)
+from app.services.operations_service import create_notification
 
 ESTADO_DEUDOR_DEFAULT = "Sin Gestión"
 
@@ -62,7 +74,9 @@ def _fecha_sort_key(fecha: str, fallback_id: int) -> tuple:
 import re
 
 
-def _to_item(row: DeudorGestion) -> GestionItem:
+def _to_item(row: DeudorGestion, tracking: DerivationTracking | None = None) -> GestionItem:
+    due_at = getattr(tracking, "due_at", None)
+    completed_at = getattr(tracking, "completed_at", None)
     return GestionItem(
         id=row.id,
         empresa=row.empresa,
@@ -74,6 +88,12 @@ def _to_item(row: DeudorGestion) -> GestionItem:
         observacion=row.observacion,
         origen=row.origen,
         assigned_to_user_id=row.assigned_to_user_id,
+        derivation_created_by_user_id=(
+            int(tracking.created_by_user_id) if tracking is not None else None
+        ),
+        derivation_due_at=due_at,
+        derivation_completed_at=completed_at,
+        derivation_is_overdue=bool(due_at and completed_at is None and due_at < datetime.now()),
     )
 
 
@@ -90,6 +110,7 @@ def _extraer_payload_pago_desde_observacion(observacion: str) -> dict:
     expediente = _extract("Expediente")
     tipo_pago = _extract("Tipo")
     monto_txt = _extract("Monto")
+    transaction_id = _extract("Transaccion")
 
     monto = 0.0
     if monto_txt:
@@ -104,6 +125,7 @@ def _extraer_payload_pago_desde_observacion(observacion: str) -> dict:
         "expediente": expediente,
         "tipo_pago": tipo_pago,
         "monto": monto,
+        "transaction_id": transaction_id,
     }
 
 
@@ -127,9 +149,10 @@ def _recalcular_estado_deudor(db: Session, *, empresa: str, rut: str) -> None:
         .all()
     )
 
-    if rows:
+    operational_rows = [row for row in rows if row.assigned_to_user_id is None]
+    if operational_rows:
         rows_sorted = sorted(
-            rows,
+            operational_rows,
             key=lambda r: _fecha_sort_key(r.fecha_gestion, r.id),
             reverse=True,
         )
@@ -246,23 +269,30 @@ def create_gestion_service(
     *,
     rut: str,
     payload: GestionCreateRequest,
+    executor: User,
 ) -> GestionItem:
     rut_norm = _norm_rut(rut)
     if not rut_norm:
         raise ValueError("Debes indicar un RUT válido.")
 
     estado_txt = _norm_text(payload.estado)
-    assigned_to_user_id: int | None = None
-    if payload.assigned_to_user_id is not None:
-        assigned_to_user_id = int(payload.assigned_to_user_id)
-    elif "gestion asignada" == " ".join(estado_txt.strip().lower().split()):
-        assigned_to_user_id = _resolver_asignacion_por_empresa(
+    empresa_txt = _norm_text(payload.empresa)
+    derivation = is_derivation(
+        status=estado_txt,
+        assigned_to_user_id=payload.assigned_to_user_id,
+    )
+    if derivation:
+        assigned_to_user_id = resolve_derivation_target(
             db,
-            empresa=_norm_text(payload.empresa),
+            company=empresa_txt,
+            requested_user_id=payload.assigned_to_user_id,
         )
+    else:
+        require_company_operation(db, executor, empresa_txt)
+        assigned_to_user_id = None
 
     row = DeudorGestion(
-        empresa=_norm_text(payload.empresa),
+        empresa=empresa_txt,
         rut_afiliado=rut_norm,
         nombre_afiliado=_norm_text(payload.nombre_afiliado),
         tipo_gestion=_norm_text(payload.tipo_gestion),
@@ -273,14 +303,36 @@ def create_gestion_service(
         assigned_to_user_id=assigned_to_user_id,
     )
     db.add(row)
+    db.flush()
+
+    tracking = None
+    if derivation and assigned_to_user_id is not None:
+        tracking = DerivationTracking(
+            gestion_id=int(row.id),
+            created_by_user_id=int(executor.id),
+            assigned_to_user_id=int(assigned_to_user_id),
+            due_at=datetime.now() + timedelta(hours=24),
+        )
+        db.add(tracking)
+        create_notification(
+            db,
+            user_id=int(assigned_to_user_id),
+            notification_type="derivation_assigned",
+            title="Nueva derivacion asignada",
+            message=f"Debes contactar a {row.nombre_afiliado or row.rut_afiliado} antes de 24 horas.",
+            empresa=row.empresa,
+            rut_afiliado=row.rut_afiliado,
+            related_entity_type="gestion",
+            related_entity_id=int(row.id),
+        )
     db.commit()
     db.refresh(row)
 
     _recalcular_estado_deudor(db, empresa=row.empresa, rut=row.rut_afiliado)
-    return _to_item(row)
+    return _to_item(row, tracking)
 
 
-def delete_gestion_service(db: Session, *, gestion_id: int) -> None:
+def delete_gestion_service(db: Session, *, gestion_id: int, executor: User) -> None:
     row = db.query(DeudorGestion).filter(DeudorGestion.id == int(gestion_id)).first()
     if not row:
         raise ValueError("La gestión indicada no existe.")
@@ -294,28 +346,42 @@ def delete_gestion_service(db: Session, *, gestion_id: int) -> None:
     tipo_gestion = _norm_text(row.tipo_gestion).lower()
 
     if tipo_gestion == "pago" or origen.startswith("backend_pago"):
+        require_supervisor(executor, action="revertir un pago")
         payload_pago = _extraer_payload_pago_desde_observacion(row.observacion)
         empresa_pago = _norm_text(payload_pago.get("empresa")) or empresa
         expediente_pago = _norm_text(payload_pago.get("expediente"))
         monto_pago = float(payload_pago.get("monto") or 0)
+        transaction_id = _norm_text(payload_pago.get("transaction_id"))
 
-        if not expediente_pago or monto_pago <= 0:
-            raise ValueError("No fue posible revertir el pago porque la observación de la gestión no contiene los datos necesarios.")
+        if transaction_id:
+            reverse_payment_transaction_service(
+                db,
+                transaction_public_id=transaction_id,
+                executor=executor,
+            )
+        else:
+            if not expediente_pago or monto_pago <= 0:
+                raise ValueError(
+                    "No fue posible revertir el pago porque la observación de la gestión no contiene los datos necesarios."
+                )
+            revertir_pago_backend_service(
+                db,
+                rut=rut,
+                empresa=empresa_pago,
+                expediente=expediente_pago,
+                monto=monto_pago,
+            )
 
-        db.delete(row)
-        db.flush()
-
-        revertir_pago_backend_service(
-            db,
-            rut=rut,
-            empresa=empresa_pago,
-            expediente=expediente_pago,
-            monto=monto_pago,
-        )
+        row.estado = "Pago revertido"
+        row.origen = "backend_pago_revertido"
+        row.observacion = f"{row.observacion} | Revertido por: {_norm_text(executor.username)}"
+        db.add(row)
+        db.commit()
 
         _recalcular_estado_deudor(db, empresa=empresa, rut=rut)
         return
 
+    require_company_operation(db, executor, empresa)
     db.delete(row)
     db.commit()
 
@@ -430,12 +496,20 @@ def list_gestiones_asignadas_para_usuario_service(
         .all()
     )
     rows_sorted = sorted(rows, key=lambda r: _fecha_sort_key(r.fecha_gestion, r.id), reverse=True)
+    tracking_rows = (
+        db.query(DerivationTracking)
+        .filter(DerivationTracking.gestion_id.in_([int(row.id) for row in rows_sorted]))
+        .all()
+        if rows_sorted
+        else []
+    )
+    tracking_by_gestion = {int(item.gestion_id): item for item in tracking_rows}
     out: list[GestionItem] = []
     for row in rows_sorted:
         estado = " ".join(str(row.estado or "").strip().lower().split())
         if estado == "gestión realizada" or estado == "gestion realizada":
             continue
-        out.append(_to_item(row))
+        out.append(_to_item(row, tracking_by_gestion.get(int(row.id))))
     return out
 
 
@@ -452,14 +526,33 @@ def marcar_gestion_asignada_realizada_service(
     if row.assigned_to_user_id is None:
         raise ValueError("La gestión no está marcada como tarea asignada.")
 
-    if executor.role not in {"admin", "supervisor"} and int(row.assigned_to_user_id) != int(executor.id):
-        raise ValueError("No tienes permiso para cerrar esta gestión asignada.")
+    if int(row.assigned_to_user_id) != int(executor.id):
+        raise AuthorizationError("No tienes permiso para cerrar esta gestion asignada.")
 
     row.estado = "Gestión realizada"
     row.updated_at = datetime.now()
     db.add(row)
+    tracking = db.query(DerivationTracking).filter(
+        DerivationTracking.gestion_id == int(row.id)
+    ).first()
+    if tracking is not None:
+        tracking.completed_at = datetime.now()
+        tracking.completed_by_user_id = int(executor.id)
+        db.add(tracking)
+        if int(tracking.created_by_user_id) != int(executor.id):
+            create_notification(
+                db,
+                user_id=int(tracking.created_by_user_id),
+                notification_type="derivation_completed",
+                title="Derivacion completada",
+                message=f"La derivacion de {row.nombre_afiliado or row.rut_afiliado} fue marcada como realizada.",
+                empresa=row.empresa,
+                rut_afiliado=row.rut_afiliado,
+                related_entity_type="gestion",
+                related_entity_id=int(row.id),
+            )
     db.commit()
     db.refresh(row)
 
     _recalcular_estado_deudor(db, empresa=row.empresa, rut=row.rut_afiliado)
-    return _to_item(row)
+    return _to_item(row, tracking)
