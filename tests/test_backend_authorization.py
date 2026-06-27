@@ -28,6 +28,7 @@ from app.models.gestion import DeudorGestion
 from app.schemas.deudor import RegistrarPagoRequest
 from app.schemas.gestion import GestionCreateRequest
 from app.services.gestion_service import marcar_gestion_asignada_realizada_service
+from app.services.user_service import list_cartera_assignments_service, save_cartera_assignments_service
 from fastapi import HTTPException
 
 
@@ -116,6 +117,48 @@ def test_derivacion_solo_puede_ir_a_responsable_de_cartera(db):
             company="Cart-56",
             requested_user_id=11,
         )
+
+
+def test_ejecutiva_puede_consultar_asignaciones_para_derivar_pero_no_modificar():
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with Session(engine) as session:
+        session.execute(
+            text(
+                """
+                CREATE TABLE cartera_asignaciones (
+                    empresa TEXT PRIMARY KEY,
+                    user_id INTEGER NULL,
+                    email TEXT,
+                    username TEXT,
+                    updated_at TEXT,
+                    updated_by TEXT
+                )
+                """
+            )
+        )
+        session.execute(
+            text(
+                """
+                INSERT INTO cartera_asignaciones(empresa, user_id, email, username)
+                VALUES ('Cart-56', 10, 'titular@example.com', 'Ejecutiva Titular')
+                """
+            )
+        )
+        session.commit()
+
+        rows = list_cartera_assignments_service(
+            session,
+            executor=_user(11, "ejecutivo"),
+        )
+        assert rows[0].empresa == "Cart-56"
+        assert rows[0].user_id == 10
+
+        with pytest.raises(ValueError):
+            save_cartera_assignments_service(
+                session,
+                executor=_user(11, "ejecutivo"),
+                assignments=[{"empresa": "Cart-56", "user_id": 11}],
+            )
 
 
 def test_solo_supervisor_puede_revertir_pago():

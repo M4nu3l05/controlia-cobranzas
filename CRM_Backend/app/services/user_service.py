@@ -192,7 +192,8 @@ def list_cartera_assignments_service(
     *,
     executor: User,
 ) -> list[UserCarteraAssignmentItem]:
-    _ensure_can_manage_assignments(executor)
+    if not executor or not bool(getattr(executor, "is_active", True)):
+        raise ValueError("No tienes permiso para consultar asignaciones de cartera.")
     ensure_cartera_assignments_table(db)
 
     rows = db.execute(text("""

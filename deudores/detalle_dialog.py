@@ -2167,7 +2167,7 @@ class DetalleDeudorDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "Sin ejecutiva asignada",
-                "No hay una ejecutiva configurada para esta cartera. Solicita la asignacin al supervisor.",
+                "No hay una ejecutiva configurada para esta cartera. Solicita la asignación al supervisor.",
             )
             return
 
