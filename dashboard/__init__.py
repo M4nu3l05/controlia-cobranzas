@@ -1,3 +1,3 @@
-from .view import DashboardWidget
+from .container import DashboardWidget
 
 __all__ = ["DashboardWidget"]

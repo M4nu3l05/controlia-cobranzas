@@ -1,4 +1,25 @@
+import os
 import sys
+
+
+def _usar_entorno_virtual_del_proyecto() -> None:
+    """Relanza la aplicación con .venv cuando se invoca con otro Python."""
+    if getattr(sys, "frozen", False):
+        return
+
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    venv_python = os.path.join(project_dir, ".venv", "Scripts", "python.exe")
+    if not os.path.isfile(venv_python):
+        return
+
+    current = os.path.normcase(os.path.abspath(sys.executable))
+    expected = os.path.normcase(os.path.abspath(venv_python))
+    if current != expected:
+        os.execv(venv_python, [venv_python, os.path.abspath(__file__), *sys.argv[1:]])
+
+
+if __name__ == "__main__":
+    _usar_entorno_virtual_del_proyecto()
 
 from PyQt6.QtWidgets import QApplication
 
