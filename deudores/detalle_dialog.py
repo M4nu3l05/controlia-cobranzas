@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QSizePolicy, QPushButton, QGridLayout,
     QSplitter, QWidget, QComboBox, QLineEdit, QDateEdit,
     QTextEdit, QMessageBox, QFormLayout, QPlainTextEdit, QInputDialog, QScrollArea,
-    QFileDialog, QCheckBox
+    QCheckBox
 )
 
 from .schema_detalle import COLUMNAS_DETALLE_DEUDA, extraer_detalle_deudor
@@ -54,11 +54,13 @@ from auth.auth_service import (
     backend_get_deudor_detalle,
     backend_list_gestiones,
     backend_create_gestion,
+    backend_create_gestion_con_estado,
     backend_delete_gestion,
     backend_register_pago,
     backend_update_deudor_cliente,
     backend_list_cartera_asignaciones,
 )
+from .outbox import encolar_gestion
 from admin_carteras.service import (
     obtener_empresas_asignadas_para_session,
     obtener_asignacion_por_empresa_local,
@@ -227,6 +229,22 @@ def _backend_detalle_response_to_local(payload: dict) -> tuple[pd.DataFrame, dic
             "BN": str(item.get("bn", "")).strip(),
             "telefono_fijo_afiliado": str(item.get("telefono_fijo_afiliado", "")).strip(),
             "telefono_movil_afiliado": str(item.get("telefono_movil_afiliado", "")).strip(),
+            "Direccion_Deudor": str(item.get("direccion_deudor", "")).strip(),
+            "Comuna_Deudor": str(item.get("comuna_deudor", "")).strip(),
+            "Ciudad_Deudor": str(item.get("ciudad_deudor", "")).strip(),
+            "ID_Deuda": str(item.get("id_deuda", "")).strip(),
+            "Fecha_Vencimiento": str(item.get("fecha_vencimiento", "")).strip(),
+            "Prestador": str(item.get("prestador", "")).strip(),
+            "Fecha_Prestacion": str(item.get("fecha_prestacion", "")).strip(),
+            "Fecha_Prestacion2": str(item.get("fecha_prestacion2", "")).strip(),
+            "Monto_Total": item.get("monto_total", 0),
+            "Monto_Cobrar": item.get("monto_cobrar", item.get("copago", 0)),
+            "Monto_Facturado": item.get("monto_facturado", 0),
+            "Monto_Liquidado": item.get("monto_liquidado", 0),
+            "Monto_Pagado_Parcial": item.get("monto_pagado_parcial", 0),
+            "Monto_Condonado": item.get("monto_condonado", 0),
+            "Monto_Gestionado": item.get("monto_gestionado", 0),
+            "Cuota_Acordada": item.get("cuota_acordada", 0),
             "Nro_Expediente": str(item.get("nro_expediente", "")).strip(),
             "Fecha_Emision": str(item.get("fecha_emision", "")).strip(),
             "Copago": item.get("copago", 0),
@@ -319,6 +337,13 @@ class _DeudaModel(QStandardItemModel):
         "Mto Pagar",
         "Pagos",
         "Saldo Actual",
+        "Monto_Cobrar",
+        "Monto_Facturado",
+        "Monto_Liquidado",
+        "Monto_Pagado_Parcial",
+        "Monto_Condonado",
+        "Monto_Gestionado",
+        "Cuota_Acordada",
     }
 
     COLS_SALDO_ROJO = {
@@ -417,7 +442,7 @@ class _AgregarGestionDialog(QDialog):
     def _guardar(self):
         try:
             if self._session and getattr(self._session, "auth_source", "") == "backend":
-                _, err = backend_create_gestion(
+                _, err, sin_conexion = backend_create_gestion_con_estado(
                     self._session,
                     rut=self._rut,
                     empresa=self._empresa,
@@ -428,6 +453,30 @@ class _AgregarGestionDialog(QDialog):
                     observacion=self.txt_obs.toPlainText().strip(),
                     origen="manual",
                 )
+                if err and sin_conexion:
+                    # Sin red: la gestion queda en cola local y se sube sola al
+                    # recuperar conexion. Nunca se descarta el trabajo hecho.
+                    encolar_gestion(
+                        user_id=int(getattr(self._session, "user_id", 0) or 0),
+                        rut=self._rut,
+                        empresa=self._empresa,
+                        nombre_afiliado=self._nombre,
+                        tipo_gestion=self.cmb_tipo.currentText(),
+                        estado=self.cmb_estado.currentText(),
+                        fecha_gestion=self.dte_fecha.date().toString("dd/MM/yyyy"),
+                        observacion=self.txt_obs.toPlainText().strip(),
+                        origen="manual",
+                    )
+                    QMessageBox.information(
+                        self,
+                        "Gestión guardada sin conexión",
+                        "No hay conexión con el servidor, así que la gestión quedó "
+                        "guardada en este equipo.\n\n"
+                        "Se enviará automáticamente cuando vuelva la conexión. "
+                        "No la registres de nuevo.",
+                    )
+                    self.accept()
+                    return
                 if err:
                     raise ValueError(err)
             else:
@@ -460,7 +509,6 @@ class _RegistrarPagoDialog(QDialog):
         self.resize(560, 500)
         self.setModal(True)
         self._idempotency_key = str(uuid.uuid4())
-        self._receipt_path = ""
 
         self._saldo_actual = _parse_monto(saldo_actual)
         self._saldos_por_expediente = {
@@ -529,19 +577,6 @@ class _RegistrarPagoDialog(QDialog):
         self.date_effective.setDisplayFormat("dd/MM/yyyy")
         form.addRow("Fecha efectiva:", self.date_effective)
 
-        receipt_widget = QWidget()
-        receipt_layout = QHBoxLayout(receipt_widget)
-        receipt_layout.setContentsMargins(0, 0, 0, 0)
-        receipt_layout.setSpacing(6)
-        self.txt_receipt = QLineEdit()
-        self.txt_receipt.setReadOnly(True)
-        self.txt_receipt.setPlaceholderText("Opcional: PDF, JPG o PNG (máx. 5 MB)")
-        btn_receipt = QPushButton("Seleccionar")
-        btn_receipt.clicked.connect(self._seleccionar_comprobante)
-        receipt_layout.addWidget(self.txt_receipt, 1)
-        receipt_layout.addWidget(btn_receipt)
-        form.addRow("Comprobante:", receipt_widget)
-
         self.txt_obs = QTextEdit()
         self.txt_obs.setPlaceholderText("Ej: Transferencia banco X, N° operación, comentario, etc.")
         self.txt_obs.setMaximumHeight(90)
@@ -593,25 +628,6 @@ class _RegistrarPagoDialog(QDialog):
         if enabled:
             self.cmb_tipo.setCurrentText("Abono a la deuda")
         self._actualizar_saldo_expediente()
-
-    def _seleccionar_comprobante(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Seleccionar comprobante",
-            "",
-            "Comprobantes (*.pdf *.jpg *.jpeg *.png)",
-        )
-        if not path:
-            return
-        try:
-            if os.path.getsize(path) > 5 * 1024 * 1024:
-                QMessageBox.warning(self, "Comprobante", "El archivo no puede superar 5 MB.")
-                return
-        except OSError:
-            QMessageBox.warning(self, "Comprobante", "No fue posible leer el archivo seleccionado.")
-            return
-        self._receipt_path = path
-        self.txt_receipt.setText(os.path.basename(path))
 
     def _saldo_expediente_actual(self) -> float:
         expediente = self.cmb_expediente.currentText().strip()
@@ -709,7 +725,6 @@ class _RegistrarPagoDialog(QDialog):
             "detalle_id": (destino or {}).get("detalle_id", ""),
             "fecha_efectiva": self.date_effective.date().toString("yyyy-MM-dd"),
             "idempotency_key": self._idempotency_key,
-            "comprobante_path": self._receipt_path,
             "distribucion": distribucion,
         }
 
@@ -829,11 +844,17 @@ class _GestionWidget(QWidget):
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        self.tbl.setColumnWidth(3, 520)
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tbl.setAlternatingRowColors(False)
+        self.tbl.setWordWrap(False)
+        self.tbl.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tbl.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.tbl.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.tbl.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.tbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.tbl.setMinimumHeight(150)
         lay.addWidget(self.tbl, 1)
@@ -1067,6 +1088,10 @@ class _EditarClienteDialog(QDialog):
         self.txt_correo_excel = QLineEdit(limpio(info_cliente.get("Correo (Excel)", "")))
         self.txt_tel_fijo = QLineEdit(limpio(info_cliente.get("Teléfono Fijo", "")))
         self.txt_tel_movil = QLineEdit(limpio(info_cliente.get("Teléfono Móvil", "")))
+        self.txt_direccion = QLineEdit(limpio(info_cliente.get("Dirección", "")))
+        self.txt_comuna = QLineEdit(limpio(info_cliente.get("Comuna", "")))
+        self.txt_ciudad = QLineEdit(limpio(info_cliente.get("Ciudad", "")))
+        self._show_location = any(key in info_cliente for key in ("Dirección", "Comuna", "Ciudad"))
 
         self.txt_correo.setPlaceholderText("correo@dominio.com")
         self.txt_correo_excel.setPlaceholderText("correo alternativo / Excel")
@@ -1079,6 +1104,10 @@ class _EditarClienteDialog(QDialog):
         form.addRow("Correo (Excel):", self.txt_correo_excel)
         form.addRow("Teléfono fijo:", self.txt_tel_fijo)
         form.addRow("Teléfono móvil:", self.txt_tel_movil)
+        if self._show_location:
+            form.addRow("Dirección:", self.txt_direccion)
+            form.addRow("Comuna:", self.txt_comuna)
+            form.addRow("Ciudad:", self.txt_ciudad)
 
         lay.addLayout(form)
         lay.addStretch(1)
@@ -1119,6 +1148,9 @@ class _EditarClienteDialog(QDialog):
             "Correo (Excel)": self.txt_correo_excel.text().strip(),
             "Teléfono Fijo": self.txt_tel_fijo.text().strip(),
             "Teléfono Móvil": self.txt_tel_movil.text().strip(),
+            "Dirección": self.txt_direccion.text().strip(),
+            "Comuna": self.txt_comuna.text().strip(),
+            "Ciudad": self.txt_ciudad.text().strip(),
         }
 
 
@@ -1203,8 +1235,8 @@ class DetalleDeudorDialog(QDialog):
 
         from PyQt6.QtWidgets import QApplication
         screen = QApplication.primaryScreen().availableGeometry()
-        w = min(int(screen.width() * 0.88), 1180)
-        h = min(int(screen.height() * 0.85), 760)
+        w = min(int(screen.width() * 0.95), 1680)
+        h = min(int(screen.height() * 0.92), 1000)
         self.resize(w, h)
         self.setModal(True)
 
@@ -1348,8 +1380,9 @@ class DetalleDeudorDialog(QDialog):
             card_cli.body.addLayout(row_kpis)
             root.addWidget(card_cli)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(7)
         self._main_splitter = splitter
 
         card_deuda = _Card(f"Detalle de deuda \u2014 {n_exp} expediente{'s' if n_exp != 1 else ''}")
@@ -1364,7 +1397,12 @@ class DetalleDeudorDialog(QDialog):
             self.tbl_deuda.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.tbl_deuda.setSortingEnabled(True)
             self.tbl_deuda.verticalHeader().setVisible(False)
-            self.tbl_deuda.horizontalHeader().setStretchLastSection(True)
+            self.tbl_deuda.setWordWrap(False)
+            self.tbl_deuda.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.tbl_deuda.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.tbl_deuda.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            self.tbl_deuda.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            self.tbl_deuda.horizontalHeader().setStretchLastSection(False)
             self.tbl_deuda.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
             self.tbl_deuda.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             card_deuda.body.addWidget(self.tbl_deuda, 1)
@@ -1492,16 +1530,19 @@ class DetalleDeudorDialog(QDialog):
         section_layout.addStretch(1)
         card_gest.body.addWidget(section_content, 1)
 
-        right_scroll = QScrollArea()
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        right_scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
-        right_scroll.setWidget(card_gest)
-        splitter.addWidget(right_scroll)
+        gestion_scroll = QScrollArea()
+        gestion_scroll.setWidgetResizable(True)
+        gestion_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        gestion_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        gestion_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        gestion_scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+        gestion_scroll.setWidget(card_gest)
+        self._gestion_scroll = gestion_scroll
+        splitter.addWidget(gestion_scroll)
 
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([620, 620])
+        splitter.setSizes([360, 440])
         root.addWidget(splitter, 1)
 
         btn_row = QHBoxLayout()
@@ -1545,22 +1586,16 @@ class DetalleDeudorDialog(QDialog):
 
     def _ajustar_layout_responsivo(self) -> None:
         if hasattr(self, "_main_splitter"):
-            total_w = max(self._main_splitter.width(), self.width(), 1)
-            left_target = int(total_w * 0.50)
-            left_target = max(340, min(980, left_target))
-            right_min = 420
-            if total_w - left_target < right_min:
-                left_target = max(300, total_w - right_min)
-            self._main_splitter.setSizes([left_target, max(total_w - left_target, right_min)])
-
-        if hasattr(self, "_right_splitter"):
-            total_h = max(self._right_splitter.height(), 1)
-            top_target = int(total_h * 0.42)
-            top_target = max(190, min(460, top_target))
-            bottom_min = 280
-            if total_h - top_target < bottom_min:
-                top_target = max(160, total_h - bottom_min)
-            self._right_splitter.setSizes([top_target, max(total_h - top_target, bottom_min)])
+            total_h = max(self._main_splitter.height(), 1)
+            debt_target = int(total_h * 0.45)
+            debt_target = max(190, min(520, debt_target))
+            management_min = 240
+            if total_h - debt_target < management_min:
+                debt_target = max(160, total_h - management_min)
+            self._main_splitter.setSizes([
+                debt_target,
+                max(total_h - debt_target, management_min),
+            ])
 
 
     def _normalizar_fila_resumen_backend(self) -> None:
@@ -1624,10 +1659,15 @@ class DetalleDeudorDialog(QDialog):
             "Correo (Excel)": ["Correo (Excel)", "BN"],
             "Teléfono Fijo": ["Teléfono Fijo", "Tel?fono Fijo", "telefono_fijo_afiliado", "Telefono Empleador"],
             "Teléfono Móvil": ["Teléfono Móvil", "Tel?fono M?vil", "telefono_movil_afiliado", "Telefono Empleador"],
+            "Dirección": ["Dirección", "Direccion_Deudor", "direccion_deudor"],
+            "Comuna": ["Comuna", "Comuna_Deudor", "comuna_deudor"],
+            "Ciudad": ["Ciudad", "Ciudad_Deudor", "ciudad_deudor"],
         }
 
         normalizado: dict[str, str] = {}
         for canon, aliases in claves.items():
+            if canon in {"Dirección", "Comuna", "Ciudad"} and not any(key in origen for key in aliases):
+                continue
             value = ""
             for key in aliases:
                 raw = _fix_mojibake_text(str(origen.get(key, "")).strip())
@@ -1665,7 +1705,9 @@ class DetalleDeudorDialog(QDialog):
             pass
 
         for fila in self._filas_deuda or []:
-            totales["Copago"] += _parse_monto(fila.get("Copago ($)", "") or fila.get("Mto Pagar", ""))
+            totales["Copago"] += _parse_monto(
+                fila.get("Copago ($)", "") or fila.get("Monto_Cobrar", "") or fila.get("Mto Pagar", "")
+            )
             totales["Total_Pagos"] += _parse_monto(fila.get("Total Pagos ($)", "") or fila.get("Pagos", ""))
             totales["Saldo_Actual"] += _parse_monto(fila.get("Saldo Actual ($)", "") or fila.get("Saldo Actual", ""))
 
@@ -1701,7 +1743,7 @@ class DetalleDeudorDialog(QDialog):
             fila["Saldo Actual"] = saldo
         if "Copago ($)" in fila:
             fila["Copago ($)"] = copago
-        if "Mto Pagar" in fila:
+        if "Mto Pagar" in fila and not str(fila.get("Mto Pagar", "")).strip():
             fila["Mto Pagar"] = copago
         if "Total Pagos ($)" in fila:
             fila["Total Pagos ($)"] = total_pagos
@@ -2038,6 +2080,9 @@ class DetalleDeudorDialog(QDialog):
                     correo_excel=nuevos.get("Correo (Excel)", ""),
                     telefono_fijo=nuevos.get("Teléfono Fijo", ""),
                     telefono_movil=nuevos.get("Teléfono Móvil", ""),
+                    direccion=nuevos.get("Dirección", ""),
+                    comuna=nuevos.get("Comuna", ""),
+                    ciudad=nuevos.get("Ciudad", ""),
                 )
                 if err:
                     raise ValueError(err)
@@ -2055,6 +2100,10 @@ class DetalleDeudorDialog(QDialog):
                 self._info_cliente["Correo (Excel)"] = nuevos.get("Correo (Excel)", "") or ""
                 self._info_cliente["Teléfono Fijo"] = nuevos.get("Teléfono Fijo", "") or ""
                 self._info_cliente["Teléfono Móvil"] = nuevos.get("Teléfono Móvil", "") or ""
+                if "Dirección" in self._info_cliente:
+                    self._info_cliente["Dirección"] = nuevos.get("Dirección", "") or ""
+                    self._info_cliente["Comuna"] = nuevos.get("Comuna", "") or ""
+                    self._info_cliente["Ciudad"] = nuevos.get("Ciudad", "") or ""
 
                 self._fila_resumen["Rut_Afiliado"] = self._rut
                 self._fila_resumen["_RUT_COMPLETO"] = self._info_cliente["RUT"]
@@ -2063,6 +2112,9 @@ class DetalleDeudorDialog(QDialog):
                 self._fila_resumen["BN"] = self._info_cliente["Correo (Excel)"]
                 self._fila_resumen["telefono_fijo_afiliado"] = self._info_cliente["Teléfono Fijo"]
                 self._fila_resumen["telefono_movil_afiliado"] = self._info_cliente["Teléfono Móvil"]
+                self._fila_resumen["Direccion_Deudor"] = nuevos.get("Dirección", "")
+                self._fila_resumen["Comuna_Deudor"] = nuevos.get("Comuna", "")
+                self._fila_resumen["Ciudad_Deudor"] = nuevos.get("Ciudad", "")
 
                 self._refrescar_labels_cliente()
                 self._recargar_desde_bd()
@@ -2085,6 +2137,9 @@ class DetalleDeudorDialog(QDialog):
                     "BN": nuevos.get("Correo (Excel)", ""),
                     "telefono_fijo_afiliado": nuevos.get("Teléfono Fijo", ""),
                     "telefono_movil_afiliado": nuevos.get("Teléfono Móvil", ""),
+                    "Direccion_Deudor": nuevos.get("Dirección", ""),
+                    "Comuna_Deudor": nuevos.get("Comuna", ""),
+                    "Ciudad_Deudor": nuevos.get("Ciudad", ""),
                 }
             )
 
@@ -2105,6 +2160,10 @@ class DetalleDeudorDialog(QDialog):
             self._info_cliente["Correo (Excel)"] = nuevos.get("Correo (Excel)", "") or ""
             self._info_cliente["Teléfono Fijo"] = nuevos.get("Teléfono Fijo", "") or ""
             self._info_cliente["Teléfono Móvil"] = nuevos.get("Teléfono Móvil", "") or ""
+            if "Dirección" in self._info_cliente:
+                self._info_cliente["Dirección"] = nuevos.get("Dirección", "") or ""
+                self._info_cliente["Comuna"] = nuevos.get("Comuna", "") or ""
+                self._info_cliente["Ciudad"] = nuevos.get("Ciudad", "") or ""
 
             self._fila_resumen["Rut_Afiliado"] = self._info_cliente["RUT"]
             self._fila_resumen["Nombre_Afiliado"] = self._info_cliente["Nombre"]
@@ -2134,6 +2193,7 @@ class DetalleDeudorDialog(QDialog):
             "Copago": "Copago",
             "Copago ($)": "Copago",
             "Mto Pagar": "Copago",
+            "Monto_Cobrar": "Copago",
             "Total_Pagos": "Total_Pagos",
             "Total Pagos ($)": "Total_Pagos",
             "Pagos": "Total_Pagos",
@@ -2244,23 +2304,33 @@ class DetalleDeudorDialog(QDialog):
             QMessageBox.critical(self, "Error", f"No se pudo asignar la tarea.\n\nDetalle:\n{e}")
 
     def _expedientes_disponibles(self) -> list[str]:
+        self._expediente_pago_por_etiqueta = {}
         expedientes = []
-        for fila in self._filas_deuda:
-            valor = str(
-                fila.get("N° Expediente", "") or fila.get("No Licencia", "") or fila.get("Folio LIQ", "")
+        for idx, fila in enumerate(self._filas_deuda, start=1):
+            interno = str(
+                fila.get("_expediente_pago", "") or fila.get("N° Expediente", "")
+                or fila.get("No Licencia", "") or fila.get("Folio LIQ", "")
             ).strip()
-            if valor and valor not in expedientes:
-                expedientes.append(valor)
+            visible = str(
+                fila.get("No Licencia", "") or fila.get("N° Expediente", "")
+                or fila.get("Folio LIQ", "")
+            ).strip()
+            if not interno:
+                continue
+            etiqueta = f"N/A (deuda {idx})" if visible in {"", "N/A", "—"} else visible
+            self._expediente_pago_por_etiqueta[etiqueta] = interno
+            if etiqueta not in expedientes:
+                expedientes.append(etiqueta)
         return expedientes
 
     def _saldos_por_expediente(self) -> dict[str, str]:
         saldos: dict[str, float] = {}
-        for fila in self._filas_deuda:
-            expediente = str(
-                fila.get("N° Expediente", "") or fila.get("No Licencia", "") or fila.get("Folio LIQ", "")
-            ).strip()
-            if not expediente:
+        for idx, fila in enumerate(self._filas_deuda, start=1):
+            interno = str(fila.get("_expediente_pago", "") or fila.get("N° Expediente", "") or fila.get("No Licencia", "")).strip()
+            visible = str(fila.get("No Licencia", "") or fila.get("N° Expediente", "")).strip()
+            if not interno:
                 continue
+            expediente = f"N/A (deuda {idx})" if visible in {"", "N/A", "—"} else visible
 
             saldo = str(
                 fila.get("Saldo Actual ($)", "") or fila.get("Saldo Actual", "")
@@ -2272,14 +2342,16 @@ class DetalleDeudorDialog(QDialog):
     def _destinos_abono_por_expediente(self) -> dict[str, list[dict]]:
         destinos: dict[str, list[dict]] = {}
         for idx, fila in enumerate(self._filas_deuda, start=1):
-            expediente = str(
-                fila.get("N° Expediente", "") or fila.get("No Licencia", "") or fila.get("Folio LIQ", "")
-            ).strip()
-            if not expediente:
+            interno = str(fila.get("_expediente_pago", "") or fila.get("N° Expediente", "") or fila.get("No Licencia", "")).strip()
+            visible = str(fila.get("No Licencia", "") or fila.get("N° Expediente", "")).strip()
+            if not interno:
                 continue
+            expediente = f"N/A (deuda {idx})" if visible in {"", "N/A", "—"} else visible
 
             saldo = _parse_monto(fila.get("Saldo Actual ($)", "") or fila.get("Saldo Actual", ""))
-            copago = _parse_monto(fila.get("Copago ($)", "") or fila.get("Mto Pagar", ""))
+            copago = _parse_monto(
+                fila.get("Copago ($)", "") or fila.get("Monto_Cobrar", "") or fila.get("Mto Pagar", "")
+            )
             pagos = _parse_monto(fila.get("Total Pagos ($)", "") or fila.get("Pagos", ""))
             detalle_id = str(fila.get("_detalle_id", "") or fila.get("id", "")).strip()
             label = (
@@ -2313,14 +2385,16 @@ class DetalleDeudorDialog(QDialog):
             return
 
         datos = dlg.obtener_datos()
-        expediente = datos["expediente"]
+        expediente_etiqueta = datos["expediente"]
+        expediente = getattr(self, "_expediente_pago_por_etiqueta", {}).get(
+            expediente_etiqueta, expediente_etiqueta
+        )
         tipo_pago = datos["tipo_pago"]
         monto = datos["monto"]
         observaciones = datos["observaciones"]
         detalle_id = datos.get("detalle_id", "")
         fecha_efectiva = datos.get("fecha_efectiva", "")
         idempotency_key = datos.get("idempotency_key", "")
-        comprobante_path = datos.get("comprobante_path", "")
         distribucion = datos.get("distribucion", [])
         empresa = self._obtener_empresa_actual()
         nombre = str(self._info_cliente.get("Nombre", "")).strip() or self._rut
@@ -2338,7 +2412,6 @@ class DetalleDeudorDialog(QDialog):
                     detalle_id=detalle_id,
                     fecha_efectiva=fecha_efectiva,
                     idempotency_key=idempotency_key,
-                    comprobante_path=comprobante_path,
                     distribucion=distribucion,
                 )
                 if err:
@@ -2605,7 +2678,11 @@ class DetalleDeudorDialog(QDialog):
             if "Saldo_Actual" not in base:
                 base["Saldo_Actual"] = primera.get("Saldo Actual ($)", "") or primera.get("Saldo Actual", "")
             if "Copago" not in base:
-                base["Copago"] = primera.get("Copago ($)", "") or primera.get("Mto Pagar", "")
+                base["Copago"] = (
+                    primera.get("Copago ($)", "")
+                    or primera.get("Monto_Cobrar", "")
+                    or primera.get("Mto Pagar", "")
+                )
             if "Total_Pagos" not in base:
                 base["Total_Pagos"] = primera.get("Total Pagos ($)", "") or primera.get("Pagos", "")
             if "MAX_Emision_ok" not in base:

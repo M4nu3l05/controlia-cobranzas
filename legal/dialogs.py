@@ -70,6 +70,17 @@ class LegalAcceptanceDialog(QDialog):
         subtitle.setStyleSheet("color:#475569;")
         root.addWidget(subtitle)
 
+        confidentiality = QLabel(
+            "Importante: la Política contiene obligaciones esenciales sobre confidencialidad, "
+            "acceso restringido y prohibición de venta o uso comercial de las bases del Cliente."
+        )
+        confidentiality.setWordWrap(True)
+        confidentiality.setStyleSheet(
+            "background:#eff6ff; color:#1e3a8a; border:1px solid #bfdbfe; "
+            "border-radius:8px; padding:8px; font-weight:600;"
+        )
+        root.addWidget(confidentiality)
+
         self._tabs = QTabWidget()
         self._terms_text = QPlainTextEdit()
         self._privacy_text = QPlainTextEdit()
@@ -91,7 +102,9 @@ class LegalAcceptanceDialog(QDialog):
         root.addWidget(self.lbl_error)
 
         self.chk_terms = QCheckBox("He leído y acepto los Términos y Condiciones.")
-        self.chk_privacy = QCheckBox("He leído y acepto la Política de Privacidad.")
+        self.chk_privacy = QCheckBox(
+            "He leído y acepto la Política de Privacidad, incluida su sección de Confidencialidad."
+        )
         for chk in (self.chk_terms, self.chk_privacy):
             chk.setStyleSheet("QCheckBox { color:#0f172a; font-size:10pt; }")
             chk.stateChanged.connect(self._sync_actions)

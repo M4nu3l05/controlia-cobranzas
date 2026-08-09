@@ -32,6 +32,10 @@ COLUMNAS_DETALLE_ESPERADAS = [
     "Fecha_Emision", "Copago", "Total_Pagos", "Saldo_Actual",
     "Cart56_Fecha_Recep", "Cart56_Fecha_Recep_ISA", "Cart56_Dias_Pagar", "Cart56_Mto_Pagar",
     "_RUT_COMPLETO", "Mail Emp", "Telefono Empleador", "Estado_deudor",
+    "Direccion_Deudor", "Comuna_Deudor", "Ciudad_Deudor", "ID_Deuda",
+    "Prestador", "Fecha_Prestacion", "Fecha_Prestacion2", "Fecha_Vencimiento",
+    "Monto_Total", "Monto_Cobrar", "Monto_Facturado", "Monto_Liquidado",
+    "Monto_Pagado_Parcial", "Monto_Condonado", "Monto_Gestionado", "Cuota_Acordada",
 ]
 
 
@@ -59,11 +63,15 @@ def _parse_monto(value) -> float:
         return 0.0
     txt = txt.replace("$", "").replace(" ", "")
     if "." in txt and "," not in txt:
-        txt = txt.replace(".", "")
+        if not re.fullmatch(r"-?\d+\.\d{1,2}", txt):
+            txt = txt.replace(".", "")
     elif "," in txt and "." in txt:
         txt = txt.replace(".", "").replace(",", ".")
     elif "," in txt:
-        txt = txt.replace(".", "").replace(",", ".")
+        if re.fullmatch(r"-?\d+,\d{1,2}", txt):
+            txt = txt.replace(",", ".")
+        else:
+            txt = txt.replace(",", "")
     try:
         return float(txt)
     except Exception:
@@ -74,7 +82,10 @@ def _yyyymm_from_date(value) -> str:
     txt = _clean_text(value)
     if not txt:
         return ""
-    ts = pd.to_datetime(txt, errors="coerce", dayfirst=True)
+    if re.match(r"^\d{4}-\d{2}-\d{2}", txt):
+        ts = pd.to_datetime(txt, errors="coerce", yearfirst=True)
+    else:
+        ts = pd.to_datetime(txt, errors="coerce", dayfirst=True)
     if pd.isna(ts):
         return ""
     return ts.strftime("%Y%m")
@@ -84,7 +95,10 @@ def _date_to_ddmmyyyy(value) -> str:
     txt = _clean_text(value)
     if not txt:
         return ""
-    ts = pd.to_datetime(txt, errors="coerce", dayfirst=True)
+    if re.match(r"^\d{4}-\d{2}-\d{2}", txt):
+        ts = pd.to_datetime(txt, errors="coerce", yearfirst=True)
+    else:
+        ts = pd.to_datetime(txt, errors="coerce", dayfirst=True)
     if pd.isna(ts):
         return txt
     return ts.strftime("%d/%m/%Y")
@@ -162,6 +176,214 @@ def _normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _apply_column_mapping(df: pd.DataFrame, payload: dict | None) -> pd.DataFrame:
+    if not payload or not isinstance(payload.get("columns"), dict):
+        return df
+    result = df.copy()
+    available = {str(column): column for column in result.columns}
+    for target, source in payload["columns"].items():
+        source_text = str(source or "").strip()
+        if source_text and source_text in available:
+            result[str(target)] = result[available[source_text]]
+        else:
+            result[str(target)] = ""
+    return result
+
+
+def _canonical_source_state(value) -> str:
+    estado = _clean_text(value)
+    estado_norm = _normalize_column_name(estado)
+    if estado_norm == "pagado":
+        return "Pagado"
+    if estado_norm == "fallecido":
+        return "Fallecido"
+    if estado in {"0.05", "5%", "5,0%"} or estado_norm in {"005", "5"}:
+        return "SE ACOGE AL 5%"
+    return estado or "Sin Gestión"
+
+
+def _split_rut(value) -> tuple[str, str, str]:
+    bruto = _clean_text(value).replace(".", "").replace(" ", "").upper()
+    dv = ""
+    if "-" in bruto:
+        base, dv = bruto.rsplit("-", 1)
+    else:
+        base = bruto
+    rut = "".join(ch for ch in base if ch.isdigit()).lstrip("0")
+    dv = "".join(ch for ch in dv if ch.isdigit() or ch == "K")[:1]
+    return rut, dv, _rut_completo(rut, dv)
+
+
+def _synthetic_debt_key(row: pd.Series, rut: str, index: int) -> str:
+    parts = [
+        rut,
+        _clean_text(row.get("Fecha_Emision_Deuda", row.get("Fecha_Emision", ""))),
+        _clean_text(row.get("Fecha_Prestacion", "")),
+        _clean_text(row.get("Prestador", "")),
+        _clean_text(row.get("Monto_Cobrar", "")),
+        _clean_text(row.get("Monto_Total", "")),
+        str(index),
+    ]
+    digest = hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12].upper()
+    return f"SIN-ID-{digest}"
+
+
+def _build_isapre_summary(df_detalle: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict] = []
+    for (_, _), group in df_detalle.groupby(
+        ["Rut_Afiliado", "Dv"], dropna=False, sort=False
+    ):
+        first = group.iloc[0]
+        estados = {
+            _clean_text(value) for value in group["Estado_deudor"].tolist() if _clean_text(value)
+        }
+        ids = [_clean_text(value) for value in group["ID_Deuda"].tolist() if _clean_text(value)]
+        max_periods = [
+            _clean_text(value) for value in group["MAX_Emision_ok"].tolist() if _clean_text(value)
+        ]
+        min_periods = [
+            _clean_text(value) for value in group["MIN_Emision_ok"].tolist() if _clean_text(value)
+        ]
+        rows.append({
+            "Rut_Afiliado": first["Rut_Afiliado"],
+            "Dv": first["Dv"],
+            "_RUT_COMPLETO": first["_RUT_COMPLETO"],
+            "Nombre_Afiliado": first["Nombre_Afiliado"],
+            "Estado_deudor": next(iter(estados)) if len(estados) == 1 else "Estado mixto",
+            "BN": _first_non_empty(group["BN"]),
+            "Nro_Expediente": str(len(ids)),
+            "MAX_Emision_ok": max(max_periods) if max_periods else "",
+            "MIN_Emision_ok": min(min_periods) if min_periods else "",
+            "Copago": str(int(round(sum(_parse_monto(value) for value in group["Copago"])))),
+            "Total_Pagos": "0",
+            "Saldo_Actual": str(int(round(sum(_parse_monto(value) for value in group["Saldo_Actual"])))),
+        })
+    return pd.DataFrame(rows).fillna("")
+
+
+def _transform_isapre_raw(df_raw: pd.DataFrame, empresa: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if df_raw is None or df_raw.empty:
+        raise ValueError(f"La base de {empresa} está vacía.")
+
+    df = _normalize_dataframe(df_raw)
+    required = {
+        "Cruz Blanca": [
+            "Mandante", "RUT_Deudor", "Nombre_Deudor", "Estado_Gestion",
+            "Fecha_Emision_Deuda", "Fecha_Vencimiento_Deuda", "Monto_Cobrar",
+        ],
+        "Colmena": [
+            "Mandante", "RUT_Deudor", "Nombre_Deudor", "Estado_Caso",
+            "Fecha_Emision", "Fecha_Prestacion", "Monto_Cobrar",
+        ],
+    }[empresa]
+    missing = [name for name in required if not _find_column(df, [name])]
+    if missing:
+        raise ValueError(
+            f"La base de {empresa} no contiene las columnas requeridas: {', '.join(missing)}."
+        )
+
+    mandante_col = _find_column(df, ["Mandante"])
+    mandantes = {_normalize_column_name(value) for value in df[mandante_col].tolist() if _clean_text(value)}
+    expected = _normalize_column_name(empresa)
+    if mandantes and any(value != expected for value in mandantes):
+        raise ValueError(f"El archivo seleccionado no corresponde a {empresa}.")
+
+    detalle_rows: list[dict] = []
+    for index, row in df.iterrows():
+        rut, dv, rut_completo = _split_rut(row.get(_find_column(df, ["RUT_Deudor"]), ""))
+        if not rut:
+            continue
+
+        id_deuda = _clean_text(row.get(_find_column(df, ["ID_Deuda"]), ""))
+        expediente_interno = id_deuda or _synthetic_debt_key(row, rut, int(index))
+        nombre = _clean_text(row.get(_find_column(df, ["Nombre_Deudor"]), ""))
+        email = _clean_text(row.get(_find_column(df, ["Email_Deudor"]), ""))
+        monto_cobrar = _parse_monto(row.get(_find_column(df, ["Monto_Cobrar"]), 0))
+
+        if empresa == "Cruz Blanca":
+            estado = _canonical_source_state(row.get(_find_column(df, ["Estado_Gestion"]), ""))
+            fecha_emision = _date_to_ddmmyyyy(row.get(_find_column(df, ["Fecha_Emision_Deuda"]), ""))
+            fecha_vencimiento = _date_to_ddmmyyyy(row.get(_find_column(df, ["Fecha_Vencimiento_Deuda"]), ""))
+            fecha_prestacion = _date_to_ddmmyyyy(row.get(_find_column(df, ["Fecha_Prestacion"]), ""))
+            fecha_prestacion2 = _date_to_ddmmyyyy(row.get(_find_column(df, ["Fecha_Prestacion2"]), ""))
+            telefono = _clean_text(row.get(_find_column(df, ["Telefono3_Deudor"]), ""))
+            telefono_fijo = telefono
+            telefono_movil = telefono
+            max_period = _yyyymm_from_date(fecha_vencimiento)
+            min_period = _yyyymm_from_date(fecha_emision)
+        else:
+            estado = _canonical_source_state(row.get(_find_column(df, ["Estado_Caso"]), ""))
+            fecha_emision = _date_to_ddmmyyyy(row.get(_find_column(df, ["Fecha_Emision"]), ""))
+            fecha_vencimiento = ""
+            fecha_prestacion = fecha_emision
+            fecha_prestacion2 = _date_to_ddmmyyyy(row.get(_find_column(df, ["Fecha_Prestacion"]), ""))
+            telefono_fijo = _clean_text(row.get(_find_column(df, ["Telefono1_Deudor"]), ""))
+            telefono_movil = _clean_text(row.get(_find_column(df, ["Telefono2_Deudor"]), ""))
+            max_period = _yyyymm_from_date(fecha_prestacion2)
+            min_period = _yyyymm_from_date(fecha_emision)
+
+        detalle_rows.append({
+            "Rut_Afiliado": rut,
+            "Dv": dv,
+            "_RUT_COMPLETO": rut_completo,
+            "Nombre_Afiliado": nombre,
+            "Nombre Afil": nombre,
+            "RUT Afil": rut_completo,
+            "Estado_deudor": estado,
+            "BN": email,
+            "mail_afiliado": email,
+            "telefono_fijo_afiliado": telefono_fijo,
+            "telefono_movil_afiliado": telefono_movil,
+            "Direccion_Deudor": _clean_text(row.get(_find_column(df, ["Direccion_Deudor"]), "")),
+            "Comuna_Deudor": _clean_text(row.get(_find_column(df, ["Comuna_Deudor"]), "")),
+            "Ciudad_Deudor": _clean_text(row.get(_find_column(df, ["Ciudad_Deudor"]), "")),
+            "Nro_Expediente": expediente_interno,
+            "ID_Deuda": id_deuda,
+            "Fecha_Emision": fecha_emision,
+            "Fecha_Vencimiento": fecha_vencimiento,
+            "Fecha_Prestacion": fecha_prestacion,
+            "Fecha_Prestacion2": fecha_prestacion2,
+            "Prestador": _clean_text(row.get(_find_column(df, ["Prestador"]), "")),
+            "MAX_Emision_ok": max_period,
+            "MIN_Emision_ok": min_period,
+            "Copago": monto_cobrar,
+            "Total_Pagos": 0,
+            "Saldo_Actual": monto_cobrar,
+            "Monto_Total": _parse_monto(row.get(_find_column(df, ["Monto_Total"]), 0)),
+            "Monto_Cobrar": monto_cobrar,
+            "Monto_Facturado": _parse_monto(row.get(_find_column(df, ["Monto_Facturado"]), 0)),
+            "Monto_Liquidado": _parse_monto(row.get(_find_column(df, ["Monto_Liquidado"]), 0)),
+            "Monto_Pagado_Parcial": _parse_monto(row.get(_find_column(df, ["Monto_Pagado_Parcial"]), 0)),
+            "Monto_Condonado": _parse_monto(row.get(_find_column(df, ["Monto_Condonado"]), 0)),
+            "Monto_Gestionado": _parse_monto(row.get(_find_column(df, ["Monto_Gestionado"]), 0)),
+            "Cuota_Acordada": _parse_monto(row.get(_find_column(df, ["Cuota_Acordada"]), 0)),
+        })
+
+    df_detalle = pd.DataFrame(detalle_rows).fillna("")
+    if df_detalle.empty:
+        raise ValueError(f"No se pudieron construir registros válidos para {empresa}.")
+    return _build_isapre_summary(df_detalle), df_detalle
+
+
+def _read_isapre_excel(
+    content: bytes, empresa: str, column_mapping: dict | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    xls = pd.ExcelFile(BytesIO(content))
+    selected_sheet = str((column_mapping or {}).get("sheet_name", "")).strip()
+    if selected_sheet:
+        if selected_sheet not in xls.sheet_names:
+            raise ValueError(f"No se encontró la hoja seleccionada '{selected_sheet}'.")
+        df = pd.read_excel(BytesIO(content), sheet_name=selected_sheet, dtype=str).fillna("")
+        return _transform_isapre_raw(_apply_column_mapping(df, column_mapping), empresa)
+    rut_header = _normalize_column_name("RUT_Deudor")
+    for sheet_name in xls.sheet_names:
+        df = pd.read_excel(BytesIO(content), sheet_name=sheet_name, dtype=str).fillna("")
+        headers = {_normalize_column_name(column) for column in df.columns}
+        if rut_header in headers and _normalize_column_name("Monto_Cobrar") in headers:
+            return _transform_isapre_raw(df, empresa)
+    raise ValueError(f"No se encontró una hoja compatible con la base de {empresa}.")
+
+
 def _periodo_from_source_name(source_file: str) -> str:
     source = _clean_text(source_file).lower()
     if not source:
@@ -170,6 +392,10 @@ def _periodo_from_source_name(source_file: str) -> str:
     m = re.search(r"(20\d{2})(0[1-9]|1[0-2])", source)
     if m:
         return f"{m.group(1)}{m.group(2)}"
+
+    m = re.search(r"(0[1-9]|1[0-2])(20\d{2})", source)
+    if m:
+        return f"{m.group(2)}{m.group(1)}"
 
     month_map = {
         "enero": "01",
@@ -455,11 +681,27 @@ def _build_detalle_objects(df: pd.DataFrame, empresa: str, source_file: str, per
                 bn=_clean_text(row.get("BN", "")),
                 telefono_fijo_afiliado=_clean_text(row.get("telefono_fijo_afiliado", "")),
                 telefono_movil_afiliado=_clean_text(row.get("telefono_movil_afiliado", "")),
+                direccion_deudor=_clean_text(row.get("Direccion_Deudor", "")),
+                comuna_deudor=_clean_text(row.get("Comuna_Deudor", "")),
+                ciudad_deudor=_clean_text(row.get("Ciudad_Deudor", "")),
                 nro_expediente=_clean_text(row.get("Nro_Expediente", "")),
+                id_deuda=_clean_text(row.get("ID_Deuda", "")),
                 fecha_emision=_clean_text(row.get("Fecha_Emision", "")),
+                fecha_vencimiento=_clean_text(row.get("Fecha_Vencimiento", "")),
+                prestador=_clean_text(row.get("Prestador", "")),
+                fecha_prestacion=_clean_text(row.get("Fecha_Prestacion", "")),
+                fecha_prestacion2=_clean_text(row.get("Fecha_Prestacion2", "")),
                 copago=_parse_monto(row.get("Copago", 0)),
                 total_pagos=_parse_monto(row.get("Total_Pagos", 0)),
                 saldo_actual=_parse_monto(row.get("Saldo_Actual", 0)),
+                monto_total=_parse_monto(row.get("Monto_Total", 0)),
+                monto_cobrar=_parse_monto(row.get("Monto_Cobrar", row.get("Copago", 0))),
+                monto_facturado=_parse_monto(row.get("Monto_Facturado", 0)),
+                monto_liquidado=_parse_monto(row.get("Monto_Liquidado", 0)),
+                monto_pagado_parcial=_parse_monto(row.get("Monto_Pagado_Parcial", 0)),
+                monto_condonado=_parse_monto(row.get("Monto_Condonado", 0)),
+                monto_gestionado=_parse_monto(row.get("Monto_Gestionado", 0)),
+                cuota_acordada=_parse_monto(row.get("Cuota_Acordada", 0)),
                 cart56_fecha_recep=_clean_text(row.get("Cart56_Fecha_Recep", "")),
                 cart56_fecha_recep_isa=_clean_text(row.get("Cart56_Fecha_Recep_ISA", "")),
                 cart56_dias_pagar=_clean_text(row.get("Cart56_Dias_Pagar", "")),
@@ -577,12 +819,17 @@ def _transform_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
     return resumen, df_detalle
 
 
-def _read_general_excel(content: bytes) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _read_general_excel(
+    content: bytes, column_mapping: dict | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     xls = pd.ExcelFile(BytesIO(content))
-    if HOJA_RESUMEN not in xls.sheet_names:
-        raise ValueError(f"No se encontró la hoja '{HOJA_RESUMEN}' en el archivo Excel.")
+    selected_sheet = str((column_mapping or {}).get("sheet_name", "")).strip()
+    summary_sheet = selected_sheet or HOJA_RESUMEN
+    if summary_sheet not in xls.sheet_names:
+        raise ValueError(f"No se encontró la hoja '{summary_sheet}' en el archivo Excel.")
 
-    df_resumen = _normalize_dataframe(pd.read_excel(BytesIO(content), sheet_name=HOJA_RESUMEN, dtype=str))
+    df_resumen = pd.read_excel(BytesIO(content), sheet_name=summary_sheet, dtype=str).fillna("")
+    df_resumen = _normalize_dataframe(_apply_column_mapping(df_resumen, column_mapping))
     faltantes = [c for c in COLUMNAS_RESUMEN_REQUERIDAS if c not in df_resumen.columns]
     if faltantes:
         raise ValueError("Faltan columnas obligatorias en RESUMEN: " + ", ".join(faltantes))
@@ -600,13 +847,24 @@ def _detalle_identity_key(row: DeudorDetalle) -> tuple[str, str, str, str, str]:
     rut = _norm_rut(row.rut_afiliado)
     expediente = _clean_text(row.nro_expediente)
     fecha = _clean_text(row.fecha_emision)
-    monto_cart56 = ""
+    # El monto forma parte de la identidad de la deuda: si la Isapre reenvia
+    # el mismo expediente con un monto distinto, corresponde una fila nueva y
+    # no actualizar la existente. El discriminador por monto es el caso por
+    # defecto para que una cartera nueva no herede el comportamiento contrario
+    # solo por no estar nombrada aqui.
     if empresa == "Cart-56":
         raw_monto = float(getattr(row, "cart56_mto_pagar", 0) or 0)
         if raw_monto <= 0:
             raw_monto = float(getattr(row, "copago", 0) or 0)
-        monto_cart56 = f"{raw_monto:.2f}"
-    return (empresa, rut, expediente, fecha, monto_cart56)
+        discriminador = f"{raw_monto:.2f}"
+    else:
+        discriminador = "|".join([
+            f"{float(getattr(row, 'monto_cobrar', 0) or 0):.2f}",
+            f"{float(getattr(row, 'monto_total', 0) or 0):.2f}",
+            _clean_text(getattr(row, "prestador", "")),
+            _clean_text(getattr(row, "fecha_prestacion2", "")),
+        ])
+    return (empresa, rut, expediente, fecha, discriminador)
 
 
 def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
@@ -642,12 +900,14 @@ def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
                 "nombre_afiliado": _clean_text(row.nombre_afiliado),
                 "bn": "",
                 "expedientes": set(),
+                "id_deudas": 0,
                 "max_emision_ok": [],
                 "min_emision_ok": [],
                 "copago": 0.0,
                 "total_pagos": 0.0,
                 "saldo_actual": 0.0,
-                "estado_deudor": estado_existente.get(rut, _clean_text(row.estado_deudor) or "Sin Gestión"),
+                "estado_deudor": estado_existente.get(rut, ""),
+                "estados_fuente": set(),
                 "source_file": "",
                 "periodo_carga": "",
             },
@@ -666,10 +926,28 @@ def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
         if expediente:
             g["expedientes"].add(expediente)
 
-        periodo = _yyyymm_from_date(row.fecha_emision) or _clean_text(getattr(row, "periodo_carga", ""))
-        if periodo:
-            g["max_emision_ok"].append(periodo)
-            g["min_emision_ok"].append(periodo)
+        id_deuda = _clean_text(getattr(row, "id_deuda", ""))
+        if id_deuda:
+            g["id_deudas"] += 1
+
+        estado_fuente = _clean_text(row.estado_deudor)
+        if estado_fuente:
+            g["estados_fuente"].add(estado_fuente)
+
+        if empresa == "Cruz Blanca":
+            max_periodo = _yyyymm_from_date(getattr(row, "fecha_vencimiento", ""))
+            min_periodo = _yyyymm_from_date(row.fecha_emision)
+        elif empresa == "Colmena":
+            max_periodo = _yyyymm_from_date(getattr(row, "fecha_prestacion2", ""))
+            min_periodo = _yyyymm_from_date(row.fecha_emision)
+        else:
+            periodo = _yyyymm_from_date(row.fecha_emision) or _clean_text(getattr(row, "periodo_carga", ""))
+            max_periodo = periodo
+            min_periodo = periodo
+        if max_periodo:
+            g["max_emision_ok"].append(max_periodo)
+        if min_periodo:
+            g["min_emision_ok"].append(min_periodo)
 
         if not g["source_file"] and _clean_text(getattr(row, "source_file", "")):
             g["source_file"] = _clean_text(getattr(row, "source_file", ""))
@@ -686,6 +964,17 @@ def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
 
     resumen_objs = []
     for rut, g in grupos.items():
+        if not g["estado_deudor"]:
+            estados = g["estados_fuente"]
+            g["estado_deudor"] = (
+                next(iter(estados)) if len(estados) == 1
+                else ("Estado mixto" if estados else "Sin Gestión")
+            )
+        count_expedientes = (
+            int(g["id_deudas"])
+            if empresa in {"Cruz Blanca", "Colmena"}
+            else len(g["expedientes"])
+        )
         resumen_objs.append(
             DeudorResumen(
                 empresa=empresa,
@@ -695,7 +984,7 @@ def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
                 nombre_afiliado=g["nombre_afiliado"],
                 estado_deudor=g["estado_deudor"] or "Sin Gestión",
                 bn=g["bn"],
-                nro_expediente=str(len(g["expedientes"])) if g["expedientes"] else "",
+                nro_expediente=str(count_expedientes),
                 max_emision_ok=max(g["max_emision_ok"]) if g["max_emision_ok"] else "",
                 min_emision_ok=min(g["min_emision_ok"]) if g["min_emision_ok"] else "",
                 copago=float(g["copago"]),
@@ -712,14 +1001,22 @@ def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
     return len(resumen_objs)
 
 
-def _parse_import_content(*, empresa: str, content: bytes, source_file: str):
+def _parse_import_content(
+    *, empresa: str, content: bytes, source_file: str, column_mapping: dict | None = None
+):
     if empresa == "Cart-56":
         xls = pd.ExcelFile(BytesIO(content))
-        hoja = xls.sheet_names[0] if xls.sheet_names else 0
+        selected_sheet = str((column_mapping or {}).get("sheet_name", "")).strip()
+        hoja = selected_sheet or (xls.sheet_names[0] if xls.sheet_names else 0)
+        if selected_sheet and selected_sheet not in xls.sheet_names:
+            raise ValueError(f"No se encontró la hoja seleccionada '{selected_sheet}'.")
         df_raw = _normalize_dataframe(pd.read_excel(BytesIO(content), sheet_name=hoja, dtype=str))
+        df_raw = _apply_column_mapping(df_raw, column_mapping)
         df_resumen, df_detalle = _transform_cart56_raw(df_raw)
+    elif empresa in {"Cruz Blanca", "Colmena"}:
+        df_resumen, df_detalle = _read_isapre_excel(content, empresa, column_mapping)
     else:
-        df_resumen, df_detalle = _read_general_excel(content)
+        df_resumen, df_detalle = _read_general_excel(content, column_mapping)
     periodo = _periodo_from_source_or_df(source_file, df_resumen, df_detalle)
     return df_resumen, df_detalle, periodo
 
@@ -741,6 +1038,7 @@ def preview_deudores_excel_service(
     empresa: str,
     content: bytes,
     source_file: str,
+    column_mapping: dict | None = None,
 ) -> dict:
     empresa_txt = _clean_text(empresa)
     if empresa_txt not in EMPRESAS_VALIDAS:
@@ -749,7 +1047,10 @@ def preview_deudores_excel_service(
         raise ValueError("El archivo recibido está vacío.")
 
     df_resumen, df_detalle, periodo = _parse_import_content(
-        empresa=empresa_txt, content=content, source_file=source_file
+        empresa=empresa_txt,
+        content=content,
+        source_file=source_file,
+        column_mapping=column_mapping,
     )
     detalle_objs = _build_detalle_objects(df_detalle, empresa_txt, source_file, periodo)
     existentes = db.query(DeudorDetalle).filter(DeudorDetalle.empresa == empresa_txt).all()
@@ -826,6 +1127,7 @@ def import_deudores_excel_service(
     executor: User,
     expected_file_sha256: str,
     confirm_birlados: bool,
+    column_mapping: dict | None = None,
 ) -> dict:
     empresa_txt = str(empresa or "").strip()
     if empresa_txt not in EMPRESAS_VALIDAS:
@@ -840,7 +1142,10 @@ def import_deudores_excel_service(
     _reparar_estado_inconsistente_empresa(db, empresa_txt)
 
     df_resumen, df_detalle, periodo_carga = _parse_import_content(
-        empresa=empresa_txt, content=content, source_file=source_file
+        empresa=empresa_txt,
+        content=content,
+        source_file=source_file,
+        column_mapping=column_mapping,
     )
 
     existentes_detalle = (
@@ -920,13 +1225,29 @@ def import_deudores_excel_service(
         existente.bn = nuevo.bn or existente.bn
         existente.telefono_fijo_afiliado = nuevo.telefono_fijo_afiliado or existente.telefono_fijo_afiliado
         existente.telefono_movil_afiliado = nuevo.telefono_movil_afiliado or existente.telefono_movil_afiliado
+        existente.direccion_deudor = nuevo.direccion_deudor or existente.direccion_deudor
+        existente.comuna_deudor = nuevo.comuna_deudor or existente.comuna_deudor
+        existente.ciudad_deudor = nuevo.ciudad_deudor or existente.ciudad_deudor
+        existente.id_deuda = nuevo.id_deuda or existente.id_deuda
         existente.fecha_emision = nuevo.fecha_emision or existente.fecha_emision
+        existente.fecha_vencimiento = nuevo.fecha_vencimiento or existente.fecha_vencimiento
+        existente.prestador = nuevo.prestador or existente.prestador
+        existente.fecha_prestacion = nuevo.fecha_prestacion or existente.fecha_prestacion
+        existente.fecha_prestacion2 = nuevo.fecha_prestacion2 or existente.fecha_prestacion2
         existente.cart56_fecha_recep = nuevo.cart56_fecha_recep or existente.cart56_fecha_recep
         existente.cart56_fecha_recep_isa = nuevo.cart56_fecha_recep_isa or existente.cart56_fecha_recep_isa
         existente.cart56_dias_pagar = nuevo.cart56_dias_pagar or existente.cart56_dias_pagar
         existente.cart56_mto_pagar = float(nuevo.cart56_mto_pagar or existente.cart56_mto_pagar or 0)
         existente.mail_emp = nuevo.mail_emp or existente.mail_emp
         existente.telefono_empleador = nuevo.telefono_empleador or existente.telefono_empleador
+        existente.monto_total = float(nuevo.monto_total or existente.monto_total or 0)
+        existente.monto_cobrar = float(nuevo.monto_cobrar or existente.monto_cobrar or 0)
+        existente.monto_facturado = float(nuevo.monto_facturado or existente.monto_facturado or 0)
+        existente.monto_liquidado = float(nuevo.monto_liquidado or existente.monto_liquidado or 0)
+        existente.monto_pagado_parcial = float(nuevo.monto_pagado_parcial or existente.monto_pagado_parcial or 0)
+        existente.monto_condonado = float(nuevo.monto_condonado or existente.monto_condonado or 0)
+        existente.monto_gestionado = float(nuevo.monto_gestionado or existente.monto_gestionado or 0)
+        existente.cuota_acordada = float(nuevo.cuota_acordada or existente.cuota_acordada or 0)
         existente.source_file = source_file or existente.source_file
         existente.periodo_carga = periodo_carga or existente.periodo_carga
         existente.is_active = True

@@ -9,7 +9,7 @@ from time import sleep
 
 import pandas as pd
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox, QWidget, QLabel, QComboBox, QTableWidgetItem
+from PyQt6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QWidget, QLabel, QComboBox, QTableWidgetItem
 
 from core.excel_export import write_excel_report
 from core.paths import get_data_dir, get_exports_dir
@@ -37,6 +37,7 @@ from auth.auth_service import (
     backend_marcar_gestion_asignada_realizada,
 )
 from .detalle_dialog import DetalleDeudorDialog
+from .import_mapping_dialog import ImportColumnMappingDialog, apply_column_mapping
 from .gestiones_db import (
     ESTADO_DEUDOR_DEFAULT,
     TABLA,
@@ -725,6 +726,22 @@ class DeudoresWidget(QWidget):
                 "BN": str(item.get("bn", "")).strip(),
                 "telefono_fijo_afiliado": str(item.get("telefono_fijo_afiliado", "")).strip(),
                 "telefono_movil_afiliado": str(item.get("telefono_movil_afiliado", "")).strip(),
+                "Direccion_Deudor": str(item.get("direccion_deudor", "")).strip(),
+                "Comuna_Deudor": str(item.get("comuna_deudor", "")).strip(),
+                "Ciudad_Deudor": str(item.get("ciudad_deudor", "")).strip(),
+                "ID_Deuda": str(item.get("id_deuda", "")).strip(),
+                "Fecha_Vencimiento": str(item.get("fecha_vencimiento", "")).strip(),
+                "Prestador": str(item.get("prestador", "")).strip(),
+                "Fecha_Prestacion": str(item.get("fecha_prestacion", "")).strip(),
+                "Fecha_Prestacion2": str(item.get("fecha_prestacion2", "")).strip(),
+                "Monto_Total": item.get("monto_total", 0),
+                "Monto_Cobrar": item.get("monto_cobrar", item.get("copago", 0)),
+                "Monto_Facturado": item.get("monto_facturado", 0),
+                "Monto_Liquidado": item.get("monto_liquidado", 0),
+                "Monto_Pagado_Parcial": item.get("monto_pagado_parcial", 0),
+                "Monto_Condonado": item.get("monto_condonado", 0),
+                "Monto_Gestionado": item.get("monto_gestionado", 0),
+                "Cuota_Acordada": item.get("cuota_acordada", 0),
                 "Nro_Expediente": str(item.get("nro_expediente", "")).strip(),
                 "Fecha_Emision": str(item.get("fecha_emision", "")).strip(),
                 "Copago": item.get("copago", 0),
@@ -762,9 +779,11 @@ class DeudoresWidget(QWidget):
         }
         return df_detalle, fila_resumen
 
-    def _cache_cart56_detalle_desde_excel(self, excel_path: str) -> None:
+    def _cache_cart56_detalle_desde_excel(self, excel_path: str, column_mapping: dict | None = None) -> None:
         try:
-            df_raw = pd.read_excel(excel_path, sheet_name=0, dtype=str).fillna("")
+            sheet_name = (column_mapping or {}).get("sheet_name", 0)
+            df_raw = pd.read_excel(excel_path, sheet_name=sheet_name, dtype=str).fillna("")
+            df_raw = apply_column_mapping(df_raw, column_mapping)
             _, df_detalle = transformar_cart56_raw(df_raw)
             self._cart56_detalle_cache_df = df_detalle.copy().fillna("")
             # Persistimos este detalle en la DB local para reutilizarlo entre sesiones/usuarios.
@@ -1322,6 +1341,15 @@ class DeudoresWidget(QWidget):
             QMessageBox.warning(self, "Acceso restringido", "No puedes cargar bases de una empresa no asignada.")
             return
 
+        try:
+            mapping_dialog = ImportColumnMappingDialog(path, empresa, self)
+        except ValueError as exc:
+            QMessageBox.critical(self, "No se pudo leer el archivo", str(exc))
+            return
+        if mapping_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        column_mapping = mapping_dialog.mapping_payload()
+
         if not self._usa_backend_deudores() and base_deudores_ya_cargada(empresa, path):
             QMessageBox.warning(
                 self,
@@ -1333,13 +1361,13 @@ class DeudoresWidget(QWidget):
 
         if self._usa_backend_deudores():
             if str(empresa).strip().lower() == "cart-56":
-                self._cache_cart56_detalle_desde_excel(path)
+                self._cache_cart56_detalle_desde_excel(path, column_mapping)
 
             self.sidebar.progress.setVisible(True)
             self.sidebar.progress.setValue(8)
             self._set_loading(True)
             preview, preview_err = backend_preview_import_deudores(
-                self._session, empresa=empresa, excel_path=path
+                self._session, empresa=empresa, excel_path=path, column_mapping=column_mapping
             )
             if preview_err or not preview:
                 self._set_loading(False)
@@ -1421,6 +1449,7 @@ class DeudoresWidget(QWidget):
                 excel_path=path,
                 expected_file_sha256=str(preview.get("file_sha256", "")),
                 confirm_birlados=True,
+                column_mapping=column_mapping,
             )
             if err:
                 # Reintento corto para absorber latencias/transientes de red/backend.
@@ -1432,6 +1461,7 @@ class DeudoresWidget(QWidget):
                     excel_path=path,
                     expected_file_sha256=str(preview.get("file_sha256", "")),
                     confirm_birlados=True,
+                    column_mapping=column_mapping,
                 )
                 if not err_retry:
                     err = ""
@@ -1543,7 +1573,12 @@ class DeudoresWidget(QWidget):
         self.sidebar.progress.setVisible(True)
         self.sidebar.progress.setValue(0)
 
-        self._worker = CargaDeudoresWorker(CargaDeudoresParams(excel_path=path, empresa=empresa))
+        self._worker = CargaDeudoresWorker(CargaDeudoresParams(
+            excel_path=path,
+            empresa=empresa,
+            sheet_name=str(column_mapping.get("sheet_name", "")),
+            column_mapping=column_mapping,
+        ))
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(self._on_loaded)
         self._worker.failed.connect(self._on_error)

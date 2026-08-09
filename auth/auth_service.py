@@ -6,8 +6,7 @@
 from __future__ import annotations
 
 import os
-import base64
-import mimetypes
+import json
 import re
 import sys
 import time
@@ -40,7 +39,8 @@ __all__ = [
     "backend_list_deudores", "backend_get_deudor_detalle",
     "backend_list_destinatarios",
     "backend_import_deudores",
-    "backend_list_gestiones", "backend_create_gestion", "backend_delete_gestion", "backend_register_pago", "backend_update_deudor_cliente",
+    "backend_list_gestiones", "backend_create_gestion", "backend_create_gestion_con_estado",
+    "backend_delete_gestion", "backend_register_pago", "backend_update_deudor_cliente",
     "backend_list_mis_gestiones_asignadas", "backend_marcar_gestion_asignada_realizada",
     "backend_get_user_carteras", "backend_list_cartera_asignaciones", "backend_save_cartera_asignaciones", "backend_list_all_gestiones",
     "backend_clear_empresa_deudores", "backend_clear_all_deudores", "backend_clear_all_gestiones", "backend_delete_deudor_individual",
@@ -615,6 +615,7 @@ def backend_import_deudores(
     excel_path: str,
     expected_file_sha256: str,
     confirm_birlados: bool = False,
+    column_mapping: dict | None = None,
 ) -> Tuple[dict | None, str]:
     try:
         token = _require_backend_token(session)
@@ -627,6 +628,7 @@ def backend_import_deudores(
                     "empresa": empresa,
                     "expected_file_sha256": expected_file_sha256,
                     "confirm_birlados": "true" if confirm_birlados else "false",
+                    "column_mapping_json": json.dumps(column_mapping or {}, ensure_ascii=False),
                 },
                 files={
                     "file": (
@@ -650,6 +652,7 @@ def backend_preview_import_deudores(
     *,
     empresa: str,
     excel_path: str,
+    column_mapping: dict | None = None,
 ) -> Tuple[dict | None, str]:
     try:
         token = _require_backend_token(session)
@@ -658,7 +661,10 @@ def backend_preview_import_deudores(
             data = _http_multipart_auth(
                 "/deudores/import/preview",
                 token=token,
-                data={"empresa": empresa},
+                data={
+                    "empresa": empresa,
+                    "column_mapping_json": json.dumps(column_mapping or {}, ensure_ascii=False),
+                },
                 files={"file": (filename, fh, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
             )
         return data if isinstance(data, dict) else None, ""
@@ -763,7 +769,7 @@ def backend_list_all_gestiones(
         return [], _friendly_backend_error(exc)
 
 
-def backend_create_gestion(
+def backend_create_gestion_con_estado(
     session: UserSession,
     *,
     rut: str,
@@ -775,7 +781,13 @@ def backend_create_gestion(
     observacion: str = "",
     origen: str = "manual",
     assigned_to_user_id: int | None = None,
-) -> Tuple[dict | None, str]:
+) -> Tuple[dict | None, str, bool]:
+    """Crea una gestion en el backend.
+
+    Devuelve (datos, error, sin_conexion). El tercer valor distingue una caida
+    de red -donde la gestion puede reintentarse tal cual- de un rechazo del
+    backend por reglas de negocio, que reintentar no arreglaria.
+    """
     try:
         data = _http_request_auth(
             "POST",
@@ -792,11 +804,41 @@ def backend_create_gestion(
                 "assigned_to_user_id": assigned_to_user_id,
             },
         )
-        return data if isinstance(data, dict) else None, ""
+        return data if isinstance(data, dict) else None, "", False
     except ValueError as exc:
-        return None, str(exc)
+        return None, str(exc), False
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        return None, _friendly_backend_error(exc), True
     except requests.RequestException as exc:
-        return None, _friendly_backend_error(exc)
+        return None, _friendly_backend_error(exc), False
+
+
+def backend_create_gestion(
+    session: UserSession,
+    *,
+    rut: str,
+    empresa: str,
+    nombre_afiliado: str,
+    tipo_gestion: str,
+    estado: str,
+    fecha_gestion: str,
+    observacion: str = "",
+    origen: str = "manual",
+    assigned_to_user_id: int | None = None,
+) -> Tuple[dict | None, str]:
+    data, err, _ = backend_create_gestion_con_estado(
+        session,
+        rut=rut,
+        empresa=empresa,
+        nombre_afiliado=nombre_afiliado,
+        tipo_gestion=tipo_gestion,
+        estado=estado,
+        fecha_gestion=fecha_gestion,
+        observacion=observacion,
+        origen=origen,
+        assigned_to_user_id=assigned_to_user_id,
+    )
+    return data, err
 
 
 def backend_delete_gestion(
@@ -864,7 +906,6 @@ def backend_register_pago(
     fecha_efectiva: str = "",
     idempotency_key: str = "",
     distribucion: list[dict] | None = None,
-    comprobante_path: str = "",
 ) -> Tuple[dict | None, str]:
     try:
         payload = {
@@ -879,15 +920,6 @@ def backend_register_pago(
         }
         if detalle_id not in (None, ""):
             payload["detalle_id"] = int(detalle_id)
-        if comprobante_path:
-            receipt_path = Path(comprobante_path)
-            content = receipt_path.read_bytes()
-            if len(content) > 5 * 1024 * 1024:
-                raise ValueError("El comprobante no puede superar 5 MB.")
-            payload["comprobante_nombre"] = receipt_path.name
-            payload["comprobante_tipo"] = mimetypes.guess_type(receipt_path.name)[0] or "application/octet-stream"
-            payload["comprobante_base64"] = base64.b64encode(content).decode("ascii")
-
         data = _http_request_auth(
             "POST",
             f"/deudores/{rut}/pagos",
@@ -984,6 +1016,9 @@ def backend_update_deudor_cliente(
     correo_excel: str = "",
     telefono_fijo: str = "",
     telefono_movil: str = "",
+    direccion: str = "",
+    comuna: str = "",
+    ciudad: str = "",
 ) -> Tuple[dict | None, str]:
     try:
         data = _http_request_auth(
@@ -998,6 +1033,9 @@ def backend_update_deudor_cliente(
                 "correo_excel": correo_excel.strip(),
                 "telefono_fijo": telefono_fijo.strip(),
                 "telefono_movil": telefono_movil.strip(),
+                "direccion": direccion.strip(),
+                "comuna": comuna.strip(),
+                "ciudad": ciudad.strip(),
             },
         )
         return data if isinstance(data, dict) else None, ""

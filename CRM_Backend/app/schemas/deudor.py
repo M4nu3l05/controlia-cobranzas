@@ -56,11 +56,27 @@ class DeudorDetalleItem(BaseModel):
     bn: str
     telefono_fijo_afiliado: str
     telefono_movil_afiliado: str
+    direccion_deudor: str = ""
+    comuna_deudor: str = ""
+    ciudad_deudor: str = ""
     nro_expediente: str
+    id_deuda: str = ""
     fecha_emision: str
+    fecha_vencimiento: str = ""
+    prestador: str = ""
+    fecha_prestacion: str = ""
+    fecha_prestacion2: str = ""
     copago: float
     total_pagos: float
     saldo_actual: float
+    monto_total: float = 0
+    monto_cobrar: float = 0
+    monto_facturado: float = 0
+    monto_liquidado: float = 0
+    monto_pagado_parcial: float = 0
+    monto_condonado: float = 0
+    monto_gestionado: float = 0
+    cuota_acordada: float = 0
     cart56_fecha_recep: str
     cart56_fecha_recep_isa: str
     cart56_dias_pagar: str
@@ -158,6 +174,9 @@ class ActualizarClienteRequest(BaseModel):
     correo_excel: str = ""
     telefono_fijo: str = ""
     telefono_movil: str = ""
+    direccion: str = ""
+    comuna: str = ""
+    ciudad: str = ""
 
 
 class ActualizarClienteResponse(BaseModel):
@@ -170,6 +189,9 @@ class ActualizarClienteResponse(BaseModel):
     bn: str
     telefono_fijo_afiliado: str
     telefono_movil_afiliado: str
+    direccion_deudor: str = ""
+    comuna_deudor: str = ""
+    ciudad_deudor: str = ""
 
 
 class DashboardCompanyItem(BaseModel):

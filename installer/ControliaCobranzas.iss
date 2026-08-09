@@ -2,10 +2,10 @@
 ; Requiere tener compilado: dist\ControliaCobranzas\ControliaCobranzas.exe
 
 #define MyAppName "Controlia Cobranzas"
-#define MyAppVersion "2.0.4"
+#define MyAppVersion "2.1.0"
 #define MyAppPublisher "Controlia"
 #define MyAppExeName "ControliaCobranzas.exe"
-#define MyAppId "{{1D6E7720-33C0-4745-BFB7-C1EC5A46A57C}"
+#define MyAppId "{1D6E7720-33C0-4745-BFB7-C1EC5A46A57C}"
 #define MyAppIconFile "..\assets\app_icon.ico"
 
 [Setup]
@@ -92,7 +92,7 @@ begin
   PrivacyAccepted.Left := 0;
   PrivacyAccepted.Top := PrivacyMemo.Height + 12;
   PrivacyAccepted.Width := PrivacyPage.SurfaceWidth;
-  PrivacyAccepted.Caption := 'He leído y acepto la Política de Privacidad.';
+  PrivacyAccepted.Caption := 'He leído y acepto la Política de Privacidad y Confidencialidad.';
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

@@ -120,12 +120,17 @@ def _migration_5_legacy_debtor_compatibility(db: Session) -> None:
             ))
 
 
+def _migration_6_isapre_debt_fields(db: Session) -> None:
+    ensure_deudores_optional_columns(db)
+
+
 MIGRATIONS = (
     BackendMigration(1, "Registrar y completar el esquema CRM heredado", _migration_1_legacy_schema),
     BackendMigration(2, "Auditoría, notificaciones, derivaciones y reemplazos", _migration_2_operations),
     BackendMigration(3, "Libro financiero inmutable de pagos", _migration_3_payment_ledger),
     BackendMigration(4, "Control de cargas mensuales y transiciones a Birlado", _migration_4_monthly_import_control),
     BackendMigration(5, "Compatibilidad con campos históricos de carteras", _migration_5_legacy_debtor_compatibility),
+    BackendMigration(6, "Campos de deuda para Cruz Blanca y Colmena", _migration_6_isapre_debt_fields),
 )
 
 

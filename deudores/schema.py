@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 import unicodedata
 from typing import Iterable
 
@@ -242,11 +243,15 @@ def _parse_monto(valor) -> float:
     txt = txt.replace("$", "").replace(" ", "")
 
     if "." in txt and "," not in txt:
-        txt = txt.replace(".", "")
+        if not re.fullmatch(r"-?\d+\.\d{1,2}", txt):
+            txt = txt.replace(".", "")
     elif "," in txt and "." in txt:
         txt = txt.replace(".", "").replace(",", ".")
     elif "," in txt:
-        txt = txt.replace(".", "").replace(",", ".")
+        if re.fullmatch(r"-?\d+,\d{1,2}", txt):
+            txt = txt.replace(",", ".")
+        else:
+            txt = txt.replace(",", "")
 
     try:
         return float(txt)
@@ -266,7 +271,10 @@ def _yyyymm_desde_fecha(valor) -> str:
     if not txt:
         return ""
 
-    ts = pd.to_datetime(txt, errors="coerce", dayfirst=True)
+    if re.match(r"^\d{4}-\d{2}-\d{2}", txt):
+        ts = pd.to_datetime(txt, errors="coerce", yearfirst=True)
+    else:
+        ts = pd.to_datetime(txt, errors="coerce", dayfirst=True)
     if pd.isna(ts):
         return ""
     return ts.strftime("%Y%m")
@@ -277,7 +285,10 @@ def _normalizar_fecha(val) -> str:
     if not txt:
         return ""
 
-    ts = pd.to_datetime(txt, errors="coerce", dayfirst=True)
+    if re.match(r"^\d{4}-\d{2}-\d{2}", txt):
+        ts = pd.to_datetime(txt, errors="coerce", yearfirst=True)
+    else:
+        ts = pd.to_datetime(txt, errors="coerce", dayfirst=True)
     if pd.isna(ts):
         return txt
     return ts.strftime("%d/%m/%Y")
@@ -452,6 +463,139 @@ def transformar_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataF
     )
 
     return resumen.fillna(""), df_detalle.fillna("")
+
+
+def _estado_isapre(valor) -> str:
+    estado = _valor_limpio(valor)
+    norm = _normalizar_nombre_columna(estado)
+    if norm == "pagado":
+        return "Pagado"
+    if norm == "fallecido":
+        return "Fallecido"
+    if estado in {"0.05", "5%", "5,0%"} or norm in {"005", "5"}:
+        return "SE ACOGE AL 5%"
+    return estado or "Sin Gestión"
+
+
+def transformar_isapre_raw(df_raw: pd.DataFrame, empresa: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    empresa = str(empresa or "").strip()
+    if empresa not in {"Cruz Blanca", "Colmena"}:
+        raise ValueError("El transformador solo admite Cruz Blanca o Colmena.")
+    if df_raw is None or df_raw.empty:
+        raise ValueError(f"La base de {empresa} está vacía.")
+
+    df = df_raw.copy().fillna("")
+    df = df.rename(columns={column: str(column).strip() for column in df.columns})
+    requeridas = {
+        "Cruz Blanca": ["Mandante", "RUT_Deudor", "Nombre_Deudor", "Estado_Gestion", "Fecha_Emision_Deuda", "Fecha_Vencimiento_Deuda", "Monto_Cobrar"],
+        "Colmena": ["Mandante", "RUT_Deudor", "Nombre_Deudor", "Estado_Caso", "Fecha_Emision", "Fecha_Prestacion", "Monto_Cobrar"],
+    }[empresa]
+    faltantes = [col for col in requeridas if not _buscar_columna(df, [col])]
+    if faltantes:
+        raise ValueError(f"La base de {empresa} no contiene las columnas requeridas: {', '.join(faltantes)}.")
+
+    def valor(row, nombre: str):
+        columna = _buscar_columna(df, [nombre])
+        return row.get(columna, "") if columna else ""
+
+    detalle: list[dict] = []
+    for index, row in df.iterrows():
+        rut, dv = _normalizar_rut_dv(valor(row, "RUT_Deudor"))
+        if not rut:
+            continue
+        rut_completo = f"{rut}-{dv}" if dv else rut
+        id_deuda = _valor_limpio(valor(row, "ID_Deuda"))
+        if id_deuda:
+            expediente = id_deuda
+        else:
+            semilla = "|".join([
+                rut, _valor_limpio(valor(row, "Fecha_Emision_Deuda")),
+                _valor_limpio(valor(row, "Fecha_Prestacion")),
+                _valor_limpio(valor(row, "Prestador")),
+                _valor_limpio(valor(row, "Monto_Cobrar")), str(index),
+            ])
+            expediente = "SIN-ID-" + hashlib.sha1(semilla.encode("utf-8")).hexdigest()[:12].upper()
+
+        if empresa == "Cruz Blanca":
+            estado = _estado_isapre(valor(row, "Estado_Gestion"))
+            fecha_emision = _normalizar_fecha(valor(row, "Fecha_Emision_Deuda"))
+            fecha_vencimiento = _normalizar_fecha(valor(row, "Fecha_Vencimiento_Deuda"))
+            fecha_prestacion = _normalizar_fecha(valor(row, "Fecha_Prestacion"))
+            fecha_prestacion2 = _normalizar_fecha(valor(row, "Fecha_Prestacion2"))
+            telefono = _valor_limpio(valor(row, "Telefono3_Deudor"))
+            tel_fijo = telefono
+            tel_movil = telefono
+            max_emision = _yyyymm_desde_fecha(fecha_vencimiento)
+        else:
+            estado = _estado_isapre(valor(row, "Estado_Caso"))
+            fecha_emision = _normalizar_fecha(valor(row, "Fecha_Emision"))
+            fecha_vencimiento = ""
+            fecha_prestacion = fecha_emision
+            fecha_prestacion2 = _normalizar_fecha(valor(row, "Fecha_Prestacion"))
+            tel_fijo = _valor_limpio(valor(row, "Telefono1_Deudor"))
+            tel_movil = _valor_limpio(valor(row, "Telefono2_Deudor"))
+            max_emision = _yyyymm_desde_fecha(fecha_prestacion2)
+
+        nombre = _valor_limpio(valor(row, "Nombre_Deudor"))
+        correo = _valor_limpio(valor(row, "Email_Deudor"))
+        monto_cobrar = _parse_monto(valor(row, "Monto_Cobrar"))
+        detalle.append({
+            "Rut_Afiliado": rut,
+            "Dv": dv,
+            "_RUT_COMPLETO": rut_completo,
+            "Nombre_Afiliado": nombre,
+            "Nombre Afil": nombre,
+            "RUT Afil": rut_completo,
+            "Estado_deudor": estado,
+            "BN": correo,
+            "mail_afiliado": correo,
+            "telefono_fijo_afiliado": tel_fijo,
+            "telefono_movil_afiliado": tel_movil,
+            "Direccion_Deudor": _valor_limpio(valor(row, "Direccion_Deudor")),
+            "Comuna_Deudor": _valor_limpio(valor(row, "Comuna_Deudor")),
+            "Ciudad_Deudor": _valor_limpio(valor(row, "Ciudad_Deudor")),
+            "Nro_Expediente": expediente,
+            "ID_Deuda": id_deuda,
+            "Fecha_Emision": fecha_emision,
+            "Fecha_Vencimiento": fecha_vencimiento,
+            "Fecha_Prestacion": fecha_prestacion,
+            "Fecha_Prestacion2": fecha_prestacion2,
+            "Prestador": _valor_limpio(valor(row, "Prestador")),
+            "MAX_Emision_ok": max_emision,
+            "MIN_Emision_ok": _yyyymm_desde_fecha(fecha_emision),
+            "Copago": _monto_a_texto(monto_cobrar),
+            "Total_Pagos": "0",
+            "Saldo_Actual": _monto_a_texto(monto_cobrar),
+            "Monto_Total": _monto_a_texto(_parse_monto(valor(row, "Monto_Total"))),
+            "Monto_Cobrar": _monto_a_texto(monto_cobrar),
+            "Monto_Facturado": _monto_a_texto(_parse_monto(valor(row, "Monto_Facturado"))),
+            "Monto_Liquidado": _monto_a_texto(_parse_monto(valor(row, "Monto_Liquidado"))),
+            "Monto_Pagado_Parcial": _monto_a_texto(_parse_monto(valor(row, "Monto_Pagado_Parcial"))),
+            "Monto_Condonado": _monto_a_texto(_parse_monto(valor(row, "Monto_Condonado"))),
+            "Monto_Gestionado": _monto_a_texto(_parse_monto(valor(row, "Monto_Gestionado"))),
+            "Cuota_Acordada": _monto_a_texto(_parse_monto(valor(row, "Cuota_Acordada"))),
+        })
+
+    df_detalle = pd.DataFrame(detalle).fillna("")
+    resumen_rows: list[dict] = []
+    for (_, _), group in df_detalle.groupby(["Rut_Afiliado", "Dv"], dropna=False, sort=False):
+        first = group.iloc[0]
+        estados = {_valor_limpio(value) for value in group["Estado_deudor"] if _valor_limpio(value)}
+        ids = [_valor_limpio(value) for value in group["ID_Deuda"] if _valor_limpio(value)]
+        maximos = [_valor_limpio(value) for value in group["MAX_Emision_ok"] if _valor_limpio(value)]
+        minimos = [_valor_limpio(value) for value in group["MIN_Emision_ok"] if _valor_limpio(value)]
+        resumen_rows.append({
+            "Rut_Afiliado": first["Rut_Afiliado"], "Dv": first["Dv"],
+            "_RUT_COMPLETO": first["_RUT_COMPLETO"], "Nombre_Afiliado": first["Nombre_Afiliado"],
+            "Estado_deudor": next(iter(estados)) if len(estados) == 1 else "Estado mixto",
+            "BN": _primer_no_vacio(group["BN"]), "Nro_Expediente": str(len(ids)),
+            "MAX_Emision_ok": max(maximos) if maximos else "",
+            "MIN_Emision_ok": min(minimos) if minimos else "",
+            "Copago": _monto_a_texto(sum(_parse_monto(value) for value in group["Copago"])),
+            "Total_Pagos": "0",
+            "Saldo_Actual": _monto_a_texto(sum(_parse_monto(value) for value in group["Saldo_Actual"])),
+        })
+    return pd.DataFrame(resumen_rows).fillna(""), df_detalle
 
 
 # ================================================================

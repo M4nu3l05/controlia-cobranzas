@@ -81,6 +81,58 @@ COLUMNAS_DETALLE_FECHA_BASE: list[str] = [
     "Fecha Pago",
 ]
 
+CAMPOS_CLIENTE_ISAPRE: list[tuple[str, str]] = [
+    ("RUT", "_RUT_COMPLETO"),
+    ("Nombre", "Nombre_Afiliado"),
+    ("Correo", "mail_afiliado"),
+    ("Correo (Excel)", "BN"),
+    ("Teléfono Fijo", "telefono_fijo_afiliado"),
+    ("Teléfono Móvil", "telefono_movil_afiliado"),
+    ("Dirección", "Direccion_Deudor"),
+    ("Comuna", "Comuna_Deudor"),
+    ("Ciudad", "Ciudad_Deudor"),
+]
+
+COLUMNAS_DETALLE_DEUDA_CRUZ_BLANCA: list[tuple[str, str]] = [
+    ("No Licencia", "ID_Deuda"),
+    ("Nombre Afil", "Nombre Afil"),
+    ("RUT Afil", "RUT Afil"),
+    ("Fecha_Prestacion", "Fecha_Prestacion"),
+    ("Fecha_Prestacion2", "Fecha_Prestacion2"),
+    ("Prestador", "Prestador"),
+    ("Mto Pagar", "Monto_Total"),
+    ("Monto_Cobrar", "Monto_Cobrar"),
+    ("Monto_Facturado", "Monto_Facturado"),
+    ("Monto_Liquidado", "Monto_Liquidado"),
+    ("Monto_Pagado_Parcial", "Monto_Pagado_Parcial"),
+    ("Monto_Condonado", "Monto_Condonado"),
+    ("Monto_Gestionado", "Monto_Gestionado"),
+    ("Cuota_Acordada", "Cuota_Acordada"),
+    ("Pagos", "Total_Pagos"),
+    ("Saldo Actual", "Saldo_Actual"),
+    ("Correo", "mail_afiliado"),
+]
+
+COLUMNAS_DETALLE_DEUDA_COLMENA: list[tuple[str, str]] = [
+    ("No Licencia", "ID_Deuda"),
+    ("Nombre Afil", "Nombre Afil"),
+    ("RUT Afil", "RUT Afil"),
+    ("Fecha_Prestacion", "Fecha_Prestacion"),
+    ("Fecha_Prestacion2", "Fecha_Prestacion2"),
+    ("Prestador", "Prestador"),
+    ("Mto Pagar", "Monto_Total"),
+    ("Monto_Cobrar", "Monto_Cobrar"),
+    ("Monto_Facturado", "__NA__"),
+    ("Monto_Liquidado", "__NA__"),
+    ("Monto_Pagado_Parcial", "__NA__"),
+    ("Monto_Condonado", "__NA__"),
+    ("Monto_Gestionado", "__NA__"),
+    ("Cuota_Acordada", "__NA__"),
+    ("Pagos", "Total_Pagos"),
+    ("Saldo Actual", "Saldo_Actual"),
+    ("Correo", "mail_afiliado"),
+]
+
 COLUMNAS_DETALLE_NUMERICAS_CART56: list[str] = [
     "Copago",
     "Total_Pagos",
@@ -91,6 +143,16 @@ COLUMNAS_DETALLE_FECHA_CART56: list[str] = [
     "Cart56_Fecha_Recep",
     "Cart56_Fecha_Recep_ISA",
     "Fecha Pago",
+]
+
+COLUMNAS_DETALLE_NUMERICAS_ISAPRE: list[str] = [
+    "Monto_Total", "Monto_Cobrar", "Monto_Facturado", "Monto_Liquidado",
+    "Monto_Pagado_Parcial", "Monto_Condonado", "Monto_Gestionado",
+    "Cuota_Acordada", "Total_Pagos", "Saldo_Actual",
+]
+
+COLUMNAS_DETALLE_FECHA_ISAPRE: list[str] = [
+    "Fecha_Prestacion", "Fecha_Prestacion2",
 ]
 
 COLUMNAS_DETALLE_NUMERICAS: list[str] = list(COLUMNAS_DETALLE_NUMERICAS_BASE)
@@ -105,6 +167,16 @@ def _configurar_layout_detalle_para_empresa(empresa: str) -> None:
         COLUMNAS_DETALLE_DEUDA[:] = COLUMNAS_DETALLE_DEUDA_CART56
         COLUMNAS_DETALLE_NUMERICAS[:] = COLUMNAS_DETALLE_NUMERICAS_CART56
         COLUMNAS_DETALLE_FECHA[:] = COLUMNAS_DETALLE_FECHA_CART56
+    elif empresa_txt == "cruz blanca":
+        CAMPOS_CLIENTE[:] = CAMPOS_CLIENTE_ISAPRE
+        COLUMNAS_DETALLE_DEUDA[:] = COLUMNAS_DETALLE_DEUDA_CRUZ_BLANCA
+        COLUMNAS_DETALLE_NUMERICAS[:] = COLUMNAS_DETALLE_NUMERICAS_ISAPRE
+        COLUMNAS_DETALLE_FECHA[:] = COLUMNAS_DETALLE_FECHA_ISAPRE
+    elif empresa_txt == "colmena":
+        CAMPOS_CLIENTE[:] = CAMPOS_CLIENTE_ISAPRE
+        COLUMNAS_DETALLE_DEUDA[:] = COLUMNAS_DETALLE_DEUDA_COLMENA
+        COLUMNAS_DETALLE_NUMERICAS[:] = COLUMNAS_DETALLE_NUMERICAS_ISAPRE
+        COLUMNAS_DETALLE_FECHA[:] = COLUMNAS_DETALLE_FECHA_ISAPRE
     else:
         CAMPOS_CLIENTE[:] = CAMPOS_CLIENTE_BASE
         COLUMNAS_DETALLE_DEUDA[:] = COLUMNAS_DETALLE_DEUDA_BASE
@@ -364,7 +436,14 @@ def extraer_detalle_deudor(df_detalle_completo, rut: str):
         for hidden_col in ("_detalle_id", "id"):
             if hidden_col in row.index:
                 entrada[hidden_col] = _valor_limpio(row.get(hidden_col, ""))
+        entrada["_expediente_pago"] = _valor_limpio(row.get("Nro_Expediente", ""))
         for etq, col in COLUMNAS_DETALLE_DEUDA:
+            if col == "__NA__":
+                entrada[etq] = "N/A"
+                continue
+            if col == "ID_Deuda" and not _valor_limpio(row.get(col, "")):
+                entrada[etq] = "N/A"
+                continue
             if col == "mail_afiliado":
                 entrada[etq] = _resolver_email_fila(row)
             else:

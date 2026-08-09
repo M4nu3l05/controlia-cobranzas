@@ -1,12 +1,19 @@
 ﻿from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
 from core.paths import get_config_dir
 from core.runtime import resource_path
 
-from .constants import LEGAL_DIRNAME, PRIVACY_FILENAME, TERMS_FILENAME
+from .constants import (
+    LEGAL_DIRNAME,
+    PRIVACY_FILENAME,
+    PRIVACY_VERSION,
+    TERMS_FILENAME,
+    TERMS_VERSION,
+)
 
 
 def _decode_text(raw: bytes) -> str:
@@ -18,12 +25,17 @@ def _decode_text(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+def _packaged_paths(filename: str) -> list[Path]:
+    return [
+        Path(resource_path(str(Path(LEGAL_DIRNAME) / filename))),
+        Path(__file__).resolve().parents[1] / LEGAL_DIRNAME / filename,
+        Path.cwd() / LEGAL_DIRNAME / filename,
+    ]
+
+
 def _candidate_paths(filename: str) -> list[Path]:
     config_path = Path(get_config_dir()) / LEGAL_DIRNAME / filename
-    bundle_path = Path(resource_path(str(Path(LEGAL_DIRNAME) / filename)))
-    project_path = Path(__file__).resolve().parents[1] / LEGAL_DIRNAME / filename
-    cwd_path = Path.cwd() / LEGAL_DIRNAME / filename
-    return [config_path, bundle_path, project_path, cwd_path]
+    return [config_path, *_packaged_paths(filename)]
 
 
 def resolve_legal_file(filename: str) -> Path | None:
@@ -33,15 +45,35 @@ def resolve_legal_file(filename: str) -> Path | None:
     return None
 
 
+def _document_version(text: str) -> str:
+    match = re.search(r"Versión del documento:\s*([^\s]+)", text, flags=re.IGNORECASE)
+    return match.group(1).strip() if match else ""
+
+
+def _expected_version(filename: str) -> str:
+    if filename == TERMS_FILENAME:
+        return TERMS_VERSION
+    if filename == PRIVACY_FILENAME:
+        return PRIVACY_VERSION
+    return ""
+
+
 def _ensure_config_copy(filename: str) -> None:
     cfg_dir = Path(get_config_dir()) / LEGAL_DIRNAME
     cfg_dir.mkdir(parents=True, exist_ok=True)
     target = cfg_dir / filename
-    if target.exists():
-        return
 
-    source = resolve_legal_file(filename)
-    if source and source != target:
+    expected_version = _expected_version(filename)
+    if target.exists() and expected_version:
+        try:
+            current_text = _decode_text(target.read_bytes())
+            if _document_version(current_text) == expected_version:
+                return
+        except Exception:
+            pass
+
+    source = next((path for path in _packaged_paths(filename) if path.exists() and path.is_file()), None)
+    if source:
         try:
             shutil.copy2(source, target)
         except Exception:

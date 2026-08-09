@@ -28,6 +28,21 @@ from app.services.operations_service import (
 
 router = APIRouter(prefix="/operations", tags=["operations"])
 
+_FILENAME_SAFE_CHARS = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._- "
+)
+
+
+def _safe_header_filename(raw: str) -> str:
+    """Sanea el nombre para Content-Disposition.
+
+    El valor viene de la base de datos, por lo que cualquier caracter de control
+    (en especial CR/LF) permitiria inyectar cabeceras HTTP en la respuesta.
+    """
+    base = os.path.basename(str(raw or ""))
+    limpio = "".join(ch for ch in base if ch in _FILENAME_SAFE_CHARS).strip()
+    return limpio[:120] or "comprobante"
+
 
 @router.get("/payments/{transaction_public_id}/receipt")
 def download_payment_receipt(
@@ -45,7 +60,7 @@ def download_payment_receipt(
     ).first()
     if not receipt:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El pago no tiene comprobante adjunto.")
-    filename = os.path.basename(receipt.filename).replace('"', "") or "comprobante"
+    filename = _safe_header_filename(receipt.filename)
     return Response(
         content=receipt.content,
         media_type=receipt.content_type or "application/octet-stream",

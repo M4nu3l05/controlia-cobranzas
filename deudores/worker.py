@@ -13,11 +13,13 @@ import pandas as pd
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from .database import guardar_contactos, guardar_detalle, guardar_registros
+from .import_mapping_dialog import apply_column_mapping
 from .schema import (
     COLUMNAS_OBLIGATORIAS,
     HOJA_EXCEL,
     aplicar_schema,
     transformar_cart56_raw,
+    transformar_isapre_raw,
 )
 from .schema_detalle import HOJA_DETALLE
 
@@ -52,6 +54,7 @@ class CargaDeudoresParams:
     excel_path: str
     empresa: str          # "Colmena" | "Consalud" | "Cruz Blanca" | "Cart-56"
     sheet_name: str = ""  # vacío = usa HOJA_EXCEL de schema.py
+    column_mapping: dict | None = None
 
 
 class CargaDeudoresWorker(QThread):
@@ -72,6 +75,7 @@ class CargaDeudoresWorker(QThread):
         hoja_raw = p.sheet_name or (xls.sheet_names[0] if xls.sheet_names else 0)
 
         df_raw = pd.read_excel(p.excel_path, sheet_name=hoja_raw, dtype=str).fillna("")
+        df_raw = apply_column_mapping(df_raw, p.column_mapping)
         self.progress.emit(28, f"Cart-56: {len(df_raw):,} filas × {len(df_raw.columns)} columnas detectadas")
 
         self.progress.emit(45, "Transformando Cart-56 al esquema estándar del CRM…")
@@ -104,6 +108,7 @@ class CargaDeudoresWorker(QThread):
         self.progress.emit(10, "Leyendo hoja RESUMEN…")
         kwargs = {"sheet_name": hoja_resumen} if hoja_resumen else {}
         df = pd.read_excel(p.excel_path, dtype=str, **kwargs).fillna("")
+        df = apply_column_mapping(df, p.column_mapping)
         self.progress.emit(30, f"RESUMEN: {len(df):,} filas × {len(df.columns)} columnas")
 
         cols_upper = {c.strip().upper(): c for c in df.columns}
@@ -139,10 +144,45 @@ class CargaDeudoresWorker(QThread):
         self.progress.emit(100, "¡Listo! Base integrada correctamente.")
         self.finished_ok.emit(df_vista, columnas, etiquetas, df_detalle)
 
+    def _run_isapre(self):
+        p = self.params
+        source_file = os.path.abspath(p.excel_path)
+        self.progress.emit(10, f"Buscando hoja compatible de {p.empresa}…")
+        if p.sheet_name:
+            df_raw = pd.read_excel(p.excel_path, sheet_name=p.sheet_name, dtype=str).fillna("")
+            df_raw = apply_column_mapping(df_raw, p.column_mapping)
+        else:
+            xls = pd.ExcelFile(p.excel_path)
+            df_raw = None
+            for sheet_name in xls.sheet_names:
+                candidata = pd.read_excel(p.excel_path, sheet_name=sheet_name, dtype=str).fillna("")
+                headers = {
+                    str(column).strip().lower().replace("_", "").replace(" ", "")
+                    for column in candidata.columns
+                }
+                if "rutdeudor" in headers and "montocobrar" in headers:
+                    df_raw = candidata
+                    break
+            if df_raw is None:
+                raise ValueError(f"No se encontró una hoja compatible con la base de {p.empresa}.")
+
+        self.progress.emit(35, f"{p.empresa}: {len(df_raw):,} filas detectadas")
+        df_resumen, df_detalle = transformar_isapre_raw(df_raw, p.empresa)
+        self.progress.emit(55, "Integrando deudores agrupados por RUT…")
+        guardar_registros(df_resumen, p.empresa, source_file=source_file)
+        self.progress.emit(70, "Integrando contactos y deudas…")
+        guardar_contactos(df_detalle, p.empresa, source_file=source_file)
+        guardar_detalle(df_detalle, p.empresa, source_file=source_file)
+        df_vista, columnas, etiquetas = aplicar_schema(df_resumen, p.empresa)
+        self.progress.emit(100, "¡Listo! Base integrada correctamente.")
+        self.finished_ok.emit(df_vista, columnas, etiquetas, df_detalle)
+
     def run(self):
         try:
             if str(self.params.empresa).strip().lower() == "cart-56":
                 self._run_cart56()
+            elif str(self.params.empresa).strip().lower() in {"cruz blanca", "colmena"}:
+                self._run_isapre()
             else:
                 self._run_general()
 

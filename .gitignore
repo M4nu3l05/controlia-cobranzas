@@ -25,3 +25,7 @@ backups/
 *.backup.partial
 
 installer/output/
+
+# Temporales del generador del manual
+outputs/manual_work/render_temp/
+outputs/manual_work/qa/

@@ -1,112 +1,142 @@
-POLÍTICA DE PRIVACIDAD – CONTROLIA COBRANZAS
+POLÍTICA DE PRIVACIDAD Y CONFIDENCIALIDAD – CONTROLIA COBRANZAS
 
-1. Objeto
-La presente Política de Privacidad describe los criterios generales aplicables al tratamiento de información realizado mediante el software “Controlia Cobranzas” (en adelante, el “Software”), especialmente respecto de datos personales y antecedentes de cobranza procesados por empresas clientes en el marco de su operación.
+1. Objeto y alcance
+La presente Política de Privacidad y Confidencialidad (la “Política”) regula el tratamiento de información realizado mediante el software “Controlia Cobranzas” (el “Software”), incluido su instalador, aplicación de escritorio, servicios de autenticación, backend, bases de datos, módulos, integraciones, soporte y demás componentes contratados o habilitados.
+
+La Política se aplica a la empresa o persona que contrata o utiliza el Software (el “Cliente”), a sus usuarios autorizados y al proveedor de Controlia Cobranzas (el “Proveedor”). Forma parte de las condiciones aplicables al uso del Software y debe ser leída antes de instalarlo y al ingresar por primera vez o cuando se presente una nueva versión para aceptación.
 
 2. Roles de las partes
 Como regla general:
-- la empresa cliente que utiliza el Software actúa como responsable del tratamiento de los datos personales que incorpora al sistema;
-- el proveedor del Software actúa como proveedor tecnológico y, cuando corresponda, como encargado técnico de tratamiento, limitado a la operación, soporte, mantención, alojamiento o administración técnica del sistema.
+- el Cliente actúa como responsable de los datos personales y de cobranza que decide incorporar y tratar mediante el Software, determina sus finalidades y medios esenciales, y responde frente a sus titulares;
+- el Proveedor actúa como proveedor tecnológico y, cuando trate datos por cuenta del Cliente, como encargado o mandatario de tratamiento, sujeto a las instrucciones documentadas del Cliente, al contrato y a la normativa aplicable;
+- respecto de datos necesarios para administrar usuarios, autenticar accesos, registrar aceptaciones, facturar, prestar soporte, proteger el servicio o cumplir obligaciones propias, el Proveedor podrá actuar como responsable de dicho tratamiento en el ámbito estrictamente correspondiente.
 
-El alcance exacto de estos roles puede variar según la modalidad de implementación, contratación y operación del Software.
+Los roles concretos podrán variar según la modalidad local, remota o híbrida contratada. En caso de contradicción, prevalecerá el instrumento contractual específico que cumpla la normativa aplicable.
 
-3. Datos que pueden ser tratados
-El Software puede permitir el almacenamiento, consulta, edición, transmisión y registro de información como la siguiente:
-- RUT u otros identificadores;
-- nombres y apellidos;
-- teléfono fijo o móvil;
-- correo electrónico;
-- dirección u otros datos de contacto;
-- antecedentes de deuda, pagos, saldos y mora;
-- historial de gestiones, comunicaciones, observaciones y estados de cobranza;
-- credenciales de acceso, trazas de auditoría, logs de uso y registros de aceptación.
+3. Información que puede ser tratada
+Según los módulos habilitados y la información ingresada por el Cliente, el Software puede tratar:
+- datos de identificación, como nombre, apellidos, RUT u otros identificadores;
+- datos de contacto, como teléfono, correo electrónico y domicilio;
+- antecedentes económicos, financieros, comerciales y de cobranza, incluidos deuda, documentos, cuotas, pagos, saldos, mora y compromisos;
+- historial de gestiones, comunicaciones, observaciones, archivos adjuntos, estados y trazabilidad de cobranza;
+- datos de usuarios del Software, como nombre, correo, empresa, rol, permisos y estado de cuenta;
+- datos técnicos y de seguridad, como credenciales protegidas, direcciones de red cuando correspondan, identificadores de sesión, fecha y hora de acceso, logs, auditorías, errores y registros de aceptación;
+- configuraciones operativas e información necesaria para integraciones, soporte, respaldo o continuidad del servicio.
 
-La información tratada dependerá de la configuración, módulos habilitados y datos efectivamente incorporados por la empresa cliente.
+El Cliente debe abstenerse de incorporar datos personales sensibles o categorías especiales que no sean estrictamente necesarios para una finalidad lícita de cobranza y respecto de los cuales no cuente con una habilitación legal suficiente y medidas de protección adecuadas. El Software no requiere, como condición general de uso, que los usuarios proporcionen datos sensibles ajenos a esa finalidad.
 
-4. Finalidades del tratamiento
-Los datos tratados mediante el Software podrán ser utilizados por la empresa cliente para finalidades como:
-- gestión de cobranza y seguimiento de deudores;
-- registro de pagos y compromisos;
-- segmentación operativa y control de cartera;
-- trazabilidad de gestiones realizadas por ejecutivos o supervisores;
-- administración de usuarios, permisos y auditoría interna;
-- envío de comunicaciones vinculadas a procesos de cobranza, cuando corresponda;
-- respaldo, soporte técnico, seguridad y continuidad operacional.
+4. Origen y carácter de los datos
+La información puede ser proporcionada directamente por el Cliente o sus usuarios, importada desde archivos o sistemas autorizados, generada durante el uso del Software, obtenida desde integraciones habilitadas por el Cliente o recibida de terceros respecto de los cuales el Cliente tenga derecho a tratarla.
 
-El proveedor no determina por sí mismo las finalidades comerciales o jurídicas de la cobranza realizada por la empresa cliente.
+Los datos marcados como necesarios para crear una cuenta, autenticar al usuario o ejecutar una función son obligatorios para esa finalidad. Si no se proporcionan, es posible que el registro, acceso o función correspondiente no pueda completarse.
 
-5. Base de licitud y responsabilidad del cliente
-La empresa cliente declara ser responsable de contar con una base legal suficiente para tratar los datos personales incorporados al Software, así como de cumplir con la normativa vigente que le resulte aplicable.
+5. Finalidades del tratamiento
+La información podrá tratarse, según corresponda, para:
+- gestionar carteras, deudores, documentos, pagos, compromisos y acciones de cobranza;
+- registrar comunicaciones, observaciones, gestiones y trazabilidad operativa;
+- segmentar y controlar carteras, generar reportes y apoyar la supervisión interna del Cliente;
+- administrar cuentas, roles, permisos, autenticación y seguridad;
+- enviar comunicaciones de cobranza definidas y autorizadas por el Cliente;
+- operar integraciones solicitadas por el Cliente;
+- prevenir, detectar, investigar y resolver errores, fraude, abuso o incidentes de seguridad;
+- efectuar soporte, mantenimiento, actualizaciones, migraciones, respaldos o restauraciones contemplados en el servicio;
+- acreditar la aceptación de documentos legales y el cumplimiento de obligaciones contractuales o legales.
 
-La empresa cliente será responsable, entre otros aspectos, de:
-- asegurar la licitud de la recopilación y origen de los datos;
-- informar a los titulares cuando corresponda;
-- mantener actualizada la información;
-- atender solicitudes, reclamos o derechos de los titulares;
-- definir plazos de conservación y criterios de eliminación.
+El Proveedor no determina por sí mismo a quién cobrar, qué comunicar, cuándo hacerlo ni la base jurídica de la cobranza. Tampoco utilizará los datos de cobranza del Cliente para publicidad propia, perfilamiento comercial propio o finalidades incompatibles con la prestación del servicio, salvo autorización válida, específica e informada o una obligación legal.
 
-6. Tratamiento por parte del proveedor
-El proveedor podrá acceder o tratar información alojada en el Software únicamente en la medida necesaria para:
-- habilitar, mantener, soportar o mejorar técnicamente el sistema;
-- corregir errores o incidentes;
-- ejecutar migraciones, respaldos o restauraciones cuando hayan sido contemplados en el servicio contratado;
-- resguardar la seguridad, integridad y funcionamiento de la plataforma;
-- cumplir requerimientos legales o de autoridad competente.
+6. Licitud y obligaciones del Cliente
+El Cliente declara y garantiza que cuenta con una base de licitud suficiente para recopilar, comunicar e incorporar los datos al Software y para ejecutar las operaciones de cobranza correspondientes. En particular, es responsable de:
+- verificar el origen lícito, exactitud, actualidad, pertinencia y proporcionalidad de los datos;
+- proporcionar a los titulares la información exigida por la ley y obtener consentimiento cuando corresponda;
+- definir y documentar finalidades, plazos de conservación y reglas de eliminación;
+- atender solicitudes y reclamos de los titulares;
+- limitar el acceso a usuarios que necesiten conocer la información;
+- configurar y revisar mensajes, plantillas, destinatarios, permisos e integraciones;
+- cumplir la normativa de cobranza, protección al consumidor, telecomunicaciones y datos personales aplicable.
 
-El proveedor no comercializa los datos del cliente ni adquiere propiedad sobre ellos por el solo hecho de prestar el servicio.
+7. CONFIDENCIALIDAD DE LA INFORMACIÓN
+La confidencialidad constituye una obligación esencial del servicio. Toda información del Cliente y de terceros tratada mediante el Software —incluidos datos personales, antecedentes de deuda, pagos, gestiones, documentos, credenciales, reportes, configuraciones y secretos comerciales— será considerada confidencial, con independencia de su formato o medio.
 
-7. Almacenamiento y ubicación
-Los datos tratados mediante el Software podrán almacenarse, según la modalidad contratada, en:
-- equipos locales del cliente;
-- redes internas o servidores propios del cliente;
-- servicios de hosting o nube contratados por el cliente o por el proveedor;
-- motores de bases de datos locales o remotos, incluyendo SQLite, PostgreSQL u otros equivalentes.
+El Proveedor se obliga, dentro del alcance de los servicios contratados, a:
+- utilizar la información confidencial exclusivamente para prestar, mantener, asegurar y soportar el Software, cumplir instrucciones documentadas del Cliente o atender una obligación legal;
+- no vender, arrendar, ceder, comercializar ni explotar para beneficio propio las bases de datos o la información de cobranza del Cliente;
+- no divulgar la información a terceros, salvo en los casos expresamente permitidos en esta Política;
+- restringir el acceso a personal, colaboradores y subencargados que necesiten conocer la información para cumplir sus funciones y estén sujetos a deberes de confidencialidad;
+- aplicar el principio de mínimo acceso necesario y evitar copias, extracciones o usos no autorizados;
+- mantener el deber de confidencialidad aun después del término de la relación contractual, mientras la información conserve carácter confidencial o la ley exija su reserva.
 
-La ubicación técnica o geográfica del almacenamiento podrá variar según la infraestructura utilizada.
+El acceso del personal de soporte no es irrestricto. Solo podrá realizarse cuando sea necesario para atender una solicitud del Cliente, mantener el servicio, investigar un incidente, proteger la seguridad o cumplir una obligación legal. Cuando la modalidad técnica lo permita, estos accesos deberán estar autorizados, limitados temporalmente y sujetos a registro o trazabilidad.
 
-8. Comunicaciones y transferencias
-El uso del Software puede implicar comunicación o transferencia técnica de datos a infraestructura necesaria para su operación, respaldo, soporte o integración.
+La información confidencial solo podrá comunicarse:
+- por instrucción documentada o autorización válida del Cliente;
+- a proveedores o subencargados necesarios para la prestación del servicio, sujetos a obligaciones de protección y confidencialidad equivalentes;
+- por orden judicial, requerimiento de autoridad competente o deber legal;
+- en la medida estrictamente necesaria para formular, ejercer o defender derechos, prevenir un daño grave o proteger la seguridad del servicio, cuando la ley lo permita.
 
-Asimismo, si el cliente utiliza integraciones o aperturas con servicios de terceros, tales como correo electrónico, navegadores, mensajería web u otras plataformas, parte de la información podrá circular por dichos servicios de acuerdo con sus propias condiciones y políticas.
+Ante una divulgación obligatoria, el Proveedor limitará la entrega a lo requerido y, cuando sea legalmente posible, informará previamente al Cliente. No se considerará confidencial la información que sea pública sin infracción de una obligación de reserva, que haya sido obtenida lícitamente de un tercero sin deber de secreto o que haya sido desarrollada de forma independiente y demostrable sin utilizar información del Cliente.
 
-La empresa cliente es responsable de evaluar la legitimidad y conveniencia de tales flujos de información.
+El Cliente y sus usuarios también deberán guardar confidencialidad, proteger credenciales y evitar compartir, exportar o comunicar información a personas no autorizadas. Cada parte responderá por las personas a quienes permita acceso dentro de su ámbito de control.
 
-9. Medidas de seguridad
-El proveedor podrá aplicar medidas técnicas y organizativas razonables, tales como controles de acceso, autenticación, segmentación de permisos, registros de actividad, respaldo técnico, endurecimiento de configuración u otras medidas acordes al tipo de implementación.
+8. Encargados, subencargados y terceros necesarios
+El Proveedor podrá recurrir a infraestructura, alojamiento, correo transaccional, soporte, monitoreo, respaldo u otros servicios necesarios para operar el Software. Cuando esos terceros traten datos por cuenta del Proveedor o del Cliente, su acceso deberá limitarse a la función contratada y quedar sujeto a obligaciones de seguridad, confidencialidad, conservación y eliminación acordes con el riesgo y la normativa aplicable.
 
-Sin perjuicio de ello, ninguna medida de seguridad garantiza protección absoluta frente a incidentes, accesos indebidos, pérdida de disponibilidad, corrupción de información o ciberataques.
+Cuando la ley o el contrato lo exijan, el Proveedor informará las categorías de subencargados o los cambios relevantes y adoptará medidas razonables para verificar garantías adecuadas. El Proveedor no autoriza a esos terceros a utilizar la información de cobranza para sus propias finalidades comerciales.
 
-La empresa cliente también deberá adoptar medidas propias de seguridad, incluyendo gestión de contraseñas, perfiles de acceso, políticas internas, respaldo independiente y control de dispositivos autorizados.
+9. Almacenamiento y transferencias
+Según la modalidad contratada, la información podrá almacenarse o procesarse en equipos del Cliente, redes internas, servidores privados, bases de datos locales o remotas, o servicios de nube contratados por el Cliente o el Proveedor. La ubicación técnica o geográfica podrá variar de acuerdo con la infraestructura efectivamente utilizada.
 
-10. Conservación de la información
-La información se conservará por el tiempo que determine la empresa cliente o el que resulte necesario para la operación del Software, cumplimiento contractual, soporte técnico, respaldo, auditoría o exigencias legales aplicables.
+Si el tratamiento implica una comunicación o transferencia nacional o internacional, esta deberá realizarse con una base jurídica válida y las salvaguardas exigibles. A solicitud razonable, el Cliente podrá requerir información general sobre la ubicación o categorías de destinatarios aplicables a su implementación, sin afectar la seguridad ni los secretos comerciales de terceros.
 
-Salvo acuerdo expreso en contrario, el proveedor no garantiza almacenamiento indefinido de datos una vez terminada la relación contractual o deshabilitado el servicio.
+10. Seguridad de la información
+El Proveedor adoptará medidas técnicas y organizativas razonables y proporcionales al riesgo, la modalidad de despliegue y los servicios contratados, orientadas a proteger la confidencialidad, integridad, disponibilidad y resiliencia de la información. Estas medidas pueden incluir autenticación, perfiles y permisos, registros de actividad, separación de ambientes, actualización de componentes, respaldo técnico, recuperación y controles de acceso.
 
-11. Derechos de los titulares
-Corresponde a la empresa cliente, en su calidad de responsable del tratamiento, gestionar y responder las solicitudes de los titulares de datos cuando ejerzan los derechos que la normativa aplicable les reconozca, incluyendo acceso, rectificación, cancelación, oposición u otros equivalentes.
+El Cliente es responsable de administrar adecuadamente sus usuarios y permisos, utilizar contraseñas robustas y personales, proteger dispositivos y redes, mantener respaldos independientes cuando corresponda, actualizar sus sistemas y capacitar a su personal.
 
-El proveedor colaborará razonablemente cuando ello sea técnicamente posible y forme parte del servicio o de un requerimiento formal del cliente, dentro de los límites de su rol técnico.
+Ningún sistema es absolutamente invulnerable. Por ello, las partes deberán actuar diligentemente y no se entenderá que esta Política garantiza ausencia total de incidentes, interrupciones, errores humanos, malware, accesos indebidos o fallas de terceros.
 
-12. Uso indebido y responsabilidad
-El proveedor no será responsable por el uso indebido, ilícito, abusivo o negligente de datos personales realizado por la empresa cliente, sus empleados, contratistas, usuarios internos o terceros autorizados por ella.
+11. Incidentes de seguridad
+Cuando el Proveedor tome conocimiento de un incidente que afecte datos tratados por cuenta del Cliente, adoptará medidas razonables para contenerlo, investigarlo y mitigar sus efectos. Asimismo, comunicará al Cliente sin dilación indebida la información disponible que sea razonablemente necesaria para que este evalúe y cumpla sus deberes, salvo que la ley disponga otra cosa.
 
-Tampoco será responsable por la incorporación de datos obtenidos sin legitimidad, por comunicaciones de cobranza improcedentes, ni por decisiones adoptadas por la empresa cliente sobre la base de la información procesada en el Software.
+El Cliente deberá informar oportunamente al Proveedor sobre credenciales comprometidas, accesos indebidos u otros incidentes relacionados con su entorno y colaborar en su gestión. Las notificaciones a titulares o autoridades corresponderán a la parte obligada por la ley, con la cooperación razonable de la otra parte.
 
-13. Integraciones con terceros
-Cuando el Software interactúe con herramientas de terceros, la empresa cliente reconoce que dichas plataformas pueden tener políticas, restricciones y estándares de seguridad propios, ajenos al control del proveedor.
+12. Conservación, devolución y eliminación
+Los datos se conservarán durante el tiempo definido por el Cliente, el necesario para prestar el servicio y cumplir obligaciones contractuales o legales, o durante los plazos de respaldo y seguridad aplicables. No se establece un plazo único para todos los datos porque este depende de su finalidad, categoría, modalidad de despliegue y obligaciones del Cliente.
 
-El proveedor no garantiza la disponibilidad, continuidad ni conducta de esos terceros y no responde por incidentes originados en sus servicios.
+Al terminar el servicio, y sujeto al contrato, las capacidades técnicas y las obligaciones legales, el Cliente podrá solicitar la exportación, devolución o eliminación de sus datos. Las copias residuales de respaldo podrán mantenerse temporalmente hasta su rotación segura, con acceso restringido y sin uso activo. El Proveedor podrá conservar registros mínimos cuando sean necesarios para acreditar operaciones, aceptaciones, seguridad, cumplimiento o defensa de derechos.
 
-14. Modificaciones de la política
-El proveedor podrá actualizar esta Política de Privacidad para reflejar cambios normativos, operativos, contractuales o técnicos.
+13. Derechos de los titulares
+Los titulares podrán ejercer los derechos que les reconozca la normativa aplicable, incluidos, según corresponda, acceso, información, rectificación, actualización, supresión o cancelación, oposición, bloqueo y, desde su entrada en vigor, portabilidad u otros derechos incorporados por la ley.
 
-La versión vigente podrá informarse por medios electrónicos, documentación del producto, instalador o dentro del propio sistema.
+Cuando el Cliente sea responsable del tratamiento, las solicitudes deberán dirigirse a este. El Proveedor prestará cooperación razonable para permitir su atención cuando trate datos por cuenta del Cliente y ello sea técnicamente posible. Respecto de tratamientos en que el Proveedor actúe como responsable, las solicitudes podrán presentarse por el canal indicado en la sección de contacto.
 
-15. Contacto y antecedentes del proveedor
-La empresa cliente deberá complementar o mantener identificados los datos del proveedor que correspondan para fines de contacto comercial, técnico o legal, incluyendo nombre o razón social y correos de contacto.
+14. Integraciones y servicios de terceros
+Las integraciones con correo electrónico, navegadores, mensajería, hosting u otras plataformas se activan o utilizan según la configuración del Cliente. Dichos terceros pueden aplicar sus propios términos y políticas y tratar información bajo su propia responsabilidad. El Cliente debe evaluar la legitimidad de esos flujos, configurar destinatarios y permisos, y no transmitir más información de la necesaria.
 
-16. Vigencia
-La presente Política de Privacidad rige desde su publicación o incorporación al proceso de instalación, documentación o uso del Software y permanecerá vigente mientras el Software sea utilizado o mientras subsistan tratamientos de información asociados a su operación.
+El Proveedor no controla ni garantiza la disponibilidad, continuidad o prácticas independientes de esos terceros, sin perjuicio de las responsabilidades que legalmente no puedan excluirse.
 
-Versión del documento: v1.0
+15. Uso indebido y limitación de finalidad
+El Cliente no podrá utilizar el Software para tratamientos ilícitos, hostigamiento, comunicaciones engañosas, acceso no autorizado, discriminación, incorporación de datos obtenidos ilegítimamente ni decisiones contrarias a los derechos de los titulares. El Proveedor podrá restringir accesos cuando sea necesario para proteger el servicio, cumplir la ley o enfrentar un riesgo grave, conforme al contrato y sin afectar derechos irrenunciables.
+
+16. Aceptación y evidencia
+La aceptación de esta Política podrá recabarse durante la instalación, en el primer ingreso de cada usuario o cuando se publique una versión que requiera nueva aceptación. El Software podrá registrar la identidad o identificador del usuario, versión aceptada, fecha, hora, origen de la aceptación y versión del cliente para acreditar el consentimiento o aceptación contractual.
+
+La aceptación de la Política no reemplaza las autorizaciones o bases de licitud que el Cliente deba obtener de los titulares de los datos de cobranza, ni convierte al Proveedor en responsable de las decisiones de tratamiento del Cliente.
+
+17. Modificaciones
+El Proveedor podrá actualizar esta Política por cambios normativos, contractuales, operativos o técnicos. La nueva versión indicará su fecha o número de versión y será comunicada por el instalador, la aplicación, documentación o medios electrónicos razonables. Cuando el cambio sea sustancial o la ley lo exija, se solicitará una nueva aceptación antes de continuar utilizando el Software.
+
+18. Normativa aplicable
+Esta Política se interpretará conforme a las leyes de la República de Chile, incluida la Ley N.º 19.628 sobre protección de la vida privada en su texto vigente y las modificaciones introducidas por la Ley N.º 21.719 desde su entrada en vigor, además de las demás normas aplicables al tratamiento de datos personales y a la cobranza.
+
+Si otra jurisdicción resulta obligatoriamente aplicable a un tratamiento concreto, el Cliente y el Proveedor deberán adoptar las medidas adicionales que correspondan. Ninguna disposición de esta Política limita derechos irrenunciables de los titulares ni obligaciones legales de las partes.
+
+19. Identificación y contacto
+El Proveedor opera bajo el nombre comercial “Controlia”. Su razón social, domicilio y canales de contacto comercial, soporte y privacidad serán los informados al Cliente en el contrato, propuesta comercial, factura, instalador o documentación vigente del servicio.
+
+Las consultas o solicitudes relativas a esta Política deberán enviarse al canal de privacidad o soporte informado al Cliente, cuyos antecedentes deberán mantenerse completos, vigentes y fácilmente accesibles. Si la solicitud se refiere a datos incorporados por el Cliente para su gestión de cobranza, el titular deberá contactar primero a la empresa que realiza dicha gestión.
+
+20. Vigencia
+La presente Política rige desde su publicación o presentación para aceptación y permanecerá vigente mientras se utilice el Software o subsistan tratamientos asociados a su operación. Las obligaciones de confidencialidad, seguridad, conservación legal y cooperación que por su naturaleza deban sobrevivir continuarán después del término del servicio.
+
+Versión del documento: v2.0
+Fecha de la versión: 1 de agosto de 2026

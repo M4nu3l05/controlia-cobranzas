@@ -41,6 +41,16 @@ ESTADOS_GESTION = [
     "Pagado",
     "Cliente Sin deuda",
     "Otro",
+    "Activo",
+    "SIN PAGO",
+    "ACTIVO TFU",
+    "EXCEDENTES",
+    "TFU-EXCEDENTES",
+    "ABONO",
+    "SIS",
+    "TFU",
+    "SE ACOGE AL 5%",
+    "Estado mixto",
 ]
 
 ESTADO_DEUDOR_DEFAULT = "Sin Gestión"

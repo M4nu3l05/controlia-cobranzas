@@ -4,7 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
-from app.core.authorization import AuthorizationError, require_company_operation
+from app.core.authorization import (
+    AuthorizationError,
+    can_operate_company,
+    is_privileged_operator,
+    require_company_operation,
+)
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.deudor import (
@@ -27,6 +32,7 @@ from app.services.deudor_service import (
 )
 from app.schemas.deudor import DestinatarioItem
 from app.schemas.auth import MessageResponse
+from app.services.user_service import get_current_user_carteras_service
 
 router = APIRouter(prefix="/deudores", tags=["deudores"])
 
@@ -65,11 +71,26 @@ def list_destinatarios(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # Consultar la ficha de un deudor de otra cartera esta permitido, pero
+    # extraer el padron masivo de correos queda acotado a las carteras propias.
+    empresas_permitidas: list[str] | None = None
+    if not is_privileged_operator(current_user):
+        if empresa and not can_operate_company(db, current_user, empresa):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para descargar los destinatarios de esta cartera.",
+            )
+        empresas_permitidas = get_current_user_carteras_service(
+            db=db,
+            executor=current_user,
+        )
+
     return list_destinatarios_service(
         db,
         empresa=empresa,
         periodo_carga=periodo_carga,
         limit=limit,
+        empresas_permitidas=empresas_permitidas,
     )
 
 
@@ -151,6 +172,9 @@ def update_deudor_cliente(
             correo_excel=payload.correo_excel,
             telefono_fijo=payload.telefono_fijo,
             telefono_movil=payload.telefono_movil,
+            direccion=payload.direccion,
+            comuna=payload.comuna,
+            ciudad=payload.ciudad,
         )
     except AuthorizationError as exc:
         raise HTTPException(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
@@ -16,6 +18,18 @@ from app.services.deudor_import_service import (
 router = APIRouter(prefix="/deudores", tags=["deudores-import"])
 
 
+def _parse_column_mapping(raw: str) -> dict | None:
+    if not str(raw or "").strip():
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("El mapeo de columnas recibido no es válido.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("El mapeo de columnas recibido no es válido.")
+    return payload
+
+
 def _ensure_supervisor_or_admin(current_user: User) -> None:
     if current_user.role not in {"admin", "supervisor"}:
         raise HTTPException(
@@ -29,6 +43,7 @@ async def import_deudores(
     empresa: str = Form(...),
     expected_file_sha256: str = Form(...),
     confirm_birlados: bool = Form(False),
+    column_mapping_json: str = Form(""),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -59,6 +74,7 @@ async def import_deudores(
             executor=current_user,
             expected_file_sha256=expected_file_sha256,
             confirm_birlados=confirm_birlados,
+            column_mapping=_parse_column_mapping(column_mapping_json),
         )
         return ImportDeudoresResponse(**result)
     except ValueError as exc:
@@ -78,6 +94,7 @@ async def import_deudores(
 @router.post("/import/preview", response_model=ImportDeudoresPreviewResponse)
 async def preview_import_deudores(
     empresa: str = Form(...),
+    column_mapping_json: str = Form(""),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -91,7 +108,11 @@ async def preview_import_deudores(
         raise HTTPException(status_code=400, detail="Debes subir un archivo Excel válido.")
     try:
         result = preview_deudores_excel_service(
-            db, empresa=empresa_txt, content=await file.read(), source_file=filename
+            db,
+            empresa=empresa_txt,
+            content=await file.read(),
+            source_file=filename,
+            column_mapping=_parse_column_mapping(column_mapping_json),
         )
         return ImportDeudoresPreviewResponse(**result)
     except ValueError as exc:

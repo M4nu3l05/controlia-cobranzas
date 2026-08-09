@@ -185,11 +185,27 @@ def _to_detalle_item(row: DeudorDetalle) -> DeudorDetalleItem:
         bn=row.bn,
         telefono_fijo_afiliado=row.telefono_fijo_afiliado,
         telefono_movil_afiliado=row.telefono_movil_afiliado,
+        direccion_deudor=_norm_text(getattr(row, "direccion_deudor", "")),
+        comuna_deudor=_norm_text(getattr(row, "comuna_deudor", "")),
+        ciudad_deudor=_norm_text(getattr(row, "ciudad_deudor", "")),
         nro_expediente=row.nro_expediente,
+        id_deuda=_norm_text(getattr(row, "id_deuda", "")),
         fecha_emision=row.fecha_emision,
+        fecha_vencimiento=_norm_text(getattr(row, "fecha_vencimiento", "")),
+        prestador=_norm_text(getattr(row, "prestador", "")),
+        fecha_prestacion=_norm_text(getattr(row, "fecha_prestacion", "")),
+        fecha_prestacion2=_norm_text(getattr(row, "fecha_prestacion2", "")),
         copago=float(row.copago or 0),
         total_pagos=float(row.total_pagos or 0),
         saldo_actual=float(row.saldo_actual or 0),
+        monto_total=float(getattr(row, "monto_total", 0) or 0),
+        monto_cobrar=float(getattr(row, "monto_cobrar", 0) or 0),
+        monto_facturado=float(getattr(row, "monto_facturado", 0) or 0),
+        monto_liquidado=float(getattr(row, "monto_liquidado", 0) or 0),
+        monto_pagado_parcial=float(getattr(row, "monto_pagado_parcial", 0) or 0),
+        monto_condonado=float(getattr(row, "monto_condonado", 0) or 0),
+        monto_gestionado=float(getattr(row, "monto_gestionado", 0) or 0),
+        cuota_acordada=float(getattr(row, "cuota_acordada", 0) or 0),
         cart56_fecha_recep=row.cart56_fecha_recep,
         cart56_fecha_recep_isa=row.cart56_fecha_recep_isa,
         cart56_dias_pagar=_norm_text(getattr(row, "cart56_dias_pagar", "")),
@@ -208,12 +224,22 @@ def list_destinatarios_service(
     empresa: str = "",
     periodo_carga: str = "",
     limit: int = 5000,
+    empresas_permitidas: list[str] | None = None,
 ) -> list[DestinatarioItem]:
     empresa_txt = _norm_text(empresa)
     periodo_txt = _norm_text(periodo_carga)
 
     resumen_q = db.query(DeudorResumen)
     detalle_q = db.query(DeudorDetalle)
+
+    # None = sin restriccion (admin/supervisor). Una lista vacia significa
+    # "sin carteras asignadas", nunca "todas las carteras".
+    if empresas_permitidas is not None:
+        permitidas = [_norm_text(item) for item in empresas_permitidas if _norm_text(item)]
+        if not permitidas:
+            return []
+        resumen_q = resumen_q.filter(func.trim(DeudorResumen.empresa).in_(permitidas))
+        detalle_q = detalle_q.filter(func.trim(DeudorDetalle.empresa).in_(permitidas))
 
     if empresa_txt:
         resumen_q = resumen_q.filter(func.trim(DeudorResumen.empresa) == empresa_txt)
@@ -1074,6 +1100,9 @@ def update_deudor_cliente_service(
     correo_excel: str = "",
     telefono_fijo: str = "",
     telefono_movil: str = "",
+    direccion: str = "",
+    comuna: str = "",
+    ciudad: str = "",
 ) -> ActualizarClienteResponse:
     empresa_txt = _norm_text(empresa)
     rut_original = _norm_rut(rut)
@@ -1118,6 +1147,9 @@ def update_deudor_cliente_service(
         "correo_excel": _norm_text(getattr(detalle_fuente or resumen_fuente, "bn", "")),
         "telefono_fijo": _norm_text(getattr(detalle_fuente, "telefono_fijo_afiliado", "")),
         "telefono_movil": _norm_text(getattr(detalle_fuente, "telefono_movil_afiliado", "")),
+        "direccion": _norm_text(getattr(detalle_fuente, "direccion_deudor", "")),
+        "comuna": _norm_text(getattr(detalle_fuente, "comuna_deudor", "")),
+        "ciudad": _norm_text(getattr(detalle_fuente, "ciudad_deudor", "")),
     }
 
     if "-" in str(rut_nuevo):
@@ -1135,6 +1167,9 @@ def update_deudor_cliente_service(
     correo_excel_txt = _norm_text(correo_excel)
     telefono_fijo_txt = _norm_text(telefono_fijo)
     telefono_movil_txt = _norm_text(telefono_movil)
+    direccion_txt = _norm_text(direccion)
+    comuna_txt = _norm_text(comuna)
+    ciudad_txt = _norm_text(ciudad)
     new_values = {
         "rut": rut_completo_nuevo,
         "nombre": nombre_txt,
@@ -1142,6 +1177,9 @@ def update_deudor_cliente_service(
         "correo_excel": correo_excel_txt,
         "telefono_fijo": telefono_fijo_txt,
         "telefono_movil": telefono_movil_txt,
+        "direccion": direccion_txt,
+        "comuna": comuna_txt,
+        "ciudad": ciudad_txt,
     }
 
     for row in resumen_rows:
@@ -1160,6 +1198,9 @@ def update_deudor_cliente_service(
         row.bn = correo_excel_txt
         row.telefono_fijo_afiliado = telefono_fijo_txt
         row.telefono_movil_afiliado = telefono_movil_txt
+        row.direccion_deudor = direccion_txt
+        row.comuna_deudor = comuna_txt
+        row.ciudad_deudor = ciudad_txt
 
     if DeudorGestion is not None:
         gestion_rows = (
@@ -1220,6 +1261,9 @@ def update_deudor_cliente_service(
         bn=correo_excel_txt,
         telefono_fijo_afiliado=telefono_fijo_txt,
         telefono_movil_afiliado=telefono_movil_txt,
+        direccion_deudor=direccion_txt,
+        comuna_deudor=comuna_txt,
+        ciudad_deudor=ciudad_txt,
     )
 
 

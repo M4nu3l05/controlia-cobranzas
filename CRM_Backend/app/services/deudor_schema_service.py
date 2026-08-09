@@ -16,6 +16,26 @@ def ensure_deudores_optional_columns(db: Session) -> None:
     if dialect == "sqlite":
         rows = db.execute(text("PRAGMA table_info(deudores_detalle)")).mappings().all()
         cols = {str(r.get("name") or "").strip() for r in rows}
+        nuevas_columnas = {
+            "direccion_deudor": "VARCHAR(500) NOT NULL DEFAULT ''",
+            "comuna_deudor": "VARCHAR(120) NOT NULL DEFAULT ''",
+            "ciudad_deudor": "VARCHAR(120) NOT NULL DEFAULT ''",
+            "id_deuda": "VARCHAR(80) NOT NULL DEFAULT ''",
+            "prestador": "VARCHAR(255) NOT NULL DEFAULT ''",
+            "fecha_prestacion": "VARCHAR(40) NOT NULL DEFAULT ''",
+            "fecha_prestacion2": "VARCHAR(40) NOT NULL DEFAULT ''",
+            "monto_total": "FLOAT NOT NULL DEFAULT 0",
+            "monto_cobrar": "FLOAT NOT NULL DEFAULT 0",
+            "monto_facturado": "FLOAT NOT NULL DEFAULT 0",
+            "monto_liquidado": "FLOAT NOT NULL DEFAULT 0",
+            "monto_pagado_parcial": "FLOAT NOT NULL DEFAULT 0",
+            "monto_condonado": "FLOAT NOT NULL DEFAULT 0",
+            "monto_gestionado": "FLOAT NOT NULL DEFAULT 0",
+            "cuota_acordada": "FLOAT NOT NULL DEFAULT 0",
+        }
+        for nombre, definicion in nuevas_columnas.items():
+            if nombre not in cols:
+                db.execute(text(f"ALTER TABLE deudores_detalle ADD COLUMN {nombre} {definicion}"))
         if "cart56_dias_pagar" not in cols:
             db.execute(
                 text(
@@ -48,6 +68,27 @@ def ensure_deudores_optional_columns(db: Session) -> None:
         return
 
     if dialect in {"postgresql", "postgres"}:
+        nuevas_columnas = {
+            "direccion_deudor": "VARCHAR(500) NOT NULL DEFAULT ''",
+            "comuna_deudor": "VARCHAR(120) NOT NULL DEFAULT ''",
+            "ciudad_deudor": "VARCHAR(120) NOT NULL DEFAULT ''",
+            "id_deuda": "VARCHAR(80) NOT NULL DEFAULT ''",
+            "prestador": "VARCHAR(255) NOT NULL DEFAULT ''",
+            "fecha_prestacion": "VARCHAR(40) NOT NULL DEFAULT ''",
+            "fecha_prestacion2": "VARCHAR(40) NOT NULL DEFAULT ''",
+            "monto_total": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "monto_cobrar": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "monto_facturado": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "monto_liquidado": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "monto_pagado_parcial": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "monto_condonado": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "monto_gestionado": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+            "cuota_acordada": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+        }
+        for nombre, definicion in nuevas_columnas.items():
+            db.execute(text(
+                f"ALTER TABLE deudores_detalle ADD COLUMN IF NOT EXISTS {nombre} {definicion}"
+            ))
         db.execute(
             text(
                 "ALTER TABLE deudores_detalle "

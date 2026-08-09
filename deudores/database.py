@@ -48,11 +48,27 @@ COLS_DETALLE = [
     "BN",
     "telefono_fijo_afiliado",
     "telefono_movil_afiliado",
+    "Direccion_Deudor",
+    "Comuna_Deudor",
+    "Ciudad_Deudor",
     "Nro_Expediente",
+    "ID_Deuda",
     "Fecha_Emision",
+    "Fecha_Vencimiento",
+    "Fecha_Prestacion",
+    "Fecha_Prestacion2",
+    "Prestador",
     "Copago",
     "Total_Pagos",
     "Saldo_Actual",
+    "Monto_Total",
+    "Monto_Cobrar",
+    "Monto_Facturado",
+    "Monto_Liquidado",
+    "Monto_Pagado_Parcial",
+    "Monto_Condonado",
+    "Monto_Gestionado",
+    "Cuota_Acordada",
     "Cart56_Fecha_Recep",
     "Cart56_Fecha_Recep_ISA",
     "Cart56_Dias_Pagar",
@@ -286,6 +302,13 @@ def _build_merge_key_detalle(df: pd.DataFrame) -> pd.Series:
         copago_num = copago.apply(_parse_num)
         monto_cart56 = monto_cart56_num.where(monto_cart56_num > 0, copago_num).apply(_fmt_monto_txt)
         return rut + "||" + expediente_final + "||" + monto_cart56
+
+    if "ID_Deuda" in df.columns:
+        monto_cobrar = df.get("Monto_Cobrar", copago).apply(_parse_num).apply(_fmt_monto_txt)
+        monto_total = df.get("Monto_Total", pd.Series([""] * len(df), index=df.index)).apply(_parse_num).apply(_fmt_monto_txt)
+        prestador = df.get("Prestador", pd.Series([""] * len(df), index=df.index)).astype(str).str.strip()
+        fecha_prestacion2 = df.get("Fecha_Prestacion2", pd.Series([""] * len(df), index=df.index)).astype(str).str.strip()
+        return rut + "||" + expediente_final + "||" + monto_cobrar + "||" + monto_total + "||" + prestador + "||" + fecha_prestacion2
 
     return rut + "||" + expediente_final
 
@@ -970,6 +993,9 @@ def actualizar_cliente_por_rut(empresa: str, rut_original: str, datos_actualizad
         "BN",
         "telefono_fijo_afiliado",
         "telefono_movil_afiliado",
+        "Direccion_Deudor",
+        "Comuna_Deudor",
+        "Ciudad_Deudor",
     }
 
     datos_limpios = {k: v for k, v in datos_limpios.items() if k in columnas_permitidas}
