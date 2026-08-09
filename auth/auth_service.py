@@ -40,7 +40,8 @@ __all__ = [
     "backend_list_deudores", "backend_get_deudor_detalle",
     "backend_list_destinatarios",
     "backend_import_deudores",
-    "backend_list_gestiones", "backend_create_gestion", "backend_delete_gestion", "backend_register_pago", "backend_update_deudor_cliente",
+    "backend_list_gestiones", "backend_create_gestion", "backend_create_gestion_con_estado",
+    "backend_delete_gestion", "backend_register_pago", "backend_update_deudor_cliente",
     "backend_list_mis_gestiones_asignadas", "backend_marcar_gestion_asignada_realizada",
     "backend_get_user_carteras", "backend_list_cartera_asignaciones", "backend_save_cartera_asignaciones", "backend_list_all_gestiones",
     "backend_clear_empresa_deudores", "backend_clear_all_deudores", "backend_clear_all_gestiones", "backend_delete_deudor_individual",
@@ -763,7 +764,7 @@ def backend_list_all_gestiones(
         return [], _friendly_backend_error(exc)
 
 
-def backend_create_gestion(
+def backend_create_gestion_con_estado(
     session: UserSession,
     *,
     rut: str,
@@ -775,7 +776,13 @@ def backend_create_gestion(
     observacion: str = "",
     origen: str = "manual",
     assigned_to_user_id: int | None = None,
-) -> Tuple[dict | None, str]:
+) -> Tuple[dict | None, str, bool]:
+    """Crea una gestion en el backend.
+
+    Devuelve (datos, error, sin_conexion). El tercer valor distingue una caida
+    de red -donde la gestion puede reintentarse tal cual- de un rechazo del
+    backend por reglas de negocio, que reintentar no arreglaria.
+    """
     try:
         data = _http_request_auth(
             "POST",
@@ -792,11 +799,41 @@ def backend_create_gestion(
                 "assigned_to_user_id": assigned_to_user_id,
             },
         )
-        return data if isinstance(data, dict) else None, ""
+        return data if isinstance(data, dict) else None, "", False
     except ValueError as exc:
-        return None, str(exc)
+        return None, str(exc), False
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        return None, _friendly_backend_error(exc), True
     except requests.RequestException as exc:
-        return None, _friendly_backend_error(exc)
+        return None, _friendly_backend_error(exc), False
+
+
+def backend_create_gestion(
+    session: UserSession,
+    *,
+    rut: str,
+    empresa: str,
+    nombre_afiliado: str,
+    tipo_gestion: str,
+    estado: str,
+    fecha_gestion: str,
+    observacion: str = "",
+    origen: str = "manual",
+    assigned_to_user_id: int | None = None,
+) -> Tuple[dict | None, str]:
+    data, err, _ = backend_create_gestion_con_estado(
+        session,
+        rut=rut,
+        empresa=empresa,
+        nombre_afiliado=nombre_afiliado,
+        tipo_gestion=tipo_gestion,
+        estado=estado,
+        fecha_gestion=fecha_gestion,
+        observacion=observacion,
+        origen=origen,
+        assigned_to_user_id=assigned_to_user_id,
+    )
+    return data, err
 
 
 def backend_delete_gestion(

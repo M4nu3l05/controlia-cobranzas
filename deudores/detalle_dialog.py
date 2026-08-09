@@ -32,6 +32,7 @@ from .gestiones_db import (
     TIPOS_GESTION,
     ESTADOS_GESTION,
 )
+from .outbox import encolar_gestion
 from .database import (
     actualizar_cliente_por_rut,
     cargar_detalle_empresa,
@@ -54,6 +55,7 @@ from auth.auth_service import (
     backend_get_deudor_detalle,
     backend_list_gestiones,
     backend_create_gestion,
+    backend_create_gestion_con_estado,
     backend_delete_gestion,
     backend_register_pago,
     backend_update_deudor_cliente,
@@ -417,7 +419,7 @@ class _AgregarGestionDialog(QDialog):
     def _guardar(self):
         try:
             if self._session and getattr(self._session, "auth_source", "") == "backend":
-                _, err = backend_create_gestion(
+                _, err, sin_conexion = backend_create_gestion_con_estado(
                     self._session,
                     rut=self._rut,
                     empresa=self._empresa,
@@ -428,6 +430,30 @@ class _AgregarGestionDialog(QDialog):
                     observacion=self.txt_obs.toPlainText().strip(),
                     origen="manual",
                 )
+                if err and sin_conexion:
+                    # Sin red: la gestion queda en cola local y se sube sola al
+                    # recuperar conexion. Nunca se descarta el trabajo hecho.
+                    encolar_gestion(
+                        user_id=int(getattr(self._session, "user_id", 0) or 0),
+                        rut=self._rut,
+                        empresa=self._empresa,
+                        nombre_afiliado=self._nombre,
+                        tipo_gestion=self.cmb_tipo.currentText(),
+                        estado=self.cmb_estado.currentText(),
+                        fecha_gestion=self.dte_fecha.date().toString("dd/MM/yyyy"),
+                        observacion=self.txt_obs.toPlainText().strip(),
+                        origen="manual",
+                    )
+                    QMessageBox.information(
+                        self,
+                        "Gestión guardada sin conexión",
+                        "No hay conexión con el servidor, así que la gestión quedó "
+                        "guardada en este equipo.\n\n"
+                        "Se enviará automáticamente cuando vuelva la conexión. "
+                        "No la registres de nuevo.",
+                    )
+                    self.accept()
+                    return
                 if err:
                     raise ValueError(err)
             else:

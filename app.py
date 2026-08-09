@@ -1,8 +1,11 @@
-﻿import os
+﻿import logging
+import os
 import sys
 
 from core.logging_config import configure_logging
 from core.paths import ensure_runtime_dirs
+
+logger = logging.getLogger(__name__)
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QFont, QIcon
@@ -29,6 +32,9 @@ from deudores import DeudoresWidget
 from dashboard import DashboardWidget
 from envios import EnviosWidget
 from admin_carteras import AdminCarterasWidget
+
+from deudores.outbox import contar_agotadas, contar_pendientes
+from deudores.outbox_worker import OutboxSyncWorker
 
 from auth.auth_service import (
     backend_close_session,
@@ -535,6 +541,13 @@ class MainWindow(QMainWindow):
             lbl_role.setStyleSheet(_TOP_BADGE_STYLE % (rb, rf, "#3b82f6"))
             strip_row.addWidget(lbl_role)
 
+            # Estado de sincronizacion: la ejecutiva debe poder saber siempre si
+            # su trabajo esta llegando al servidor o quedo esperando en el equipo.
+            self._lbl_sync = QLabel("")
+            self._lbl_sync.setMinimumHeight(30)
+            self._lbl_sync.setVisible(False)
+            strip_row.addWidget(self._lbl_sync)
+
             self._btn_notifications = QPushButton("🔔 Notificaciones")
             self._btn_notifications.setMinimumHeight(30)
             self._btn_notifications.setStyleSheet(self._top_button_style(active=False))
@@ -739,6 +752,79 @@ class MainWindow(QMainWindow):
         self._operational_notification_timer.setInterval(60000)
         self._operational_notification_timer.timeout.connect(self._check_operational_notifications)
         self._operational_notification_timer.start()
+
+        self._setup_outbox_sync()
+
+    # ── Cola de gestiones pendientes ────────────────────────────────
+    def _setup_outbox_sync(self):
+        self._outbox_worker = None
+        self._actualizar_indicador_outbox()
+        QTimer.singleShot(3000, self._sincronizar_outbox)
+        self._outbox_timer = QTimer(self)
+        self._outbox_timer.setInterval(30000)
+        self._outbox_timer.timeout.connect(self._sincronizar_outbox)
+        self._outbox_timer.start()
+
+    def _actualizar_indicador_outbox(self):
+        lbl = getattr(self, "_lbl_sync", None)
+        if lbl is None or not self._session:
+            return
+
+        user_id = int(getattr(self._session, "user_id", 0) or 0)
+        try:
+            pendientes = contar_pendientes(user_id)
+            agotadas = contar_agotadas(user_id)
+        except Exception:
+            logger.exception("No se pudo leer la cola de gestiones pendientes")
+            return
+
+        if agotadas:
+            lbl.setText(f"⚠️ {agotadas} sin enviar")
+            lbl.setStyleSheet(_TOP_BADGE_STYLE % ("#7f1d1d", "#fecaca", "#ef4444"))
+            lbl.setToolTip(
+                f"{agotadas} gestión(es) no pudieron enviarse al servidor y necesitan revisión.\n"
+                "Avisa al administrador."
+            )
+            lbl.setVisible(True)
+        elif pendientes:
+            lbl.setText(f"⏳ {pendientes} por sincronizar")
+            lbl.setStyleSheet(_TOP_BADGE_STYLE % ("#78350f", "#fde68a", "#f59e0b"))
+            lbl.setToolTip(
+                f"{pendientes} gestión(es) guardadas en este equipo, esperando conexión.\n"
+                "Se enviarán solas cuando vuelva el servicio. No las registres de nuevo."
+            )
+            lbl.setVisible(True)
+        else:
+            lbl.setVisible(False)
+
+    def _sincronizar_outbox(self):
+        if not self._session or getattr(self._session, "auth_source", "") != "backend":
+            return
+        if self._outbox_worker is not None and self._outbox_worker.isRunning():
+            return
+        if contar_pendientes(int(getattr(self._session, "user_id", 0) or 0)) <= 0:
+            self._actualizar_indicador_outbox()
+            return
+
+        self._outbox_worker = OutboxSyncWorker(self._session, parent=self)
+        self._outbox_worker.terminado.connect(self._on_outbox_sincronizado)
+        self._outbox_worker.start()
+
+    def _on_outbox_sincronizado(self, sincronizadas: int, rechazadas: int, sin_conexion: bool):
+        self._actualizar_indicador_outbox()
+
+        if sincronizadas and not rechazadas:
+            self.statusBar().showMessage(
+                f"✅ Se sincronizaron {sincronizadas} gestión(es) pendientes.", 8000
+            )
+        elif rechazadas:
+            QMessageBox.warning(
+                self,
+                "Gestiones sin sincronizar",
+                f"Se enviaron {sincronizadas} gestión(es), pero {rechazadas} fueron "
+                "rechazadas por el servidor y quedaron guardadas en este equipo.\n\n"
+                "Revisa el detalle con el administrador antes de volver a registrarlas.",
+            )
 
     def _check_operational_notifications(self):
         rows, err = backend_list_notifications(self._session, unread_only=True)

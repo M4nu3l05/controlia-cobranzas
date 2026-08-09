@@ -208,12 +208,22 @@ def list_destinatarios_service(
     empresa: str = "",
     periodo_carga: str = "",
     limit: int = 5000,
+    empresas_permitidas: list[str] | None = None,
 ) -> list[DestinatarioItem]:
     empresa_txt = _norm_text(empresa)
     periodo_txt = _norm_text(periodo_carga)
 
     resumen_q = db.query(DeudorResumen)
     detalle_q = db.query(DeudorDetalle)
+
+    # None = sin restriccion (admin/supervisor). Una lista vacia significa
+    # "sin carteras asignadas", nunca "todas las carteras".
+    if empresas_permitidas is not None:
+        permitidas = [_norm_text(item) for item in empresas_permitidas if _norm_text(item)]
+        if not permitidas:
+            return []
+        resumen_q = resumen_q.filter(func.trim(DeudorResumen.empresa).in_(permitidas))
+        detalle_q = detalle_q.filter(func.trim(DeudorDetalle.empresa).in_(permitidas))
 
     if empresa_txt:
         resumen_q = resumen_q.filter(func.trim(DeudorResumen.empresa) == empresa_txt)
