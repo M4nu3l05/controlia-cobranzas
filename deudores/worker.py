@@ -13,11 +13,12 @@ import pandas as pd
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from .database import guardar_contactos, guardar_detalle, guardar_registros
-from .import_mapping_dialog import apply_column_mapping
+from .import_mapping_dialog import apply_column_mapping, detail_mapping_payload
 from .schema import (
     COLUMNAS_OBLIGATORIAS,
     HOJA_EXCEL,
     aplicar_schema,
+    normalizar_rut_detalle,
     transformar_cart56_raw,
     transformar_isapre_raw,
 )
@@ -127,9 +128,13 @@ class CargaDeudoresWorker(QThread):
         self.progress.emit(70, "Preparando vista…")
         df_vista, columnas, etiquetas = aplicar_schema(df, p.empresa)
 
-        self.progress.emit(80, "Leyendo hoja DETALLE…")
+        hoja_detalle = str((p.column_mapping or {}).get("detail_sheet_name", "")).strip() or HOJA_DETALLE
+        self.progress.emit(80, f"Leyendo hoja {hoja_detalle}…")
         try:
-            df_detalle = pd.read_excel(p.excel_path, sheet_name=HOJA_DETALLE, dtype=str).fillna("")
+            df_detalle = pd.read_excel(p.excel_path, sheet_name=hoja_detalle, dtype=str).fillna("")
+            mapeo_detalle = detail_mapping_payload(p.column_mapping)
+            if mapeo_detalle:
+                df_detalle = normalizar_rut_detalle(apply_column_mapping(df_detalle, mapeo_detalle))
             self.progress.emit(88, f"DETALLE: {len(df_detalle):,} filas. Integrando…")
             n_contactos = guardar_contactos(df_detalle, p.empresa, source_file=source_file)
             n_detalle = guardar_detalle(df_detalle, p.empresa, source_file=source_file)
@@ -139,7 +144,7 @@ class CargaDeudoresWorker(QThread):
             )
         except Exception:
             df_detalle = pd.DataFrame()
-            self.progress.emit(95, "Hoja DETALLE no encontrada — solo se integró RESUMEN.")
+            self.progress.emit(95, f"Hoja {hoja_detalle} no encontrada — solo se integró RESUMEN.")
 
         self.progress.emit(100, "¡Listo! Base integrada correctamente.")
         self.finished_ok.emit(df_vista, columnas, etiquetas, df_detalle)

@@ -298,6 +298,7 @@ def _transform_isapre_raw(df_raw: pd.DataFrame, empresa: str) -> tuple[pd.DataFr
         expediente_interno = id_deuda or _synthetic_debt_key(row, rut, int(index))
         nombre = _clean_text(row.get(_find_column(df, ["Nombre_Deudor"]), ""))
         email = _clean_text(row.get(_find_column(df, ["Email_Deudor"]), ""))
+        email_excel = _clean_text(row.get(_find_column(df, ["BN"]), "")) or email
         monto_cobrar = _parse_monto(row.get(_find_column(df, ["Monto_Cobrar"]), 0))
 
         if empresa == "Cruz Blanca":
@@ -330,7 +331,7 @@ def _transform_isapre_raw(df_raw: pd.DataFrame, empresa: str) -> tuple[pd.DataFr
             "Nombre Afil": nombre,
             "RUT Afil": rut_completo,
             "Estado_deudor": estado,
-            "BN": email,
+            "BN": email_excel,
             "mail_afiliado": email,
             "telefono_fijo_afiliado": telefono_fijo,
             "telefono_movil_afiliado": telefono_movil,
@@ -730,6 +731,7 @@ def _transform_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
 
     col_nombre_emp = _find_column(df, ["Empresa", "Razon social", "Razon Social", "Razón social", "Razón Social", "Nombre Empresa", "Nombre_Empresa", "Empleador"])
     col_email = _find_column(df, ["mail_afiliado", "Mail Emp", "Email", "Correo", "Correo Empresa", "Mail Empresa"])
+    col_bn = _find_column(df, ["BN", "Correo (Excel)", "Correo Excel"])
     col_tel_fijo = _find_column(df, ["telefono_fijo_afiliado", "Telefono Empleador", "Teléfono Empleador", "Telefono Fijo", "Teléfono Fijo", "Fono"])
     col_tel_movil = _find_column(df, ["telefono_movil_afiliado", "Telefono Empleador", "Teléfono Empleador", "Telefono Movil", "Teléfono Móvil", "Celular", "Movil", "Móvil"])
     col_fecha_recep = _find_column(df, ["Fecha Recep", "Fecha Recep "])
@@ -755,6 +757,7 @@ def _transform_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
             nombre_emp = f"Empresa {rut_txt}"
 
         email_emp = _clean_text(row.get(col_email, "")) if col_email else ""
+        bn_emp = (_clean_text(row.get(col_bn, "")) if col_bn else "") or email_emp
         tel_emp_fijo = _clean_text(row.get(col_tel_fijo, "")) if col_tel_fijo else ""
         tel_emp_movil = _clean_text(row.get(col_tel_movil, "")) if col_tel_movil else ""
 
@@ -778,7 +781,7 @@ def _transform_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
             "RUT Afil": rut_afil,
             "Fecha Pago": fecha_pago,
             "Estado_deudor": "Sin Gestión",
-            "BN": email_emp,
+            "BN": bn_emp,
             "mail_afiliado": email_emp,
             "telefono_fijo_afiliado": tel_emp_fijo,
             "telefono_movil_afiliado": tel_emp_movil,
@@ -834,8 +837,13 @@ def _read_general_excel(
     if faltantes:
         raise ValueError("Faltan columnas obligatorias en RESUMEN: " + ", ".join(faltantes))
 
-    if HOJA_DETALLE in xls.sheet_names:
-        df_detalle = _normalize_dataframe(pd.read_excel(BytesIO(content), sheet_name=HOJA_DETALLE, dtype=str))
+    detalle_sheet = str((column_mapping or {}).get("detail_sheet_name", "")).strip() or HOJA_DETALLE
+    detalle_mapping = (column_mapping or {}).get("detail_columns")
+    if detalle_sheet in xls.sheet_names:
+        df_detalle = pd.read_excel(BytesIO(content), sheet_name=detalle_sheet, dtype=str)
+        if isinstance(detalle_mapping, dict) and detalle_mapping:
+            df_detalle = _apply_column_mapping(df_detalle.fillna(""), {"columns": detalle_mapping})
+        df_detalle = _normalize_dataframe(df_detalle)
     else:
         df_detalle = pd.DataFrame(columns=COLUMNAS_DETALLE_ESPERADAS)
 

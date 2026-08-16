@@ -124,6 +124,12 @@ CART56_EMAIL_CANDIDATAS: list[str] = [
     "Mail Empresa",
 ]
 
+CART56_BN_CANDIDATAS: list[str] = [
+    "BN",
+    "Correo (Excel)",
+    "Correo Excel",
+]
+
 CART56_TEL_FIJO_CANDIDATAS: list[str] = [
     "telefono_fijo_afiliado",
     "Telefono Empleador",
@@ -233,6 +239,34 @@ def _normalizar_rut_dv_desde_fila(rut_valor, dv_valor="", rut_completo="") -> tu
     rut_txt = rut_base
     rut_full = f"{rut_txt}-{dv_txt}" if rut_txt and dv_txt else rut_txt
     return rut_txt, dv_txt, rut_full
+
+
+def normalizar_rut_detalle(df: pd.DataFrame) -> pd.DataFrame:
+    """Separa RUT y dígito verificador en la hoja de detalle.
+
+    La columna asociada por el supervisor puede venir como '12.345.678-5', así que
+    se normaliza igual que en el resumen para que ambas hojas se puedan cruzar.
+    """
+    if df is None or df.empty or COLUMNA_RUT not in df.columns:
+        return df
+
+    out = df.copy()
+    normalizados = [
+        _normalizar_rut_dv_desde_fila(
+            row.get(COLUMNA_RUT, ""),
+            row.get(COLUMNA_DV, "") if COLUMNA_DV in out.columns else "",
+            row.get("_RUT_COMPLETO", "") if "_RUT_COMPLETO" in out.columns else "",
+        )
+        for _, row in out.iterrows()
+    ]
+    if not normalizados:
+        return out
+
+    ruts, dvs, completos = zip(*normalizados)
+    out[COLUMNA_RUT] = list(ruts)
+    out[COLUMNA_DV] = list(dvs)
+    out["_RUT_COMPLETO"] = list(completos)
+    return out
 
 
 def _parse_monto(valor) -> float:
@@ -360,6 +394,7 @@ def transformar_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataF
     col_mto_pagar = _buscar_columna(df, ["Mto Pagar"])
     col_dias_pagar = _buscar_columna(df, CART56_DIAS_PAGAR_CANDIDATAS)
     col_email = _buscar_columna(df, CART56_EMAIL_CANDIDATAS)
+    col_bn = _buscar_columna(df, CART56_BN_CANDIDATAS)
     col_tel_fijo = _buscar_columna(df, CART56_TEL_FIJO_CANDIDATAS)
     col_tel_movil = _buscar_columna(df, CART56_TEL_MOVIL_CANDIDATAS)
     col_fecha_recep = _buscar_columna(df, CART56_FECHA_RECEP_CANDIDATAS)
@@ -380,6 +415,7 @@ def transformar_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataF
             nombre_emp = f"Empresa {rut_txt}"
 
         email_emp = _valor_limpio(row.get(col_email, "")) if col_email else ""
+        bn_emp = (_valor_limpio(row.get(col_bn, "")) if col_bn else "") or email_emp
         tel_emp_fijo = _valor_limpio(row.get(col_tel_fijo, "")) if col_tel_fijo else ""
         tel_emp_movil = _valor_limpio(row.get(col_tel_movil, "")) if col_tel_movil else ""
 
@@ -406,7 +442,7 @@ def transformar_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataF
                 "RUT Afil": rut_afil,
                 "Fecha Pago": fecha_pago,
                 "Estado_deudor": "Sin Gestión",
-                "BN": email_emp,
+                "BN": bn_emp,
                 "mail_afiliado": email_emp,
                 "telefono_fijo_afiliado": tel_emp_fijo,
                 "telefono_movil_afiliado": tel_emp_movil,
@@ -538,6 +574,7 @@ def transformar_isapre_raw(df_raw: pd.DataFrame, empresa: str) -> tuple[pd.DataF
 
         nombre = _valor_limpio(valor(row, "Nombre_Deudor"))
         correo = _valor_limpio(valor(row, "Email_Deudor"))
+        correo_excel = _valor_limpio(valor(row, "BN")) or correo
         monto_cobrar = _parse_monto(valor(row, "Monto_Cobrar"))
         detalle.append({
             "Rut_Afiliado": rut,
@@ -547,7 +584,7 @@ def transformar_isapre_raw(df_raw: pd.DataFrame, empresa: str) -> tuple[pd.DataF
             "Nombre Afil": nombre,
             "RUT Afil": rut_completo,
             "Estado_deudor": estado,
-            "BN": correo,
+            "BN": correo_excel,
             "mail_afiliado": correo,
             "telefono_fijo_afiliado": tel_fijo,
             "telefono_movil_afiliado": tel_movil,

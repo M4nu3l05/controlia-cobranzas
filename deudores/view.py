@@ -1316,6 +1316,36 @@ class DeudoresWidget(QWidget):
                 f"No se pudo exportar la base de gestiones.\n\nDetalle:\n{e}"
             )
 
+    def _mensaje_error_carga(self, error: str, column_mapping: dict | None) -> str:
+        """Aclara el caso en que el servidor descarta la asociación de columnas.
+
+        Un backend anterior a esta funcionalidad ignora `column_mapping_json` y
+        valida los títulos originales del Excel, así que reclama por columnas que
+        el supervisor sí asoció en pantalla.
+        """
+        texto = str(error or "").strip() or "Respuesta vacía del servidor."
+        asignadas = [
+            valor
+            for clave in ("columns", "detail_columns")
+            for valor in ((column_mapping or {}).get(clave) or {}).values()
+            if str(valor or "").strip()
+        ]
+        if not asignadas:
+            return texto
+
+        error_norm = self._texto_normalizado(texto)
+        if "faltan columnas obligatorias" not in error_norm and "columnas minimas" not in error_norm:
+            return texto
+
+        return (
+            f"{texto}\n\n"
+            "Asociaste esas columnas en la pantalla anterior, así que el servidor no está "
+            "aplicando la asociación: la versión publicada del backend es anterior a esta "
+            "funcionalidad y revisa los títulos originales del archivo.\n\n"
+            "Hay que actualizar el backend antes de cargar bases con títulos distintos a los "
+            "que espera el sistema."
+        )
+
     def _cargar_base(self):
         if not self._puede_cargar_bases():
             QMessageBox.warning(self, "Acceso restringido", "Solo administradores y supervisores pueden cargar bases.")
@@ -1372,7 +1402,11 @@ class DeudoresWidget(QWidget):
             if preview_err or not preview:
                 self._set_loading(False)
                 self.sidebar.progress.setVisible(False)
-                QMessageBox.critical(self, "No se pudo revisar la carga", preview_err or "Respuesta vacía del servidor.")
+                QMessageBox.critical(
+                    self,
+                    "No se pudo revisar la carga",
+                    self._mensaje_error_carga(preview_err, column_mapping),
+                )
                 return
 
             birlados = list(preview.get("birlados", []) or [])
