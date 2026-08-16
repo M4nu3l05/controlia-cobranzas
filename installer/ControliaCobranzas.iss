@@ -5,7 +5,10 @@
 #define MyAppVersion "2.1.0"
 #define MyAppPublisher "Controlia"
 #define MyAppExeName "ControliaCobranzas.exe"
-#define MyAppId "{1D6E7720-33C0-4745-BFB7-C1EC5A46A57C}"
+; La llave doble es el escape de Inno Setup: el AppId real es {1D6E7720-...}
+; y debe coincidir con el de versiones anteriores para que actualice en vez
+; de instalar una copia paralela.
+#define MyAppId "{{1D6E7720-33C0-4745-BFB7-C1EC5A46A57C}"
 #define MyAppIconFile "..\assets\app_icon.ico"
 
 [Setup]
