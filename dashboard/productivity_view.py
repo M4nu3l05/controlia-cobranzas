@@ -10,6 +10,7 @@ from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
+    QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
@@ -34,6 +35,11 @@ from admin_carteras.service import (
 from auth.auth_service import get_backend_base_url
 from auth.session_history_db import obtener_conexiones_hoy, obtener_conexiones_mes
 from deudores.database import cargar_para_envio
+from deudores.detalle_dialog import (
+    AgregarGestionDialog,
+    CorreoDeudorDialog,
+    cargar_detalle_deudor_para_dialogos,
+)
 from deudores.gestiones_db import ESTADO_DEUDOR_DEFAULT
 from dashboard.view import DashboardWidget as _LegacyDashboardWidget
 
@@ -93,6 +99,15 @@ def _first(row, *names: str) -> str:
 
 def _rut_norm(value: str) -> str:
     return str(value or "").replace(".", "").replace("-", "").strip().lstrip("0")
+
+
+def _rut_base(value: str) -> str:
+    # Los diálogos de detalle, correo y gestiones trabajan con el RUT sin dígito
+    # verificador, igual que la tabla de deudores.
+    texto = str(value or "").strip().replace(".", "")
+    if "-" in texto:
+        texto = texto.rsplit("-", 1)[0]
+    return texto.strip().lstrip("0")
 
 
 def _text_norm(value: str) -> str:
@@ -304,13 +319,16 @@ class DebtorRow(QWidget):
                 btn = QPushButton(label)
                 btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 btn.setStyleSheet(dashboard.action_style(primary))
-                btn.clicked.connect(lambda _checked=False, action=label: dashboard.show_action(action, debtor["nombre"]))
+                if label == "Enviar email":
+                    btn.clicked.connect(lambda _checked=False: dashboard.enviar_email(debtor))
+                else:
+                    btn.clicked.connect(lambda _checked=False, action=label: dashboard.show_action(action, debtor["nombre"]))
                 actions.addWidget(btn)
         actions.addStretch(1)
         register = QPushButton("Registrar gestión")
         register.setCursor(Qt.CursorShape.PointingHandCursor)
         register.setStyleSheet(dashboard.action_style(False))
-        register.clicked.connect(lambda: dashboard.show_action("Registrar gestión", debtor["nombre"]))
+        register.clicked.connect(lambda _checked=False: dashboard.registrar_gestion(debtor))
         actions.addWidget(register)
         detail_lay.addLayout(actions)
         self.detail.hide()
@@ -758,6 +776,13 @@ class DashboardWidget(QWidget):
             "pagos": _to_number(row.get("total_pagos", row.get("Total_Pagos", 0))), "tel": bool(phone), "mail": "@" in mail,
             "dir": bool(address), "telefono": phone, "email": mail, "direccion": address, "empresa": getter("empresa", "_empresa"),
             "never": never_managed, "last_type": _first(latest, "tipo_gestion") if latest is not None else ""}
+        debtor["rut_base"] = _rut_base(rut)
+        # Fila original: la reutilizan los diálogos de correo y gestión de la cola.
+        try:
+            debtor["raw"] = dict(row)
+        except Exception:
+            debtor["raw"] = {}
+        debtor["backend"] = backend
         debtor["partial"] = debtor["pagos"] > 0 and debtor["monto"] > 0
         debtor["score"], debtor["score_reason"] = self._score_debtor(debtor)
         return debtor
@@ -1037,6 +1062,55 @@ class DashboardWidget(QWidget):
 
     def show_action(self, action: str, name: str) -> None:
         QMessageBox.information(self, action, f"{action}: {name or 'deudor sin nombre'}")
+
+    def _datos_para_dialogo(self, debtor: dict) -> tuple[pd.DataFrame, dict] | None:
+        rut = debtor.get("rut_base") or _rut_base(debtor.get("rut", ""))
+        empresa = str(debtor.get("empresa", "") or "").strip()
+        try:
+            df_detalle, resumen = cargar_detalle_deudor_para_dialogos(self._session, rut=rut, empresa=empresa)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Sin detalle",
+                f"No fue posible obtener el detalle del deudor para preparar el correo.\n\n{exc}",
+            )
+            return None
+
+        fila = {} if debtor.get("backend") else dict(debtor.get("raw") or {})
+        fila.update(resumen)
+        if not str(fila.get("_empresa", "")).strip() and empresa:
+            fila["_empresa"] = empresa
+        if "@" in str(debtor.get("email", "")) and "@" not in str(fila.get("mail_afiliado", "")):
+            fila["mail_afiliado"] = debtor["email"]
+        if not str(fila.get("Nombre_Afiliado", "")).strip() and debtor.get("nombre"):
+            fila["Nombre_Afiliado"] = debtor["nombre"]
+        return df_detalle, fila
+
+    def enviar_email(self, debtor: dict) -> None:
+        datos = self._datos_para_dialogo(debtor)
+        if datos is None:
+            return
+        df_detalle, fila = datos
+        dlg = CorreoDeudorDialog(
+            df_detalle,
+            debtor.get("rut_base") or _rut_base(debtor.get("rut", "")),
+            fila_resumen=fila,
+            parent=self,
+            session=self._session,
+        )
+        dlg.exec()
+        self.refresh()
+
+    def registrar_gestion(self, debtor: dict) -> None:
+        dlg = AgregarGestionDialog(
+            rut=debtor.get("rut_base") or _rut_base(debtor.get("rut", "")),
+            nombre=debtor.get("nombre", "") or debtor.get("rut", ""),
+            session=self._session,
+            empresa=str(debtor.get("empresa", "") or "").strip(),
+            parent=self,
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
 
     def _refresh_team(self) -> None:
         if not self._can_view_team():

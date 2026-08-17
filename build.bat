@@ -9,14 +9,17 @@ if not exist .venv (
     exit /b 1
 )
 
-call .venv\Scripts\activate.bat
-if errorlevel 1 (
-    echo [ERROR] No se pudo activar el entorno virtual.
+rem Se usa el interprete del entorno virtual de forma explicita: asi el build
+rem siempre sale de .venv aunque activate.bat no altere el PATH de esta consola.
+set "VENV_PY=.venv\Scripts\python.exe"
+if not exist "%VENV_PY%" (
+    echo [ERROR] No se encontro %VENV_PY%.
+    echo Recrea el entorno con: python -m venv .venv
     exit /b 1
 )
 
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt pyinstaller
+"%VENV_PY%" -m pip install --upgrade pip
+"%VENV_PY%" -m pip install -r requirements.txt pyinstaller
 if errorlevel 1 (
     echo [ERROR] No se pudieron instalar las dependencias.
     exit /b 1
@@ -25,7 +28,7 @@ if errorlevel 1 (
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist
 
-pyinstaller ControliaCobranzas.spec --noconfirm --clean
+"%VENV_PY%" -m PyInstaller ControliaCobranzas.spec --noconfirm --clean
 if errorlevel 1 (
     echo [ERROR] Fallo la compilacion con PyInstaller.
     exit /b 1

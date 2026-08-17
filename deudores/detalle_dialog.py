@@ -35,6 +35,7 @@ from .gestiones_db import (
 from .database import (
     actualizar_cliente_por_rut,
     cargar_detalle_empresa,
+    cargar_detalle_todas,
     cargar_empresa,
     registrar_pago_por_rut,
     revertir_pago_por_rut,
@@ -376,7 +377,7 @@ class _DeudaModel(QStandardItemModel):
             self.appendRow(items)
 
 
-class _AgregarGestionDialog(QDialog):
+class AgregarGestionDialog(QDialog):
     def __init__(self, rut: str, nombre: str, session=None, empresa: str = "", parent=None):
         super().__init__(parent)
         self.setWindowTitle("Agregar gestión manual")
@@ -1220,383 +1221,15 @@ class _AsignarTareaDialog(QDialog):
         }
 
 
-class DetalleDeudorDialog(QDialog):
-    gestiones_actualizadas = pyqtSignal()
+class _CorreoDeudorMixin:
+    """Datos y acciones de correo/WhatsApp del deudor.
 
-    def __init__(self, df_detalle, rut: str, fila_resumen: dict | None = None, parent=None, session=None):
-        super().__init__(parent)
-        self.setWindowTitle("Detalle del deudor")
-        self.setMinimumSize(800, 520)
-        self.setSizeGripEnabled(True)
-        self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint, True)
-        self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
-        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.MSWindowsFixedSizeDialogHint)
-
-        from PyQt6.QtWidgets import QApplication
-        screen = QApplication.primaryScreen().availableGeometry()
-        w = min(int(screen.width() * 0.95), 1680)
-        h = min(int(screen.height() * 0.92), 1000)
-        self.resize(w, h)
-        self.setModal(True)
-
-        self._session = session
-        self._rut = rut
-        self._fila_resumen = fila_resumen or {}
-        self._df_detalle_completo = df_detalle
-        self._email_worker: EnvioWorker | None = None
-        self._ultimo_asunto = ""
-        self._ultimo_email = ""
-        self._ultimo_nombre = ""
-        self._ultima_plantilla = ""
-        self._labels_cliente: dict[str, QLabel] = {}
-        self.lbl_nombre_header: QLabel | None = None
-        self.lbl_rut_header: QLabel | None = None
-        self.lbl_exp: QLabel | None = None
-        self.tbl_deuda: QTableView | None = None
-        self.cmb_tipo_envio: QComboBox | None = None
-        self.cmb_trabajador_individual: QComboBox | None = None
-        self.lbl_trabajador_individual: QLabel | None = None
-        self.kpi_copago: _KpiCard | None = None
-        self.kpi_total_pagos: _KpiCard | None = None
-        self.kpi_saldo_actual: _KpiCard | None = None
-        self.btn_asignar_tarea: QPushButton | None = None
-        self._can_operate_current_cartera = True
-
-        info_cliente, filas_deuda = extraer_detalle_deudor(df_detalle, rut)
-        self._info_cliente = info_cliente or {}
-        self._filas_deuda = filas_deuda or []
-        self._normalizar_fila_resumen_backend()
-        self._alinear_detalle_con_resumen_backend()
-        self._sincronizar_resumen_financiero_desde_detalle()
-
-        fallbacks = {
-            "RUT": self._resolver_rut_cliente(),
-            "Nombre": self._fila_resumen.get("Nombre_Afiliado", ""),
-            "Correo": self._fila_resumen.get("mail_afiliado", "") or self._fila_resumen.get("Mail Emp", ""),
-            "Correo (Excel)": self._fila_resumen.get("BN", "") or self._fila_resumen.get("Mail Emp", ""),
-            "Teléfono Fijo": self._fila_resumen.get("telefono_fijo_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
-            "Teléfono Móvil": self._fila_resumen.get("telefono_movil_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
-        }
-        for k, v in fallbacks.items():
-            actual = str(self._info_cliente.get(k, "")).strip()
-            if actual in ("", "â€”", "nan", "None", "N"):
-                limpio = str(v).strip()
-                self._info_cliente[k] = limpio if limpio not in ("", "nan", "None", "N") else "â€”"
-
-        self._normalizar_campos_info_cliente()
-
-        rut_cliente = self._resolver_rut_cliente()
-        if rut_cliente:
-            self._info_cliente["RUT"] = rut_cliente
-        nombre = self._info_cliente.get("Nombre", rut)
-        rut_fmt = self._resolver_rut_cliente() or self._info_cliente.get("RUT", rut)
-
-        self._plantillas = cargar_plantillas(self._session) or []
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(16, 14, 16, 14)
-        root.setSpacing(12)
-
-        hdr = QHBoxLayout()
-        lbl_nombre = QLabel(nombre)
-        self.lbl_nombre_header = lbl_nombre
-        lbl_nombre.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        hdr.addWidget(lbl_nombre)
-        hdr.addStretch(1)
-
-        lbl_rut = QLabel(f"RUT: {rut_fmt}")
-        self.lbl_rut_header = lbl_rut
-        lbl_rut.setObjectName("HeaderHint")
-        hdr.addWidget(lbl_rut)
-
-        n_exp = len(self._filas_deuda)
-        lbl_exp = QLabel(f"{n_exp} expediente{'s' if n_exp != 1 else ''}")
-        self.lbl_exp = lbl_exp
-        lbl_exp.setObjectName("MutedLabel")
-        hdr.addWidget(lbl_exp)
-        root.addLayout(hdr)
-
-        if self._info_cliente:
-            card_cli = _Card("Datos del cliente")
-            grid = QGridLayout()
-            grid.setHorizontalSpacing(24)
-            grid.setVerticalSpacing(5)
-            campos = [(_fix_mojibake_text(k), _fix_mojibake_text(v)) for k, v in self._info_cliente.items()]
-            mitad = (len(campos) + 1) // 2
-
-            for i, (etq, val) in enumerate(campos):
-                col_offset = 0 if i < mitad else 2
-                fila_grid = i if i < mitad else i - mitad
-
-                lbl_e = QLabel(f"{_fix_mojibake_text(etq)}:")
-                lbl_e.setObjectName("MutedLabel")
-                lbl_e.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-
-                lbl_v = QLabel(_fix_mojibake_text(val))
-                self._labels_cliente[etq] = lbl_v
-                lbl_v.setFont(QFont("Segoe UI", 10))
-                lbl_v.setWordWrap(True)
-                lbl_v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-
-                grid.addWidget(lbl_e, fila_grid, col_offset)
-                grid.addWidget(lbl_v, fila_grid, col_offset + 1)
-
-            grid.setColumnStretch(1, 1)
-            grid.setColumnStretch(3, 1)
-            card_cli.body.addLayout(grid)
-
-            row_btn_cliente = QHBoxLayout()
-            row_btn_cliente.addStretch(1)
-            self.btn_editar_cliente = QPushButton("\u270f\ufe0f Editar datos del cliente")
-            self.btn_editar_cliente.setObjectName("PrimaryButton")
-            self.btn_editar_cliente.clicked.connect(self._editar_cliente)
-            row_btn_cliente.addWidget(self.btn_editar_cliente)
-            card_cli.body.addLayout(row_btn_cliente)
-
-            copago = self._obtener_monto_resumen("Copago", "Copago ($)")
-            total_pagos = self._obtener_monto_resumen("Total_Pagos", "Total Pagos ($)")
-            saldo_actual = self._obtener_monto_resumen("Saldo_Actual", "Saldo Actual ($)", "Saldo Actual")
-
-            sep_fin = QFrame()
-            sep_fin.setFrameShape(QFrame.Shape.HLine)
-            sep_fin.setStyleSheet("color: #e2e8f0;")
-            card_cli.body.addWidget(sep_fin)
-
-            lbl_fin = QLabel("Resumen financiero")
-            lbl_fin.setObjectName("MutedLabel")
-            lbl_fin.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-            card_cli.body.addWidget(lbl_fin)
-
-            row_kpis = QHBoxLayout()
-            row_kpis.setSpacing(12)
-            self.kpi_copago = _KpiCard("Copago ($)", copago)
-            self.kpi_total_pagos = _KpiCard("Total Pagos ($)", total_pagos)
-            self.kpi_saldo_actual = _KpiCard("Saldo Actual ($)", saldo_actual, is_balance=True)
-            row_kpis.addWidget(self.kpi_copago, 1)
-            row_kpis.addWidget(self.kpi_total_pagos, 1)
-            row_kpis.addWidget(self.kpi_saldo_actual, 1)
-
-            card_cli.body.addLayout(row_kpis)
-            root.addWidget(card_cli)
-
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(7)
-        self._main_splitter = splitter
-
-        card_deuda = _Card(f"Detalle de deuda \u2014 {n_exp} expediente{'s' if n_exp != 1 else ''}")
-        card_deuda.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
-        if self._filas_deuda:
-            model = _DeudaModel(self._filas_deuda)
-            self.tbl_deuda = QTableView()
-            self.tbl_deuda.setModel(model)
-            self.tbl_deuda.setAlternatingRowColors(True)
-            self.tbl_deuda.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-            self.tbl_deuda.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-            self.tbl_deuda.setSortingEnabled(True)
-            self.tbl_deuda.verticalHeader().setVisible(False)
-            self.tbl_deuda.setWordWrap(False)
-            self.tbl_deuda.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            self.tbl_deuda.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-            self.tbl_deuda.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-            self.tbl_deuda.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-            self.tbl_deuda.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-            self.tbl_deuda.horizontalHeader().setStretchLastSection(True)
-            self.tbl_deuda.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-            card_deuda.body.addWidget(self.tbl_deuda, 1)
-        else:
-            lbl_nd = QLabel("Sin expedientes en la hoja DETALLE.")
-            lbl_nd.setObjectName("MutedLabel")
-            lbl_nd.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            card_deuda.body.addWidget(lbl_nd)
-
-        splitter.addWidget(card_deuda)
-
-        card_gest = _Card("Detalle de gesti\u00f3n")
-        card_gest.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
-        self._gestion_widget = _GestionWidget(
-            rut=self._rut,
-            nombre=nombre,
-            session=self._session,
-            empresa=str(self._fila_resumen.get("_empresa", "")).strip(),
-        )
-        self._gestion_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._gestion_widget.gestiones_actualizadas.connect(self._on_gestiones_actualizadas)
-
-        row_btn_gest = QHBoxLayout()
-        row_btn_gest.setSpacing(8)
-        self.btn_agregar_gestion = QPushButton("\u2795 Agregar gesti\u00f3n manual")
-        self.btn_agregar_gestion.setObjectName("PrimaryButton")
-        self.btn_agregar_gestion.setProperty("blockableAction", True)
-        self.btn_agregar_gestion.setMinimumHeight(34)
-        self.btn_agregar_gestion.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_agregar_gestion.clicked.connect(self._agregar_gestion)
-        row_btn_gest.addWidget(self.btn_agregar_gestion)
-
-        self.btn_registrar_pago = QPushButton("\U0001F4B0 Registrar pago")
-        self.btn_registrar_pago.setObjectName("PrimaryButton")
-        self.btn_registrar_pago.setProperty("blockableAction", True)
-        self.btn_registrar_pago.setMinimumHeight(34)
-        self.btn_registrar_pago.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_registrar_pago.clicked.connect(self._registrar_pago)
-        row_btn_gest.addWidget(self.btn_registrar_pago)
-
-        self.btn_asignar_tarea = QPushButton("\U0001F4DD Asignar tarea")
-        self.btn_asignar_tarea.setObjectName("PrimaryButton")
-        self.btn_asignar_tarea.setMinimumHeight(34)
-        self.btn_asignar_tarea.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_asignar_tarea.clicked.connect(self._asignar_tarea)
-        row_btn_gest.addWidget(self.btn_asignar_tarea)
-
-        row_btn_gest.addStretch(1)
-        self._gestion_widget.btn_del.setMinimumHeight(34)
-        self._gestion_widget.btn_del.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        row_btn_gest.addWidget(self._gestion_widget.btn_del)
-
-        card_mail = _Card("Correo desde detalle")
-        row_tpl = QHBoxLayout()
-        row_tpl.addWidget(QLabel("Plantilla:"))
-
-        self.cmb_plantilla = QComboBox()
-        if self._plantillas:
-            self.cmb_plantilla.addItems([p.get("nombre", "Plantilla") for p in self._plantillas])
-        row_tpl.addWidget(self.cmb_plantilla, 1)
-        card_mail.body.addLayout(row_tpl)
-
-        row_tipo_envio = QHBoxLayout()
-        row_tipo_envio.addWidget(QLabel("Tipo de envio:"))
-        self.cmb_tipo_envio = QComboBox()
-        self.cmb_tipo_envio.addItems(["Individual", "Consolidado de trabajadores"])
-        self.cmb_tipo_envio.currentIndexChanged.connect(self._on_cambio_tipo_envio_detalle)
-        row_tipo_envio.addWidget(self.cmb_tipo_envio, 1)
-        card_mail.body.addLayout(row_tipo_envio)
-
-        row_trabajador = QHBoxLayout()
-        self.lbl_trabajador_individual = QLabel("Trabajador/Licencia:")
-        row_trabajador.addWidget(self.lbl_trabajador_individual)
-        self.cmb_trabajador_individual = QComboBox()
-        row_trabajador.addWidget(self.cmb_trabajador_individual, 1)
-        card_mail.body.addLayout(row_trabajador)
-
-        self.lbl_email_destino = QLabel(_fix_mojibake_text(f"Destino: {self._obtener_email_destino() or 'Sin correo disponible'}"))
-        self.lbl_email_destino.setObjectName("MutedLabel")
-        self.lbl_email_destino.setWordWrap(True)
-        card_mail.body.addWidget(self.lbl_email_destino)
-
-        self.lbl_whatsapp_destino = QLabel(
-            f"WhatsApp: {self._obtener_telefono_destino() or 'Sin teléfono disponible'}"
-        )
-        self.lbl_whatsapp_destino.setObjectName("MutedLabel")
-        self.lbl_whatsapp_destino.setWordWrap(True)
-        card_mail.body.addWidget(self.lbl_whatsapp_destino)
-
-        row_mail_btns = QHBoxLayout()
-        row_mail_btns.setSpacing(8)
-        self.btn_preview_email = QPushButton("\U0001F441 Vista previa")
-        self.btn_preview_email.setProperty("blockableAction", True)
-        self.btn_preview_email.setMinimumHeight(34)
-        self.btn_preview_email.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_preview_email.clicked.connect(self._vista_previa_email)
-
-        self.btn_enviar_email = QPushButton("\u2709\ufe0f Enviar email")
-        self.btn_enviar_email.setObjectName("PrimaryButton")
-        self.btn_enviar_email.setProperty("blockableAction", True)
-        self.btn_enviar_email.setMinimumHeight(34)
-        self.btn_enviar_email.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_enviar_email.clicked.connect(self._enviar_email)
-
-        self.btn_enviar_whatsapp = QPushButton("\U0001F7E2 Enviar WhatsApp")
-        self.btn_enviar_whatsapp.setObjectName("PrimaryButton")
-        self.btn_enviar_whatsapp.setProperty("blockableAction", True)
-        self.btn_enviar_whatsapp.setMinimumHeight(34)
-        self.btn_enviar_whatsapp.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_enviar_whatsapp.clicked.connect(self._enviar_whatsapp)
-
-        row_mail_btns.addWidget(self.btn_preview_email, 1)
-        row_mail_btns.addWidget(self.btn_enviar_email, 1)
-        row_mail_btns.addWidget(self.btn_enviar_whatsapp, 1)
-        card_mail.body.addLayout(row_mail_btns)
-
-        section_content = QWidget()
-        section_layout = QVBoxLayout(section_content)
-        section_layout.setContentsMargins(0, 0, 0, 0)
-        section_layout.setSpacing(8)
-        section_layout.addWidget(self._gestion_widget)
-        section_layout.addLayout(row_btn_gest)
-        section_layout.addWidget(card_mail)
-        section_layout.addStretch(1)
-        card_gest.body.addWidget(section_content, 1)
-
-        gestion_scroll = QScrollArea()
-        gestion_scroll.setWidgetResizable(True)
-        gestion_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        # Sin scroll horizontal: la tarjeta ocupa siempre el ancho completo del diálogo.
-        gestion_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        gestion_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        gestion_scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
-        gestion_scroll.setWidget(card_gest)
-        self._gestion_scroll = gestion_scroll
-        splitter.addWidget(gestion_scroll)
-
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([360, 440])
-        root.addWidget(splitter, 1)
-
-        btn_row = QHBoxLayout()
-        btn_row.addStretch(1)
-        btn_cerrar = QPushButton("Cerrar")
-        btn_cerrar.setMinimumWidth(100)
-        btn_cerrar.clicked.connect(self.accept)
-        btn_row.addWidget(btn_cerrar)
-        root.addLayout(btn_row)
-
-        self._refrescar_selector_trabajador_individual()
-        self._on_cambio_tipo_envio_detalle()
-
-        self._aplicar_modo_backend()
-        self._ajustar_layout_responsivo()
-        QTimer.singleShot(0, self._actualizar_permisos_cartera)
-
+    Lo comparten el detalle del deudor y el diálogo de correo rápido que se
+    abre desde la cola priorizada del dashboard, para que ambos ofrezcan
+    exactamente las mismas opciones."""
 
     def _usa_backend_deudores(self) -> bool:
         return bool(self._session and getattr(self._session, "auth_source", "") == "backend")
-
-    def _aplicar_modo_backend(self):
-        if not self._usa_backend_deudores():
-            return
-
-        if getattr(self, "btn_editar_cliente", None) is not None:
-            self.btn_editar_cliente.setEnabled(True)
-            self.btn_editar_cliente.setToolTip("Editar datos del cliente conectado a CRM_Backend.")
-
-        if getattr(self, "btn_registrar_pago", None) is not None:
-            self.btn_registrar_pago.setEnabled(True)
-            self.btn_registrar_pago.setToolTip("Registrar pago conectado a CRM_Backend.")
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._ajustar_layout_responsivo()
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._ajustar_layout_responsivo()
-
-    def _ajustar_layout_responsivo(self) -> None:
-        if hasattr(self, "_main_splitter"):
-            total_h = max(self._main_splitter.height(), 1)
-            debt_target = int(total_h * 0.45)
-            debt_target = max(190, min(520, debt_target))
-            management_min = 240
-            if total_h - debt_target < management_min:
-                debt_target = max(160, total_h - management_min)
-            self._main_splitter.setSizes([
-                debt_target,
-                max(total_h - debt_target, management_min),
-            ])
-
 
     def _normalizar_fila_resumen_backend(self) -> None:
         if not isinstance(self._fila_resumen, dict):
@@ -1752,20 +1385,26 @@ class DetalleDeudorDialog(QDialog):
 
         self._filas_deuda = [fila]
 
-    def _on_gestiones_actualizadas(self):
-        self._recargar_desde_bd()
-        self.gestiones_actualizadas.emit()
+    def _aplicar_fallbacks_info_cliente(self) -> None:
+        fallbacks = {
+            "RUT": self._resolver_rut_cliente(),
+            "Nombre": self._fila_resumen.get("Nombre_Afiliado", ""),
+            "Correo": self._fila_resumen.get("mail_afiliado", "") or self._fila_resumen.get("Mail Emp", ""),
+            "Correo (Excel)": self._fila_resumen.get("BN", "") or self._fila_resumen.get("Mail Emp", ""),
+            "Teléfono Fijo": self._fila_resumen.get("telefono_fijo_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
+            "Teléfono Móvil": self._fila_resumen.get("telefono_movil_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
+        }
+        for k, v in fallbacks.items():
+            actual = str(self._info_cliente.get(k, "")).strip()
+            if actual in ("", "â€”", "nan", "None", "N"):
+                limpio = str(v).strip()
+                self._info_cliente[k] = limpio if limpio not in ("", "nan", "None", "N") else "â€”"
 
-    def _emitir_actualizacion_gestiones(self) -> None:
-        self._recargar_desde_bd()
-        if hasattr(self, "_gestion_widget") and self._gestion_widget is not None:
-            self._gestion_widget.refrescar()
-        self.gestiones_actualizadas.emit()
+        self._normalizar_campos_info_cliente()
 
-    def _refrescar_gestiones_con_reintentos(self) -> None:
-        self._emitir_actualizacion_gestiones()
-        for delay_ms in (300, 900, 1800):
-            QTimer.singleShot(delay_ms, self._emitir_actualizacion_gestiones)
+        rut_cliente = self._resolver_rut_cliente()
+        if rut_cliente:
+            self._info_cliente["RUT"] = rut_cliente
 
     def _obtener_empresa_actual(self) -> str:
         for key in ("_empresa", "empresa", "Empresa"):
@@ -1915,550 +1554,71 @@ class DetalleDeudorDialog(QDialog):
                 "Asignar tarea a la ejecutiva responsable de esta cartera."
             )
 
-    def _ejecutivas_destino_por_empresa(self, empresa: str) -> list[dict]:
-        asignacion = self._obtener_asignacion_empresa(empresa)
-        if not asignacion:
-            return []
+    def _construir_card_correo(self) -> _Card:
+        card_mail = _Card("Correo desde detalle")
+        row_tpl = QHBoxLayout()
+        row_tpl.addWidget(QLabel("Plantilla:"))
 
-        nombre = str(asignacion.get("username", "")).strip()
-        email = str(asignacion.get("email", "")).strip()
-        user_id = asignacion.get("user_id")
-        if nombre and email:
-            display = f"{nombre} ({email})"
-        elif nombre:
-            display = nombre
-        elif email:
-            display = email
-        elif user_id:
-            display = f"Ejecutiva #{user_id}"
-        else:
-            display = "Ejecutiva asignada"
+        self.cmb_plantilla = QComboBox()
+        if self._plantillas:
+            self.cmb_plantilla.addItems([p.get("nombre", "Plantilla") for p in self._plantillas])
+        row_tpl.addWidget(self.cmb_plantilla, 1)
+        card_mail.body.addLayout(row_tpl)
 
-        return [{
-            "user_id": user_id,
-            "username": nombre,
-            "email": email,
-            "display": display,
-        }]
+        row_tipo_envio = QHBoxLayout()
+        row_tipo_envio.addWidget(QLabel("Tipo de envio:"))
+        self.cmb_tipo_envio = QComboBox()
+        self.cmb_tipo_envio.addItems(["Individual", "Consolidado de trabajadores"])
+        self.cmb_tipo_envio.currentIndexChanged.connect(self._on_cambio_tipo_envio_detalle)
+        row_tipo_envio.addWidget(self.cmb_tipo_envio, 1)
+        card_mail.body.addLayout(row_tipo_envio)
 
-    def _refrescar_labels_cliente(self) -> None:
-        for etiqueta, lbl in self._labels_cliente.items():
-            valor = self._resolver_rut_cliente() if etiqueta == "RUT" else _fix_mojibake_text(str(self._info_cliente.get(etiqueta, "—")).strip())
-            lbl.setText(valor if valor else "—")
+        row_trabajador = QHBoxLayout()
+        self.lbl_trabajador_individual = QLabel("Trabajador/Licencia:")
+        row_trabajador.addWidget(self.lbl_trabajador_individual)
+        self.cmb_trabajador_individual = QComboBox()
+        row_trabajador.addWidget(self.cmb_trabajador_individual, 1)
+        card_mail.body.addLayout(row_trabajador)
 
-        if self.lbl_nombre_header is not None:
-            self.lbl_nombre_header.setText(_fix_mojibake_text(str(self._info_cliente.get("Nombre", self._rut))))
+        self.lbl_email_destino = QLabel(_fix_mojibake_text(f"Destino: {self._obtener_email_destino() or 'Sin correo disponible'}"))
+        self.lbl_email_destino.setObjectName("MutedLabel")
+        self.lbl_email_destino.setWordWrap(True)
+        card_mail.body.addWidget(self.lbl_email_destino)
 
-        if self.lbl_rut_header is not None:
-            self.lbl_rut_header.setText(f"RUT: {self._resolver_rut_cliente()}")
-
-        if self.lbl_exp is not None:
-            n_exp = len(self._filas_deuda)
-            self.lbl_exp.setText(f"{n_exp} expediente{'s' if n_exp != 1 else ''}")
-
-        self.lbl_email_destino.setText(
-            _fix_mojibake_text(f"Destino: {self._obtener_email_destino() or 'Sin correo disponible'}")
+        self.lbl_whatsapp_destino = QLabel(
+            f"WhatsApp: {self._obtener_telefono_destino() or 'Sin teléfono disponible'}"
         )
-        self.lbl_whatsapp_destino.setText(
-            _fix_mojibake_text(f"WhatsApp: {self._obtener_telefono_destino() or 'Sin teléfono disponible'}")
-        )
+        self.lbl_whatsapp_destino.setObjectName("MutedLabel")
+        self.lbl_whatsapp_destino.setWordWrap(True)
+        card_mail.body.addWidget(self.lbl_whatsapp_destino)
 
-    def _actualizar_tabla_detalle(self):
-        if self.tbl_deuda is not None:
-            self.tbl_deuda.setModel(_DeudaModel(self._filas_deuda))
-        self._refrescar_selector_trabajador_individual()
-        self._on_cambio_tipo_envio_detalle()
+        row_mail_btns = QHBoxLayout()
+        row_mail_btns.setSpacing(8)
+        self.btn_preview_email = QPushButton("\U0001F441 Vista previa")
+        self.btn_preview_email.setProperty("blockableAction", True)
+        self.btn_preview_email.setMinimumHeight(34)
+        self.btn_preview_email.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.btn_preview_email.clicked.connect(self._vista_previa_email)
 
-    def _actualizar_kpis_financieros(self):
-        self._normalizar_fila_resumen_backend()
-        self._sincronizar_resumen_financiero_desde_detalle()
-        copago = self._obtener_monto_resumen("Copago", "Copago ($)")
-        total_pagos = self._obtener_monto_resumen("Total_Pagos", "Total Pagos ($)")
-        saldo_actual = self._obtener_monto_resumen("Saldo_Actual", "Saldo Actual ($)", "Saldo Actual")
+        self.btn_enviar_email = QPushButton("\u2709\ufe0f Enviar email")
+        self.btn_enviar_email.setObjectName("PrimaryButton")
+        self.btn_enviar_email.setProperty("blockableAction", True)
+        self.btn_enviar_email.setMinimumHeight(34)
+        self.btn_enviar_email.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.btn_enviar_email.clicked.connect(self._enviar_email)
 
-        if self.kpi_copago is not None:
-            self.kpi_copago.set_value(copago)
-        if self.kpi_total_pagos is not None:
-            self.kpi_total_pagos.set_value(total_pagos)
-        if self.kpi_saldo_actual is not None:
-            self.kpi_saldo_actual.set_value(saldo_actual)
+        self.btn_enviar_whatsapp = QPushButton("\U0001F7E2 Enviar WhatsApp")
+        self.btn_enviar_whatsapp.setObjectName("PrimaryButton")
+        self.btn_enviar_whatsapp.setProperty("blockableAction", True)
+        self.btn_enviar_whatsapp.setMinimumHeight(34)
+        self.btn_enviar_whatsapp.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.btn_enviar_whatsapp.clicked.connect(self._enviar_whatsapp)
 
-    def _recargar_desde_bd(self):
-        if self._usa_backend_deudores():
-            empresa = self._obtener_empresa_actual()
-            payload, err = backend_get_deudor_detalle(self._session, rut=self._rut, empresa=empresa)
-            if err:
-                return
-
-            df_det, fila_res = _backend_detalle_response_to_local(payload or {})
-            self._df_detalle_completo = df_det
-            self._fila_resumen.update(fila_res)
-            self._normalizar_fila_resumen_backend()
-
-            info_cliente, filas_deuda = extraer_detalle_deudor(df_det, self._rut)
-            self._info_cliente = info_cliente or self._info_cliente
-            self._filas_deuda = filas_deuda or []
-            self._alinear_detalle_con_resumen_backend()
-            self._sincronizar_resumen_financiero_desde_detalle()
-            self._normalizar_campos_info_cliente()
-
-            self._refrescar_labels_cliente()
-            self._actualizar_tabla_detalle()
-            self._actualizar_kpis_financieros()
-            self._actualizar_permisos_cartera()
-            return
-
-        empresa = self._obtener_empresa_actual()
-        if not empresa:
-            return
-
-        df_det = cargar_detalle_empresa(empresa)
-        df_res = cargar_empresa(empresa)
-
-        self._df_detalle_completo = df_det
-
-        if not df_res.empty:
-            rut_norm = str(self._rut).strip().replace(".", "").replace("-", "").lstrip("0")
-            mask = (
-                df_res["Rut_Afiliado"].astype(str)
-                .str.replace(".", "", regex=False)
-                .str.replace("-", "", regex=False)
-                .str.strip()
-                .str.lstrip("0")
-                == rut_norm
-            )
-            filas_res = df_res.loc[mask]
-            if not filas_res.empty:
-                self._fila_resumen = filas_res.iloc[0].to_dict()
-
-        info_cliente, filas_deuda = extraer_detalle_deudor(df_det, self._rut)
-        self._info_cliente = info_cliente or self._info_cliente
-        self._filas_deuda = filas_deuda or []
-
-        fallbacks = {
-            "RUT": self._resolver_rut_cliente(),
-            "Nombre": self._fila_resumen.get("Nombre_Afiliado", ""),
-            "Correo": self._fila_resumen.get("mail_afiliado", "") or self._fila_resumen.get("Mail Emp", ""),
-            "Correo (Excel)": self._fila_resumen.get("BN", "") or self._fila_resumen.get("Mail Emp", ""),
-            "Teléfono Fijo": self._fila_resumen.get("telefono_fijo_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
-            "Teléfono Móvil": self._fila_resumen.get("telefono_movil_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
-        }
-        for k, v in fallbacks.items():
-            actual = str(self._info_cliente.get(k, "")).strip()
-            if actual in ("", "â€”", "nan", "None", "N"):
-                limpio = str(v).strip()
-                self._info_cliente[k] = limpio if limpio not in ("", "nan", "None", "N") else "â€”"
-        self._normalizar_campos_info_cliente()
-
-        self._normalizar_fila_resumen_backend()
-        self._alinear_detalle_con_resumen_backend()
-        self._sincronizar_resumen_financiero_desde_detalle()
-        self._refrescar_labels_cliente()
-        self._actualizar_tabla_detalle()
-        self._actualizar_kpis_financieros()
-        self._actualizar_permisos_cartera()
-
-    def _editar_cliente(self):
-        dlg = _EditarClienteDialog(self._info_cliente, self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        nuevos = dlg.obtener_datos()
-        empresa = self._obtener_empresa_actual()
-
-        try:
-            if self._usa_backend_deudores():
-                rut_anterior = self._rut
-
-                _, err = backend_update_deudor_cliente(
-                    self._session,
-                    rut_original=rut_anterior,
-                    empresa=empresa,
-                    rut=nuevos.get("RUT", ""),
-                    nombre=nuevos.get("Nombre", ""),
-                    correo=nuevos.get("Correo", ""),
-                    correo_excel=nuevos.get("Correo (Excel)", ""),
-                    telefono_fijo=nuevos.get("Teléfono Fijo", ""),
-                    telefono_movil=nuevos.get("Teléfono Móvil", ""),
-                    direccion=nuevos.get("Dirección", ""),
-                    comuna=nuevos.get("Comuna", ""),
-                    ciudad=nuevos.get("Ciudad", ""),
-                )
-                if err:
-                    raise ValueError(err)
-
-                rut_editado = nuevos.get("RUT", rut_anterior).strip() or rut_anterior
-                rut_base = rut_editado.replace(".", "")
-                if "-" in rut_base:
-                    rut_base = rut_base.split("-", 1)[0]
-                rut_base = rut_base.replace("-", "").lstrip("0") or rut_anterior
-
-                self._rut = rut_base
-                self._info_cliente["RUT"] = rut_editado or ""
-                self._info_cliente["Nombre"] = nuevos.get("Nombre", "") or ""
-                self._info_cliente["Correo"] = nuevos.get("Correo", "") or ""
-                self._info_cliente["Correo (Excel)"] = nuevos.get("Correo (Excel)", "") or ""
-                self._info_cliente["Teléfono Fijo"] = nuevos.get("Teléfono Fijo", "") or ""
-                self._info_cliente["Teléfono Móvil"] = nuevos.get("Teléfono Móvil", "") or ""
-                if "Dirección" in self._info_cliente:
-                    self._info_cliente["Dirección"] = nuevos.get("Dirección", "") or ""
-                    self._info_cliente["Comuna"] = nuevos.get("Comuna", "") or ""
-                    self._info_cliente["Ciudad"] = nuevos.get("Ciudad", "") or ""
-
-                self._fila_resumen["Rut_Afiliado"] = self._rut
-                self._fila_resumen["_RUT_COMPLETO"] = self._info_cliente["RUT"]
-                self._fila_resumen["Nombre_Afiliado"] = self._info_cliente["Nombre"]
-                self._fila_resumen["mail_afiliado"] = self._info_cliente["Correo"]
-                self._fila_resumen["BN"] = self._info_cliente["Correo (Excel)"]
-                self._fila_resumen["telefono_fijo_afiliado"] = self._info_cliente["Teléfono Fijo"]
-                self._fila_resumen["telefono_movil_afiliado"] = self._info_cliente["Teléfono Móvil"]
-                self._fila_resumen["Direccion_Deudor"] = nuevos.get("Dirección", "")
-                self._fila_resumen["Comuna_Deudor"] = nuevos.get("Comuna", "")
-                self._fila_resumen["Ciudad_Deudor"] = nuevos.get("Ciudad", "")
-
-                self._refrescar_labels_cliente()
-                self._recargar_desde_bd()
-                self.gestiones_actualizadas.emit()
-
-                QMessageBox.information(
-                    self,
-                    "Actualización exitosa",
-                    " Los datos del cliente fueron actualizados correctamente en CRM_Backend."
-                )
-                return
-
-            ok = actualizar_cliente_por_rut(
-                empresa=empresa,
-                rut_original=self._rut,
-                datos_actualizados={
-                    "Rut_Afiliado": nuevos.get("RUT", ""),
-                    "Nombre_Afiliado": nuevos.get("Nombre", ""),
-                    "mail_afiliado": nuevos.get("Correo", ""),
-                    "BN": nuevos.get("Correo (Excel)", ""),
-                    "telefono_fijo_afiliado": nuevos.get("Teléfono Fijo", ""),
-                    "telefono_movil_afiliado": nuevos.get("Teléfono Móvil", ""),
-                    "Direccion_Deudor": nuevos.get("Dirección", ""),
-                    "Comuna_Deudor": nuevos.get("Comuna", ""),
-                    "Ciudad_Deudor": nuevos.get("Ciudad", ""),
-                }
-            )
-
-            if not ok:
-                QMessageBox.warning(
-                    self,
-                    "Sin cambios",
-                    "No se encontró un registro para actualizar en la base de datos."
-                )
-                return
-
-            rut_anterior = self._rut
-            self._rut = nuevos.get("RUT", rut_anterior).strip() or rut_anterior
-
-            self._info_cliente["RUT"] = nuevos.get("RUT", "") or ""
-            self._info_cliente["Nombre"] = nuevos.get("Nombre", "") or ""
-            self._info_cliente["Correo"] = nuevos.get("Correo", "") or ""
-            self._info_cliente["Correo (Excel)"] = nuevos.get("Correo (Excel)", "") or ""
-            self._info_cliente["Teléfono Fijo"] = nuevos.get("Teléfono Fijo", "") or ""
-            self._info_cliente["Teléfono Móvil"] = nuevos.get("Teléfono Móvil", "") or ""
-            if "Dirección" in self._info_cliente:
-                self._info_cliente["Dirección"] = nuevos.get("Dirección", "") or ""
-                self._info_cliente["Comuna"] = nuevos.get("Comuna", "") or ""
-                self._info_cliente["Ciudad"] = nuevos.get("Ciudad", "") or ""
-
-            self._fila_resumen["Rut_Afiliado"] = self._info_cliente["RUT"]
-            self._fila_resumen["Nombre_Afiliado"] = self._info_cliente["Nombre"]
-            self._fila_resumen["mail_afiliado"] = self._info_cliente["Correo"]
-            self._fila_resumen["BN"] = self._info_cliente["Correo (Excel)"]
-            self._fila_resumen["telefono_fijo_afiliado"] = self._info_cliente["Teléfono Fijo"]
-            self._fila_resumen["telefono_movil_afiliado"] = self._info_cliente["Teléfono Móvil"]
-
-            self._refrescar_labels_cliente()
-            self.gestiones_actualizadas.emit()
-
-            QMessageBox.information(
-                self,
-                "Actualización exitosa",
-                " Los datos del cliente fueron actualizados correctamente en la base de datos."
-            )
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error al actualizar",
-                f"No se pudieron actualizar los datos del cliente.\n\nDetalle:\n{e}"
-            )
-
-    def _obtener_monto_resumen(self, *keys: str) -> str:
-        aliases = {
-            "Copago": "Copago",
-            "Copago ($)": "Copago",
-            "Mto Pagar": "Copago",
-            "Monto_Cobrar": "Copago",
-            "Total_Pagos": "Total_Pagos",
-            "Total Pagos ($)": "Total_Pagos",
-            "Pagos": "Total_Pagos",
-            "Saldo_Actual": "Saldo_Actual",
-            "Saldo Actual ($)": "Saldo_Actual",
-            "Saldo Actual": "Saldo_Actual",
-        }
-
-        totales_detalle = self._totales_financieros_desde_detalle()
-        for key in keys:
-            canon = aliases.get(key)
-            if canon in totales_detalle:
-                return _formatear_moneda_chilena(totales_detalle[canon])
-
-        for key in keys:
-            if key in self._fila_resumen:
-                val = str(self._fila_resumen.get(key, "")).strip()
-                if val and val not in ("nan", "None"):
-                    return _formatear_moneda_chilena(val)
-        return ""
-
-    def _agregar_gestion(self):
-        nombre = str(self._info_cliente.get("Nombre", "")).strip() or self._rut
-        dlg = _AgregarGestionDialog(
-            rut=self._rut,
-            nombre=nombre,
-            session=self._session,
-            empresa=self._obtener_empresa_actual(),
-            parent=self,
-        )
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._refrescar_gestiones_con_reintentos()
-
-    def _asignar_tarea(self):
-        empresa = self._obtener_empresa_actual()
-        if not empresa:
-            QMessageBox.warning(self, "Empresa no disponible", "No fue posible determinar la cartera del deudor.")
-            return
-
-        ejecutivas = self._ejecutivas_destino_por_empresa(empresa)
-        if not ejecutivas:
-            QMessageBox.warning(
-                self,
-                "Sin ejecutiva asignada",
-                "No hay una ejecutiva configurada para esta cartera. Solicita la asignación al supervisor.",
-            )
-            return
-
-        dlg = _AsignarTareaDialog(empresa=empresa, ejecutivas=ejecutivas, parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        datos = dlg.datos()
-        ejecutiva = datos.get("ejecutiva") if isinstance(datos, dict) else {}
-        if not isinstance(ejecutiva, dict):
-            ejecutiva = {}
-
-        nombre = str(ejecutiva.get("username", "")).strip()
-        email = str(ejecutiva.get("email", "")).strip()
-        if nombre and email:
-            destino = f"{nombre} ({email})"
-        else:
-            destino = nombre or email or "Ejecutiva asignada"
-
-        obs_usuario = str(datos.get("observacion", "")).strip() if isinstance(datos, dict) else ""
-        observacion = f"Tarea: Contactar cliente | Destino: {destino}"
-        if obs_usuario:
-            observacion += f" | Nota: {obs_usuario}"
-
-        try:
-            fecha = datetime.date.today().strftime("%d/%m/%Y")
-            nombre_afiliado = str(self._info_cliente.get("Nombre", "")).strip() or self._rut
-            assigned_to_user_id = ejecutiva.get("user_id")
-            try:
-                assigned_to_user_id = int(assigned_to_user_id) if assigned_to_user_id is not None else None
-            except Exception:
-                assigned_to_user_id = None
-
-            if self._usa_backend_deudores():
-                _, err = backend_create_gestion(
-                    self._session,
-                    rut=self._rut,
-                    empresa=empresa,
-                    nombre_afiliado=nombre_afiliado,
-                    tipo_gestion="Manual",
-                    estado="Gesti\u00f3n asignada",
-                    fecha_gestion=fecha,
-                    observacion=observacion,
-                    origen="manual",
-                    assigned_to_user_id=assigned_to_user_id,
-                )
-                if err:
-                    raise ValueError(err)
-            else:
-                insertar_gestion_manual(
-                    rut=self._rut,
-                    nombre=nombre_afiliado,
-                    tipo_gestion="Manual",
-                    estado="Gesti\u00f3n asignada",
-                    fecha=fecha,
-                    observacion=observacion,
-                )
-
-            QMessageBox.information(self, "Tarea asignada", "\u2705 La tarea fue registrada como 'Gesti\u00f3n asignada'.")
-            self._refrescar_gestiones_con_reintentos()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo asignar la tarea.\n\nDetalle:\n{e}")
-
-    def _expedientes_disponibles(self) -> list[str]:
-        self._expediente_pago_por_etiqueta = {}
-        expedientes = []
-        for idx, fila in enumerate(self._filas_deuda, start=1):
-            interno = str(
-                fila.get("_expediente_pago", "") or fila.get("N° Expediente", "")
-                or fila.get("No Licencia", "") or fila.get("Folio LIQ", "")
-            ).strip()
-            visible = str(
-                fila.get("No Licencia", "") or fila.get("N° Expediente", "")
-                or fila.get("Folio LIQ", "")
-            ).strip()
-            if not interno:
-                continue
-            etiqueta = f"N/A (deuda {idx})" if visible in {"", "N/A", "—"} else visible
-            self._expediente_pago_por_etiqueta[etiqueta] = interno
-            if etiqueta not in expedientes:
-                expedientes.append(etiqueta)
-        return expedientes
-
-    def _saldos_por_expediente(self) -> dict[str, str]:
-        saldos: dict[str, float] = {}
-        for idx, fila in enumerate(self._filas_deuda, start=1):
-            interno = str(fila.get("_expediente_pago", "") or fila.get("N° Expediente", "") or fila.get("No Licencia", "")).strip()
-            visible = str(fila.get("No Licencia", "") or fila.get("N° Expediente", "")).strip()
-            if not interno:
-                continue
-            expediente = f"N/A (deuda {idx})" if visible in {"", "N/A", "—"} else visible
-
-            saldo = str(
-                fila.get("Saldo Actual ($)", "") or fila.get("Saldo Actual", "")
-            ).strip()
-            if saldo:
-                saldos[expediente] = saldos.get(expediente, 0.0) + _parse_monto(saldo)
-        return {exp: str(saldo) for exp, saldo in saldos.items()}
-
-    def _destinos_abono_por_expediente(self) -> dict[str, list[dict]]:
-        destinos: dict[str, list[dict]] = {}
-        for idx, fila in enumerate(self._filas_deuda, start=1):
-            interno = str(fila.get("_expediente_pago", "") or fila.get("N° Expediente", "") or fila.get("No Licencia", "")).strip()
-            visible = str(fila.get("No Licencia", "") or fila.get("N° Expediente", "")).strip()
-            if not interno:
-                continue
-            expediente = f"N/A (deuda {idx})" if visible in {"", "N/A", "—"} else visible
-
-            saldo = _parse_monto(fila.get("Saldo Actual ($)", "") or fila.get("Saldo Actual", ""))
-            copago = _parse_monto(
-                fila.get("Copago ($)", "") or fila.get("Monto_Cobrar", "") or fila.get("Mto Pagar", "")
-            )
-            pagos = _parse_monto(fila.get("Total Pagos ($)", "") or fila.get("Pagos", ""))
-            detalle_id = str(fila.get("_detalle_id", "") or fila.get("id", "")).strip()
-            label = (
-                f"{idx}. Monto {_formatear_moneda_chilena(copago)} | "
-                f"Pagado {_formatear_moneda_chilena(pagos)} | "
-                f"Saldo {_formatear_moneda_chilena(saldo)}"
-            )
-            destinos.setdefault(expediente, []).append({
-                "detalle_id": detalle_id,
-                "copago": copago,
-                "total_pagos": pagos,
-                "saldo_actual": saldo,
-                "label": label,
-            })
-        return destinos
-
-    def _registrar_pago(self):
-        saldo_actual = self._obtener_monto_resumen("Saldo_Actual", "Saldo Actual ($)", "Saldo Actual")
-        expedientes = self._expedientes_disponibles()
-        saldos_por_expediente = self._saldos_por_expediente()
-        destinos_abono_por_expediente = self._destinos_abono_por_expediente()
-
-        dlg = _RegistrarPagoDialog(
-            saldo_actual=saldo_actual,
-            expedientes=expedientes,
-            saldos_por_expediente=saldos_por_expediente,
-            destinos_abono_por_expediente=destinos_abono_por_expediente,
-            parent=self,
-        )
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        datos = dlg.obtener_datos()
-        expediente_etiqueta = datos["expediente"]
-        expediente = getattr(self, "_expediente_pago_por_etiqueta", {}).get(
-            expediente_etiqueta, expediente_etiqueta
-        )
-        tipo_pago = datos["tipo_pago"]
-        monto = datos["monto"]
-        observaciones = datos["observaciones"]
-        detalle_id = datos.get("detalle_id", "")
-        fecha_efectiva = datos.get("fecha_efectiva", "")
-        idempotency_key = datos.get("idempotency_key", "")
-        distribucion = datos.get("distribucion", [])
-        empresa = self._obtener_empresa_actual()
-        nombre = str(self._info_cliente.get("Nombre", "")).strip() or self._rut
-
-        try:
-            if self._usa_backend_deudores():
-                resultado, err = backend_register_pago(
-                    self._session,
-                    rut=self._rut,
-                    empresa=empresa,
-                    expediente=expediente,
-                    tipo_pago=tipo_pago,
-                    monto=monto,
-                    observaciones=observaciones,
-                    detalle_id=detalle_id,
-                    fecha_efectiva=fecha_efectiva,
-                    idempotency_key=idempotency_key,
-                    distribucion=distribucion,
-                )
-                if err:
-                    raise ValueError(err)
-
-                self._refrescar_gestiones_con_reintentos()
-
-                QMessageBox.information(
-                    self,
-                    "Pago registrado",
-                    " El pago fue registrado correctamente y la deuda fue actualizada."
-                )
-                return
-
-            resultado = registrar_pago_por_rut(
-                empresa=empresa,
-                rut=self._rut,
-                tipo_pago=tipo_pago,
-                monto=monto,
-                expediente=expediente,
-                detalle_id=detalle_id,
-            )
-
-            estado_gestion = "Abonado" if str(tipo_pago).strip() == "Abono a la deuda" else "Pagado"
-
-            insertar_gestion_pago(
-                rut=self._rut,
-                nombre=nombre,
-                estado=estado_gestion,
-                fecha=datetime.datetime.now().strftime("%d/%m/%Y"),
-                empresa=empresa,
-                expediente=expediente,
-                monto=monto,
-                tipo_pago=tipo_pago,
-                observaciones_usuario=observaciones,
-            )
-
-            self._refrescar_gestiones_con_reintentos()
-
-            QMessageBox.information(
-                self,
-                "Pago registrado",
-                " El pago fue registrado correctamente y la deuda fue actualizada."
-            )
-
-        except Exception as e:
-            QMessageBox.warning(self, "No se pudo registrar el pago", str(e))
+        row_mail_btns.addWidget(self.btn_preview_email, 1)
+        row_mail_btns.addWidget(self.btn_enviar_email, 1)
+        row_mail_btns.addWidget(self.btn_enviar_whatsapp, 1)
+        card_mail.body.addLayout(row_mail_btns)
+        return card_mail
 
     def _obtener_email_destino(self) -> str:
         posibles = [
@@ -3044,6 +2204,974 @@ class DetalleDeudorDialog(QDialog):
         )
 
         QMessageBox.critical(self, "Error al enviar email", err)
+
+    def _refrescar_gestiones_con_reintentos(self) -> None:
+        """Cada diálogo decide cómo refrescar sus gestiones tras un envío."""
+
+
+class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
+    gestiones_actualizadas = pyqtSignal()
+
+    def __init__(self, df_detalle, rut: str, fila_resumen: dict | None = None, parent=None, session=None):
+        super().__init__(parent)
+        self.setWindowTitle("Detalle del deudor")
+        self.setMinimumSize(800, 520)
+        self.setSizeGripEnabled(True)
+        self.setWindowFlag(Qt.WindowType.WindowMinMaxButtonsHint, True)
+        self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.MSWindowsFixedSizeDialogHint)
+
+        from PyQt6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen().availableGeometry()
+        w = min(int(screen.width() * 0.95), 1680)
+        h = min(int(screen.height() * 0.92), 1000)
+        self.resize(w, h)
+        self.setModal(True)
+
+        self._session = session
+        self._rut = rut
+        self._fila_resumen = fila_resumen or {}
+        self._df_detalle_completo = df_detalle
+        self._email_worker: EnvioWorker | None = None
+        self._ultimo_asunto = ""
+        self._ultimo_email = ""
+        self._ultimo_nombre = ""
+        self._ultima_plantilla = ""
+        self._labels_cliente: dict[str, QLabel] = {}
+        self.lbl_nombre_header: QLabel | None = None
+        self.lbl_rut_header: QLabel | None = None
+        self.lbl_exp: QLabel | None = None
+        self.tbl_deuda: QTableView | None = None
+        self.cmb_tipo_envio: QComboBox | None = None
+        self.cmb_trabajador_individual: QComboBox | None = None
+        self.lbl_trabajador_individual: QLabel | None = None
+        self.kpi_copago: _KpiCard | None = None
+        self.kpi_total_pagos: _KpiCard | None = None
+        self.kpi_saldo_actual: _KpiCard | None = None
+        self.btn_asignar_tarea: QPushButton | None = None
+        self._can_operate_current_cartera = True
+
+        info_cliente, filas_deuda = extraer_detalle_deudor(df_detalle, rut)
+        self._info_cliente = info_cliente or {}
+        self._filas_deuda = filas_deuda or []
+        self._normalizar_fila_resumen_backend()
+        self._alinear_detalle_con_resumen_backend()
+        self._sincronizar_resumen_financiero_desde_detalle()
+
+        self._aplicar_fallbacks_info_cliente()
+        nombre = self._info_cliente.get("Nombre", rut)
+        rut_fmt = self._resolver_rut_cliente() or self._info_cliente.get("RUT", rut)
+
+        self._plantillas = cargar_plantillas(self._session) or []
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(12)
+
+        hdr = QHBoxLayout()
+        lbl_nombre = QLabel(nombre)
+        self.lbl_nombre_header = lbl_nombre
+        lbl_nombre.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        hdr.addWidget(lbl_nombre)
+        hdr.addStretch(1)
+
+        lbl_rut = QLabel(f"RUT: {rut_fmt}")
+        self.lbl_rut_header = lbl_rut
+        lbl_rut.setObjectName("HeaderHint")
+        hdr.addWidget(lbl_rut)
+
+        n_exp = len(self._filas_deuda)
+        lbl_exp = QLabel(f"{n_exp} expediente{'s' if n_exp != 1 else ''}")
+        self.lbl_exp = lbl_exp
+        lbl_exp.setObjectName("MutedLabel")
+        hdr.addWidget(lbl_exp)
+        root.addLayout(hdr)
+
+        if self._info_cliente:
+            card_cli = _Card("Datos del cliente")
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(24)
+            grid.setVerticalSpacing(5)
+            campos = [(_fix_mojibake_text(k), _fix_mojibake_text(v)) for k, v in self._info_cliente.items()]
+            mitad = (len(campos) + 1) // 2
+
+            for i, (etq, val) in enumerate(campos):
+                col_offset = 0 if i < mitad else 2
+                fila_grid = i if i < mitad else i - mitad
+
+                lbl_e = QLabel(f"{_fix_mojibake_text(etq)}:")
+                lbl_e.setObjectName("MutedLabel")
+                lbl_e.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+
+                lbl_v = QLabel(_fix_mojibake_text(val))
+                self._labels_cliente[etq] = lbl_v
+                lbl_v.setFont(QFont("Segoe UI", 10))
+                lbl_v.setWordWrap(True)
+                lbl_v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+                grid.addWidget(lbl_e, fila_grid, col_offset)
+                grid.addWidget(lbl_v, fila_grid, col_offset + 1)
+
+            grid.setColumnStretch(1, 1)
+            grid.setColumnStretch(3, 1)
+            card_cli.body.addLayout(grid)
+
+            row_btn_cliente = QHBoxLayout()
+            row_btn_cliente.addStretch(1)
+            self.btn_editar_cliente = QPushButton("\u270f\ufe0f Editar datos del cliente")
+            self.btn_editar_cliente.setObjectName("PrimaryButton")
+            self.btn_editar_cliente.clicked.connect(self._editar_cliente)
+            row_btn_cliente.addWidget(self.btn_editar_cliente)
+            card_cli.body.addLayout(row_btn_cliente)
+
+            copago = self._obtener_monto_resumen("Copago", "Copago ($)")
+            total_pagos = self._obtener_monto_resumen("Total_Pagos", "Total Pagos ($)")
+            saldo_actual = self._obtener_monto_resumen("Saldo_Actual", "Saldo Actual ($)", "Saldo Actual")
+
+            sep_fin = QFrame()
+            sep_fin.setFrameShape(QFrame.Shape.HLine)
+            sep_fin.setStyleSheet("color: #e2e8f0;")
+            card_cli.body.addWidget(sep_fin)
+
+            lbl_fin = QLabel("Resumen financiero")
+            lbl_fin.setObjectName("MutedLabel")
+            lbl_fin.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            card_cli.body.addWidget(lbl_fin)
+
+            row_kpis = QHBoxLayout()
+            row_kpis.setSpacing(12)
+            self.kpi_copago = _KpiCard("Copago ($)", copago)
+            self.kpi_total_pagos = _KpiCard("Total Pagos ($)", total_pagos)
+            self.kpi_saldo_actual = _KpiCard("Saldo Actual ($)", saldo_actual, is_balance=True)
+            row_kpis.addWidget(self.kpi_copago, 1)
+            row_kpis.addWidget(self.kpi_total_pagos, 1)
+            row_kpis.addWidget(self.kpi_saldo_actual, 1)
+
+            card_cli.body.addLayout(row_kpis)
+            root.addWidget(card_cli)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(7)
+        self._main_splitter = splitter
+
+        card_deuda = _Card(f"Detalle de deuda \u2014 {n_exp} expediente{'s' if n_exp != 1 else ''}")
+        card_deuda.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        if self._filas_deuda:
+            model = _DeudaModel(self._filas_deuda)
+            self.tbl_deuda = QTableView()
+            self.tbl_deuda.setModel(model)
+            self.tbl_deuda.setAlternatingRowColors(True)
+            self.tbl_deuda.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            self.tbl_deuda.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            self.tbl_deuda.setSortingEnabled(True)
+            self.tbl_deuda.verticalHeader().setVisible(False)
+            self.tbl_deuda.setWordWrap(False)
+            self.tbl_deuda.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.tbl_deuda.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.tbl_deuda.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            self.tbl_deuda.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            self.tbl_deuda.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+            self.tbl_deuda.horizontalHeader().setStretchLastSection(True)
+            self.tbl_deuda.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            card_deuda.body.addWidget(self.tbl_deuda, 1)
+        else:
+            lbl_nd = QLabel("Sin expedientes en la hoja DETALLE.")
+            lbl_nd.setObjectName("MutedLabel")
+            lbl_nd.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            card_deuda.body.addWidget(lbl_nd)
+
+        splitter.addWidget(card_deuda)
+
+        card_gest = _Card("Detalle de gesti\u00f3n")
+        card_gest.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        self._gestion_widget = _GestionWidget(
+            rut=self._rut,
+            nombre=nombre,
+            session=self._session,
+            empresa=str(self._fila_resumen.get("_empresa", "")).strip(),
+        )
+        self._gestion_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._gestion_widget.gestiones_actualizadas.connect(self._on_gestiones_actualizadas)
+
+        row_btn_gest = QHBoxLayout()
+        row_btn_gest.setSpacing(8)
+        self.btn_agregar_gestion = QPushButton("\u2795 Agregar gesti\u00f3n manual")
+        self.btn_agregar_gestion.setObjectName("PrimaryButton")
+        self.btn_agregar_gestion.setProperty("blockableAction", True)
+        self.btn_agregar_gestion.setMinimumHeight(34)
+        self.btn_agregar_gestion.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.btn_agregar_gestion.clicked.connect(self._agregar_gestion)
+        row_btn_gest.addWidget(self.btn_agregar_gestion)
+
+        self.btn_registrar_pago = QPushButton("\U0001F4B0 Registrar pago")
+        self.btn_registrar_pago.setObjectName("PrimaryButton")
+        self.btn_registrar_pago.setProperty("blockableAction", True)
+        self.btn_registrar_pago.setMinimumHeight(34)
+        self.btn_registrar_pago.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.btn_registrar_pago.clicked.connect(self._registrar_pago)
+        row_btn_gest.addWidget(self.btn_registrar_pago)
+
+        self.btn_asignar_tarea = QPushButton("\U0001F4DD Asignar tarea")
+        self.btn_asignar_tarea.setObjectName("PrimaryButton")
+        self.btn_asignar_tarea.setMinimumHeight(34)
+        self.btn_asignar_tarea.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.btn_asignar_tarea.clicked.connect(self._asignar_tarea)
+        row_btn_gest.addWidget(self.btn_asignar_tarea)
+
+        row_btn_gest.addStretch(1)
+        self._gestion_widget.btn_del.setMinimumHeight(34)
+        self._gestion_widget.btn_del.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        row_btn_gest.addWidget(self._gestion_widget.btn_del)
+
+        card_mail = self._construir_card_correo()
+
+        section_content = QWidget()
+        section_layout = QVBoxLayout(section_content)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(8)
+        section_layout.addWidget(self._gestion_widget)
+        section_layout.addLayout(row_btn_gest)
+        section_layout.addWidget(card_mail)
+        section_layout.addStretch(1)
+        card_gest.body.addWidget(section_content, 1)
+
+        gestion_scroll = QScrollArea()
+        gestion_scroll.setWidgetResizable(True)
+        gestion_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # Sin scroll horizontal: la tarjeta ocupa siempre el ancho completo del diálogo.
+        gestion_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        gestion_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        gestion_scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
+        gestion_scroll.setWidget(card_gest)
+        self._gestion_scroll = gestion_scroll
+        splitter.addWidget(gestion_scroll)
+
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([360, 440])
+        root.addWidget(splitter, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_cerrar = QPushButton("Cerrar")
+        btn_cerrar.setMinimumWidth(100)
+        btn_cerrar.clicked.connect(self.accept)
+        btn_row.addWidget(btn_cerrar)
+        root.addLayout(btn_row)
+
+        self._refrescar_selector_trabajador_individual()
+        self._on_cambio_tipo_envio_detalle()
+
+        self._aplicar_modo_backend()
+        self._ajustar_layout_responsivo()
+        QTimer.singleShot(0, self._actualizar_permisos_cartera)
+
+
+    def _aplicar_modo_backend(self):
+        if not self._usa_backend_deudores():
+            return
+
+        if getattr(self, "btn_editar_cliente", None) is not None:
+            self.btn_editar_cliente.setEnabled(True)
+            self.btn_editar_cliente.setToolTip("Editar datos del cliente conectado a CRM_Backend.")
+
+        if getattr(self, "btn_registrar_pago", None) is not None:
+            self.btn_registrar_pago.setEnabled(True)
+            self.btn_registrar_pago.setToolTip("Registrar pago conectado a CRM_Backend.")
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._ajustar_layout_responsivo()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._ajustar_layout_responsivo()
+
+    def _ajustar_layout_responsivo(self) -> None:
+        if hasattr(self, "_main_splitter"):
+            total_h = max(self._main_splitter.height(), 1)
+            debt_target = int(total_h * 0.45)
+            debt_target = max(190, min(520, debt_target))
+            management_min = 240
+            if total_h - debt_target < management_min:
+                debt_target = max(160, total_h - management_min)
+            self._main_splitter.setSizes([
+                debt_target,
+                max(total_h - debt_target, management_min),
+            ])
+
+
+    def _on_gestiones_actualizadas(self):
+        self._recargar_desde_bd()
+        self.gestiones_actualizadas.emit()
+
+    def _emitir_actualizacion_gestiones(self) -> None:
+        self._recargar_desde_bd()
+        if hasattr(self, "_gestion_widget") and self._gestion_widget is not None:
+            self._gestion_widget.refrescar()
+        self.gestiones_actualizadas.emit()
+
+    def _refrescar_gestiones_con_reintentos(self) -> None:
+        self._emitir_actualizacion_gestiones()
+        for delay_ms in (300, 900, 1800):
+            QTimer.singleShot(delay_ms, self._emitir_actualizacion_gestiones)
+
+    def _ejecutivas_destino_por_empresa(self, empresa: str) -> list[dict]:
+        asignacion = self._obtener_asignacion_empresa(empresa)
+        if not asignacion:
+            return []
+
+        nombre = str(asignacion.get("username", "")).strip()
+        email = str(asignacion.get("email", "")).strip()
+        user_id = asignacion.get("user_id")
+        if nombre and email:
+            display = f"{nombre} ({email})"
+        elif nombre:
+            display = nombre
+        elif email:
+            display = email
+        elif user_id:
+            display = f"Ejecutiva #{user_id}"
+        else:
+            display = "Ejecutiva asignada"
+
+        return [{
+            "user_id": user_id,
+            "username": nombre,
+            "email": email,
+            "display": display,
+        }]
+
+    def _refrescar_labels_cliente(self) -> None:
+        for etiqueta, lbl in self._labels_cliente.items():
+            valor = self._resolver_rut_cliente() if etiqueta == "RUT" else _fix_mojibake_text(str(self._info_cliente.get(etiqueta, "—")).strip())
+            lbl.setText(valor if valor else "—")
+
+        if self.lbl_nombre_header is not None:
+            self.lbl_nombre_header.setText(_fix_mojibake_text(str(self._info_cliente.get("Nombre", self._rut))))
+
+        if self.lbl_rut_header is not None:
+            self.lbl_rut_header.setText(f"RUT: {self._resolver_rut_cliente()}")
+
+        if self.lbl_exp is not None:
+            n_exp = len(self._filas_deuda)
+            self.lbl_exp.setText(f"{n_exp} expediente{'s' if n_exp != 1 else ''}")
+
+        self.lbl_email_destino.setText(
+            _fix_mojibake_text(f"Destino: {self._obtener_email_destino() or 'Sin correo disponible'}")
+        )
+        self.lbl_whatsapp_destino.setText(
+            _fix_mojibake_text(f"WhatsApp: {self._obtener_telefono_destino() or 'Sin teléfono disponible'}")
+        )
+
+    def _actualizar_tabla_detalle(self):
+        if self.tbl_deuda is not None:
+            self.tbl_deuda.setModel(_DeudaModel(self._filas_deuda))
+        self._refrescar_selector_trabajador_individual()
+        self._on_cambio_tipo_envio_detalle()
+
+    def _actualizar_kpis_financieros(self):
+        self._normalizar_fila_resumen_backend()
+        self._sincronizar_resumen_financiero_desde_detalle()
+        copago = self._obtener_monto_resumen("Copago", "Copago ($)")
+        total_pagos = self._obtener_monto_resumen("Total_Pagos", "Total Pagos ($)")
+        saldo_actual = self._obtener_monto_resumen("Saldo_Actual", "Saldo Actual ($)", "Saldo Actual")
+
+        if self.kpi_copago is not None:
+            self.kpi_copago.set_value(copago)
+        if self.kpi_total_pagos is not None:
+            self.kpi_total_pagos.set_value(total_pagos)
+        if self.kpi_saldo_actual is not None:
+            self.kpi_saldo_actual.set_value(saldo_actual)
+
+    def _recargar_desde_bd(self):
+        if self._usa_backend_deudores():
+            empresa = self._obtener_empresa_actual()
+            payload, err = backend_get_deudor_detalle(self._session, rut=self._rut, empresa=empresa)
+            if err:
+                return
+
+            df_det, fila_res = _backend_detalle_response_to_local(payload or {})
+            self._df_detalle_completo = df_det
+            self._fila_resumen.update(fila_res)
+            self._normalizar_fila_resumen_backend()
+
+            info_cliente, filas_deuda = extraer_detalle_deudor(df_det, self._rut)
+            self._info_cliente = info_cliente or self._info_cliente
+            self._filas_deuda = filas_deuda or []
+            self._alinear_detalle_con_resumen_backend()
+            self._sincronizar_resumen_financiero_desde_detalle()
+            self._normalizar_campos_info_cliente()
+
+            self._refrescar_labels_cliente()
+            self._actualizar_tabla_detalle()
+            self._actualizar_kpis_financieros()
+            self._actualizar_permisos_cartera()
+            return
+
+        empresa = self._obtener_empresa_actual()
+        if not empresa:
+            return
+
+        df_det = cargar_detalle_empresa(empresa)
+        df_res = cargar_empresa(empresa)
+
+        self._df_detalle_completo = df_det
+
+        if not df_res.empty:
+            rut_norm = str(self._rut).strip().replace(".", "").replace("-", "").lstrip("0")
+            mask = (
+                df_res["Rut_Afiliado"].astype(str)
+                .str.replace(".", "", regex=False)
+                .str.replace("-", "", regex=False)
+                .str.strip()
+                .str.lstrip("0")
+                == rut_norm
+            )
+            filas_res = df_res.loc[mask]
+            if not filas_res.empty:
+                self._fila_resumen = filas_res.iloc[0].to_dict()
+
+        info_cliente, filas_deuda = extraer_detalle_deudor(df_det, self._rut)
+        self._info_cliente = info_cliente or self._info_cliente
+        self._filas_deuda = filas_deuda or []
+
+        fallbacks = {
+            "RUT": self._resolver_rut_cliente(),
+            "Nombre": self._fila_resumen.get("Nombre_Afiliado", ""),
+            "Correo": self._fila_resumen.get("mail_afiliado", "") or self._fila_resumen.get("Mail Emp", ""),
+            "Correo (Excel)": self._fila_resumen.get("BN", "") or self._fila_resumen.get("Mail Emp", ""),
+            "Teléfono Fijo": self._fila_resumen.get("telefono_fijo_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
+            "Teléfono Móvil": self._fila_resumen.get("telefono_movil_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
+        }
+        for k, v in fallbacks.items():
+            actual = str(self._info_cliente.get(k, "")).strip()
+            if actual in ("", "â€”", "nan", "None", "N"):
+                limpio = str(v).strip()
+                self._info_cliente[k] = limpio if limpio not in ("", "nan", "None", "N") else "â€”"
+        self._normalizar_campos_info_cliente()
+
+        self._normalizar_fila_resumen_backend()
+        self._alinear_detalle_con_resumen_backend()
+        self._sincronizar_resumen_financiero_desde_detalle()
+        self._refrescar_labels_cliente()
+        self._actualizar_tabla_detalle()
+        self._actualizar_kpis_financieros()
+        self._actualizar_permisos_cartera()
+
+    def _editar_cliente(self):
+        dlg = _EditarClienteDialog(self._info_cliente, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        nuevos = dlg.obtener_datos()
+        empresa = self._obtener_empresa_actual()
+
+        try:
+            if self._usa_backend_deudores():
+                rut_anterior = self._rut
+
+                _, err = backend_update_deudor_cliente(
+                    self._session,
+                    rut_original=rut_anterior,
+                    empresa=empresa,
+                    rut=nuevos.get("RUT", ""),
+                    nombre=nuevos.get("Nombre", ""),
+                    correo=nuevos.get("Correo", ""),
+                    correo_excel=nuevos.get("Correo (Excel)", ""),
+                    telefono_fijo=nuevos.get("Teléfono Fijo", ""),
+                    telefono_movil=nuevos.get("Teléfono Móvil", ""),
+                    direccion=nuevos.get("Dirección", ""),
+                    comuna=nuevos.get("Comuna", ""),
+                    ciudad=nuevos.get("Ciudad", ""),
+                )
+                if err:
+                    raise ValueError(err)
+
+                rut_editado = nuevos.get("RUT", rut_anterior).strip() or rut_anterior
+                rut_base = rut_editado.replace(".", "")
+                if "-" in rut_base:
+                    rut_base = rut_base.split("-", 1)[0]
+                rut_base = rut_base.replace("-", "").lstrip("0") or rut_anterior
+
+                self._rut = rut_base
+                self._info_cliente["RUT"] = rut_editado or ""
+                self._info_cliente["Nombre"] = nuevos.get("Nombre", "") or ""
+                self._info_cliente["Correo"] = nuevos.get("Correo", "") or ""
+                self._info_cliente["Correo (Excel)"] = nuevos.get("Correo (Excel)", "") or ""
+                self._info_cliente["Teléfono Fijo"] = nuevos.get("Teléfono Fijo", "") or ""
+                self._info_cliente["Teléfono Móvil"] = nuevos.get("Teléfono Móvil", "") or ""
+                if "Dirección" in self._info_cliente:
+                    self._info_cliente["Dirección"] = nuevos.get("Dirección", "") or ""
+                    self._info_cliente["Comuna"] = nuevos.get("Comuna", "") or ""
+                    self._info_cliente["Ciudad"] = nuevos.get("Ciudad", "") or ""
+
+                self._fila_resumen["Rut_Afiliado"] = self._rut
+                self._fila_resumen["_RUT_COMPLETO"] = self._info_cliente["RUT"]
+                self._fila_resumen["Nombre_Afiliado"] = self._info_cliente["Nombre"]
+                self._fila_resumen["mail_afiliado"] = self._info_cliente["Correo"]
+                self._fila_resumen["BN"] = self._info_cliente["Correo (Excel)"]
+                self._fila_resumen["telefono_fijo_afiliado"] = self._info_cliente["Teléfono Fijo"]
+                self._fila_resumen["telefono_movil_afiliado"] = self._info_cliente["Teléfono Móvil"]
+                self._fila_resumen["Direccion_Deudor"] = nuevos.get("Dirección", "")
+                self._fila_resumen["Comuna_Deudor"] = nuevos.get("Comuna", "")
+                self._fila_resumen["Ciudad_Deudor"] = nuevos.get("Ciudad", "")
+
+                self._refrescar_labels_cliente()
+                self._recargar_desde_bd()
+                self.gestiones_actualizadas.emit()
+
+                QMessageBox.information(
+                    self,
+                    "Actualización exitosa",
+                    " Los datos del cliente fueron actualizados correctamente en CRM_Backend."
+                )
+                return
+
+            ok = actualizar_cliente_por_rut(
+                empresa=empresa,
+                rut_original=self._rut,
+                datos_actualizados={
+                    "Rut_Afiliado": nuevos.get("RUT", ""),
+                    "Nombre_Afiliado": nuevos.get("Nombre", ""),
+                    "mail_afiliado": nuevos.get("Correo", ""),
+                    "BN": nuevos.get("Correo (Excel)", ""),
+                    "telefono_fijo_afiliado": nuevos.get("Teléfono Fijo", ""),
+                    "telefono_movil_afiliado": nuevos.get("Teléfono Móvil", ""),
+                    "Direccion_Deudor": nuevos.get("Dirección", ""),
+                    "Comuna_Deudor": nuevos.get("Comuna", ""),
+                    "Ciudad_Deudor": nuevos.get("Ciudad", ""),
+                }
+            )
+
+            if not ok:
+                QMessageBox.warning(
+                    self,
+                    "Sin cambios",
+                    "No se encontró un registro para actualizar en la base de datos."
+                )
+                return
+
+            rut_anterior = self._rut
+            self._rut = nuevos.get("RUT", rut_anterior).strip() or rut_anterior
+
+            self._info_cliente["RUT"] = nuevos.get("RUT", "") or ""
+            self._info_cliente["Nombre"] = nuevos.get("Nombre", "") or ""
+            self._info_cliente["Correo"] = nuevos.get("Correo", "") or ""
+            self._info_cliente["Correo (Excel)"] = nuevos.get("Correo (Excel)", "") or ""
+            self._info_cliente["Teléfono Fijo"] = nuevos.get("Teléfono Fijo", "") or ""
+            self._info_cliente["Teléfono Móvil"] = nuevos.get("Teléfono Móvil", "") or ""
+            if "Dirección" in self._info_cliente:
+                self._info_cliente["Dirección"] = nuevos.get("Dirección", "") or ""
+                self._info_cliente["Comuna"] = nuevos.get("Comuna", "") or ""
+                self._info_cliente["Ciudad"] = nuevos.get("Ciudad", "") or ""
+
+            self._fila_resumen["Rut_Afiliado"] = self._info_cliente["RUT"]
+            self._fila_resumen["Nombre_Afiliado"] = self._info_cliente["Nombre"]
+            self._fila_resumen["mail_afiliado"] = self._info_cliente["Correo"]
+            self._fila_resumen["BN"] = self._info_cliente["Correo (Excel)"]
+            self._fila_resumen["telefono_fijo_afiliado"] = self._info_cliente["Teléfono Fijo"]
+            self._fila_resumen["telefono_movil_afiliado"] = self._info_cliente["Teléfono Móvil"]
+
+            self._refrescar_labels_cliente()
+            self.gestiones_actualizadas.emit()
+
+            QMessageBox.information(
+                self,
+                "Actualización exitosa",
+                " Los datos del cliente fueron actualizados correctamente en la base de datos."
+            )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error al actualizar",
+                f"No se pudieron actualizar los datos del cliente.\n\nDetalle:\n{e}"
+            )
+
+    def _obtener_monto_resumen(self, *keys: str) -> str:
+        aliases = {
+            "Copago": "Copago",
+            "Copago ($)": "Copago",
+            "Mto Pagar": "Copago",
+            "Monto_Cobrar": "Copago",
+            "Total_Pagos": "Total_Pagos",
+            "Total Pagos ($)": "Total_Pagos",
+            "Pagos": "Total_Pagos",
+            "Saldo_Actual": "Saldo_Actual",
+            "Saldo Actual ($)": "Saldo_Actual",
+            "Saldo Actual": "Saldo_Actual",
+        }
+
+        totales_detalle = self._totales_financieros_desde_detalle()
+        for key in keys:
+            canon = aliases.get(key)
+            if canon in totales_detalle:
+                return _formatear_moneda_chilena(totales_detalle[canon])
+
+        for key in keys:
+            if key in self._fila_resumen:
+                val = str(self._fila_resumen.get(key, "")).strip()
+                if val and val not in ("nan", "None"):
+                    return _formatear_moneda_chilena(val)
+        return ""
+
+    def _agregar_gestion(self):
+        nombre = str(self._info_cliente.get("Nombre", "")).strip() or self._rut
+        dlg = AgregarGestionDialog(
+            rut=self._rut,
+            nombre=nombre,
+            session=self._session,
+            empresa=self._obtener_empresa_actual(),
+            parent=self,
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._refrescar_gestiones_con_reintentos()
+
+    def _asignar_tarea(self):
+        empresa = self._obtener_empresa_actual()
+        if not empresa:
+            QMessageBox.warning(self, "Empresa no disponible", "No fue posible determinar la cartera del deudor.")
+            return
+
+        ejecutivas = self._ejecutivas_destino_por_empresa(empresa)
+        if not ejecutivas:
+            QMessageBox.warning(
+                self,
+                "Sin ejecutiva asignada",
+                "No hay una ejecutiva configurada para esta cartera. Solicita la asignación al supervisor.",
+            )
+            return
+
+        dlg = _AsignarTareaDialog(empresa=empresa, ejecutivas=ejecutivas, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        datos = dlg.datos()
+        ejecutiva = datos.get("ejecutiva") if isinstance(datos, dict) else {}
+        if not isinstance(ejecutiva, dict):
+            ejecutiva = {}
+
+        nombre = str(ejecutiva.get("username", "")).strip()
+        email = str(ejecutiva.get("email", "")).strip()
+        if nombre and email:
+            destino = f"{nombre} ({email})"
+        else:
+            destino = nombre or email or "Ejecutiva asignada"
+
+        obs_usuario = str(datos.get("observacion", "")).strip() if isinstance(datos, dict) else ""
+        observacion = f"Tarea: Contactar cliente | Destino: {destino}"
+        if obs_usuario:
+            observacion += f" | Nota: {obs_usuario}"
+
+        try:
+            fecha = datetime.date.today().strftime("%d/%m/%Y")
+            nombre_afiliado = str(self._info_cliente.get("Nombre", "")).strip() or self._rut
+            assigned_to_user_id = ejecutiva.get("user_id")
+            try:
+                assigned_to_user_id = int(assigned_to_user_id) if assigned_to_user_id is not None else None
+            except Exception:
+                assigned_to_user_id = None
+
+            if self._usa_backend_deudores():
+                _, err = backend_create_gestion(
+                    self._session,
+                    rut=self._rut,
+                    empresa=empresa,
+                    nombre_afiliado=nombre_afiliado,
+                    tipo_gestion="Manual",
+                    estado="Gesti\u00f3n asignada",
+                    fecha_gestion=fecha,
+                    observacion=observacion,
+                    origen="manual",
+                    assigned_to_user_id=assigned_to_user_id,
+                )
+                if err:
+                    raise ValueError(err)
+            else:
+                insertar_gestion_manual(
+                    rut=self._rut,
+                    nombre=nombre_afiliado,
+                    tipo_gestion="Manual",
+                    estado="Gesti\u00f3n asignada",
+                    fecha=fecha,
+                    observacion=observacion,
+                )
+
+            QMessageBox.information(self, "Tarea asignada", "\u2705 La tarea fue registrada como 'Gesti\u00f3n asignada'.")
+            self._refrescar_gestiones_con_reintentos()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo asignar la tarea.\n\nDetalle:\n{e}")
+
+    def _expedientes_disponibles(self) -> list[str]:
+        self._expediente_pago_por_etiqueta = {}
+        expedientes = []
+        for idx, fila in enumerate(self._filas_deuda, start=1):
+            interno = str(
+                fila.get("_expediente_pago", "") or fila.get("N° Expediente", "")
+                or fila.get("No Licencia", "") or fila.get("Folio LIQ", "")
+            ).strip()
+            visible = str(
+                fila.get("No Licencia", "") or fila.get("N° Expediente", "")
+                or fila.get("Folio LIQ", "")
+            ).strip()
+            if not interno:
+                continue
+            etiqueta = f"N/A (deuda {idx})" if visible in {"", "N/A", "—"} else visible
+            self._expediente_pago_por_etiqueta[etiqueta] = interno
+            if etiqueta not in expedientes:
+                expedientes.append(etiqueta)
+        return expedientes
+
+    def _saldos_por_expediente(self) -> dict[str, str]:
+        saldos: dict[str, float] = {}
+        for idx, fila in enumerate(self._filas_deuda, start=1):
+            interno = str(fila.get("_expediente_pago", "") or fila.get("N° Expediente", "") or fila.get("No Licencia", "")).strip()
+            visible = str(fila.get("No Licencia", "") or fila.get("N° Expediente", "")).strip()
+            if not interno:
+                continue
+            expediente = f"N/A (deuda {idx})" if visible in {"", "N/A", "—"} else visible
+
+            saldo = str(
+                fila.get("Saldo Actual ($)", "") or fila.get("Saldo Actual", "")
+            ).strip()
+            if saldo:
+                saldos[expediente] = saldos.get(expediente, 0.0) + _parse_monto(saldo)
+        return {exp: str(saldo) for exp, saldo in saldos.items()}
+
+    def _destinos_abono_por_expediente(self) -> dict[str, list[dict]]:
+        destinos: dict[str, list[dict]] = {}
+        for idx, fila in enumerate(self._filas_deuda, start=1):
+            interno = str(fila.get("_expediente_pago", "") or fila.get("N° Expediente", "") or fila.get("No Licencia", "")).strip()
+            visible = str(fila.get("No Licencia", "") or fila.get("N° Expediente", "")).strip()
+            if not interno:
+                continue
+            expediente = f"N/A (deuda {idx})" if visible in {"", "N/A", "—"} else visible
+
+            saldo = _parse_monto(fila.get("Saldo Actual ($)", "") or fila.get("Saldo Actual", ""))
+            copago = _parse_monto(
+                fila.get("Copago ($)", "") or fila.get("Monto_Cobrar", "") or fila.get("Mto Pagar", "")
+            )
+            pagos = _parse_monto(fila.get("Total Pagos ($)", "") or fila.get("Pagos", ""))
+            detalle_id = str(fila.get("_detalle_id", "") or fila.get("id", "")).strip()
+            label = (
+                f"{idx}. Monto {_formatear_moneda_chilena(copago)} | "
+                f"Pagado {_formatear_moneda_chilena(pagos)} | "
+                f"Saldo {_formatear_moneda_chilena(saldo)}"
+            )
+            destinos.setdefault(expediente, []).append({
+                "detalle_id": detalle_id,
+                "copago": copago,
+                "total_pagos": pagos,
+                "saldo_actual": saldo,
+                "label": label,
+            })
+        return destinos
+
+    def _registrar_pago(self):
+        saldo_actual = self._obtener_monto_resumen("Saldo_Actual", "Saldo Actual ($)", "Saldo Actual")
+        expedientes = self._expedientes_disponibles()
+        saldos_por_expediente = self._saldos_por_expediente()
+        destinos_abono_por_expediente = self._destinos_abono_por_expediente()
+
+        dlg = _RegistrarPagoDialog(
+            saldo_actual=saldo_actual,
+            expedientes=expedientes,
+            saldos_por_expediente=saldos_por_expediente,
+            destinos_abono_por_expediente=destinos_abono_por_expediente,
+            parent=self,
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        datos = dlg.obtener_datos()
+        expediente_etiqueta = datos["expediente"]
+        expediente = getattr(self, "_expediente_pago_por_etiqueta", {}).get(
+            expediente_etiqueta, expediente_etiqueta
+        )
+        tipo_pago = datos["tipo_pago"]
+        monto = datos["monto"]
+        observaciones = datos["observaciones"]
+        detalle_id = datos.get("detalle_id", "")
+        fecha_efectiva = datos.get("fecha_efectiva", "")
+        idempotency_key = datos.get("idempotency_key", "")
+        distribucion = datos.get("distribucion", [])
+        empresa = self._obtener_empresa_actual()
+        nombre = str(self._info_cliente.get("Nombre", "")).strip() or self._rut
+
+        try:
+            if self._usa_backend_deudores():
+                resultado, err = backend_register_pago(
+                    self._session,
+                    rut=self._rut,
+                    empresa=empresa,
+                    expediente=expediente,
+                    tipo_pago=tipo_pago,
+                    monto=monto,
+                    observaciones=observaciones,
+                    detalle_id=detalle_id,
+                    fecha_efectiva=fecha_efectiva,
+                    idempotency_key=idempotency_key,
+                    distribucion=distribucion,
+                )
+                if err:
+                    raise ValueError(err)
+
+                self._refrescar_gestiones_con_reintentos()
+
+                QMessageBox.information(
+                    self,
+                    "Pago registrado",
+                    " El pago fue registrado correctamente y la deuda fue actualizada."
+                )
+                return
+
+            resultado = registrar_pago_por_rut(
+                empresa=empresa,
+                rut=self._rut,
+                tipo_pago=tipo_pago,
+                monto=monto,
+                expediente=expediente,
+                detalle_id=detalle_id,
+            )
+
+            estado_gestion = "Abonado" if str(tipo_pago).strip() == "Abono a la deuda" else "Pagado"
+
+            insertar_gestion_pago(
+                rut=self._rut,
+                nombre=nombre,
+                estado=estado_gestion,
+                fecha=datetime.datetime.now().strftime("%d/%m/%Y"),
+                empresa=empresa,
+                expediente=expediente,
+                monto=monto,
+                tipo_pago=tipo_pago,
+                observaciones_usuario=observaciones,
+            )
+
+            self._refrescar_gestiones_con_reintentos()
+
+            QMessageBox.information(
+                self,
+                "Pago registrado",
+                " El pago fue registrado correctamente y la deuda fue actualizada."
+            )
+
+        except Exception as e:
+            QMessageBox.warning(self, "No se pudo registrar el pago", str(e))
+
+
+class CorreoDeudorDialog(_CorreoDeudorMixin, QDialog):
+    """Correo al deudor en ventana propia.
+
+    Ofrece las mismas opciones y acciones que la sección "Correo desde detalle"
+    del diálogo "Detalle del deudor" (plantilla, tipo de envío, trabajador/licencia,
+    vista previa, envío por email y por WhatsApp), para poder gestionar el contacto
+    sin abrir el detalle completo.
+    """
+
+    gestiones_actualizadas = pyqtSignal()
+
+    def __init__(self, df_detalle, rut: str, fila_resumen: dict | None = None, parent=None, session=None):
+        super().__init__(parent)
+        self.setWindowTitle("Correo al deudor")
+        self.setMinimumSize(560, 400)
+        self.resize(660, 480)
+        self.setSizeGripEnabled(True)
+        self.setModal(True)
+
+        self._session = session
+        self._rut = rut
+        self._fila_resumen = fila_resumen or {}
+        self._df_detalle_completo = df_detalle
+        self._email_worker: EnvioWorker | None = None
+        self._ultimo_asunto = ""
+        self._ultimo_email = ""
+        self._ultimo_nombre = ""
+        self._ultima_plantilla = ""
+        self._gestion_widget = None
+        self.cmb_tipo_envio: QComboBox | None = None
+        self.cmb_trabajador_individual: QComboBox | None = None
+        self.lbl_trabajador_individual: QLabel | None = None
+        self._can_operate_current_cartera = True
+
+        if df_detalle is not None and not df_detalle.empty:
+            info_cliente, filas_deuda = extraer_detalle_deudor(df_detalle, rut)
+        else:
+            info_cliente, filas_deuda = {}, []
+        self._info_cliente = info_cliente or {}
+        self._filas_deuda = filas_deuda or []
+        self._normalizar_fila_resumen_backend()
+        self._alinear_detalle_con_resumen_backend()
+        self._sincronizar_resumen_financiero_desde_detalle()
+        self._aplicar_fallbacks_info_cliente()
+
+        self._plantillas = cargar_plantillas(self._session) or []
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(12)
+
+        hdr = QHBoxLayout()
+        nombre = _fix_mojibake_text(str(self._info_cliente.get("Nombre", "")).strip())
+        lbl_nombre = QLabel(nombre if nombre and nombre != "—" else rut)
+        lbl_nombre.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        hdr.addWidget(lbl_nombre)
+        hdr.addStretch(1)
+
+        lbl_rut = QLabel(f"RUT: {self._resolver_rut_cliente() or rut}")
+        lbl_rut.setObjectName("HeaderHint")
+        hdr.addWidget(lbl_rut)
+
+        n_exp = len(self._filas_deuda)
+        lbl_exp = QLabel(f"{n_exp} expediente{'s' if n_exp != 1 else ''}")
+        lbl_exp.setObjectName("MutedLabel")
+        hdr.addWidget(lbl_exp)
+        root.addLayout(hdr)
+
+        root.addWidget(self._construir_card_correo())
+        root.addStretch(1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_cerrar = QPushButton("Cerrar")
+        btn_cerrar.setMinimumWidth(100)
+        btn_cerrar.clicked.connect(self.accept)
+        btn_row.addWidget(btn_cerrar)
+        root.addLayout(btn_row)
+
+        self._refrescar_selector_trabajador_individual()
+        self._on_cambio_tipo_envio_detalle()
+        QTimer.singleShot(0, self._actualizar_permisos_cartera)
+
+    def _refrescar_gestiones_con_reintentos(self) -> None:
+        # La gestión ya quedó guardada; aquí solo avisamos a la vista que abrió
+        # el diálogo para que refresque su cola.
+        self.gestiones_actualizadas.emit()
+
+
+def cargar_detalle_deudor_para_dialogos(session, rut: str, empresa: str = "") -> tuple[pd.DataFrame, dict]:
+    """Obtiene (detalle, resumen) de un deudor para abrir los diálogos de correo o
+    gestión desde otros módulos (por ejemplo, la cola priorizada del dashboard).
+
+    Lanza ``RuntimeError`` si el backend no puede entregar el detalle.
+    """
+    if session is not None and getattr(session, "auth_source", "") == "backend":
+        payload, err = backend_get_deudor_detalle(session, rut=rut, empresa=empresa)
+        if err:
+            raise RuntimeError(err)
+        return _backend_detalle_response_to_local(payload or {})
+
+    empresa_txt = str(empresa or "").strip()
+    df_detalle = cargar_detalle_empresa(empresa_txt) if empresa_txt else cargar_detalle_todas()
+    if df_detalle is None or df_detalle.empty:
+        df_detalle = cargar_detalle_todas()
+    return df_detalle, {}
+
 
 
 

@@ -3,7 +3,8 @@ setlocal
 cd /d "%~dp0"
 
 echo [1/2] Compilando ejecutable con PyInstaller...
-call build.bat
+rem Ruta completa: asi funciona aunque la consola no busque batch en el directorio actual.
+call "%~dp0build.bat"
 if errorlevel 1 goto :build_error
 
 echo.
