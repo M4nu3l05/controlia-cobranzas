@@ -311,7 +311,7 @@ def cover(doc: Document):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(72)
-    set_run(p.add_run("Versión del manual: 1.1  |  Agosto de 2026  |  Aplicación 2.1.0"), 10, BLUE_DARK, True)
+    set_run(p.add_run("Versión del manual: 1.2  |  Agosto de 2026  |  Aplicación 2.2.0"), 10, BLUE_DARK, True)
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     set_run(p.add_run("Documento de entrega de la aplicación"), 9.5, MUTED)
@@ -325,7 +325,7 @@ def contents(doc):
     sections = [
         ("1", "Conocer la aplicación", "Propósito, conceptos, interfaz, seguridad, acceso y trabajo sin conexión."),
         ("2", "Roles y permisos", "Qué puede ver y hacer cada perfil."),
-        ("3", "Dashboard", "Indicadores, prioridades y filtros de trabajo."),
+        ("3", "Dashboard", "Indicadores, prioridades, filtros y acciones directas sobre la cola."),
         ("4", "Conciliación de Nóminas", "Comparación mensual y reporte Excel."),
         ("5", "Búsqueda de Deudores", "Carga, consulta, filtros y tareas."),
         ("6", "Ficha del deudor", "Gestiones, pagos, datos, correo y WhatsApp."),
@@ -379,6 +379,11 @@ def chapter_1(doc):
     bullet(doc, "Si el sistema informa que la cuenta está inactiva, contacte al administrador.")
     h2(doc, "1.5 Aceptación de documentos legales")
     para(doc, "Cuando existe una versión nueva de los Términos y Condiciones o de la Política de Privacidad, se abre una ventana obligatoria. Lea ambas pestañas y pulse Aceptar y continuar. Si elige Salir, la aplicación se cerrará sin habilitar el trabajo.")
+    table(doc, ["Documento", "Versión vigente", "Dónde consultarlo"], [
+        ("Términos y Condiciones", "v1.0", "Menú legal de la barra superior, en cualquier momento."),
+        ("Política de Privacidad y Confidencialidad", "v2.0", "Menú legal y también durante la instalación, antes de instalar."),
+    ], [3000, 1700, 4660], 8.8)
+    para(doc, "La aceptación queda registrada con el usuario, la fecha y la versión del documento. Si se publica una versión posterior, la aplicación volverá a solicitar la aceptación aunque usted ya haya aceptado la anterior.")
     h2(doc, "1.6 Cierre seguro")
     para(doc, "Para terminar, pulse Cerrar sesión en la barra superior. Esto registra el término de la sesión y vuelve a la pantalla de acceso. Evite dejar la aplicación abierta en un equipo compartido.")
     h2(doc, "1.7 Si se corta la conexión")
@@ -449,9 +454,26 @@ def chapter_3(doc):
     bullet(doc, "Algún canal disponible; teléfono y email; sin datos de contacto.")
     step(doc, 1, "Defina los filtros", "Seleccione los criterios que representen el objetivo del día.")
     step(doc, 2, "Revise la cola", "Comience por los casos con mayor prioridad y saldo relevante.")
-    step(doc, 3, "Abra el caso", "Use la acción disponible para acceder al detalle del deudor.")
+    step(doc, 3, "Abra el caso", "Haga clic sobre la fila para desplegar los datos de contacto y las acciones disponibles.")
     step(doc, 4, "Registre el resultado", "Toda llamada, mensaje, pago o acuerdo debe quedar como gestión.")
-    h2(doc, "3.3 Vista general")
+    h2(doc, "3.3 Acciones directas sobre un caso de la cola")
+    para(doc, "Al hacer clic sobre una fila de la cola priorizada se despliegan el RUT, el último estado, el teléfono, el correo, la dirección y la cartera, junto con los botones de acción. Los botones de contacto aparecen solo cuando el deudor tiene ese canal disponible; Registrar gestión está siempre disponible.")
+    table(doc, ["Botón", "Qué hace"], [
+        ("Enviar email", "Abre la ventana Correo al deudor, con las mismas opciones que la ficha del deudor: plantilla, tipo de envío, trabajador/licencia, vista previa, envío de correo y envío por WhatsApp."),
+        ("Registrar gestión", "Abre el formulario Agregar gestión manual del deudor: tipo, estado, fecha y observación."),
+        ("Llamar / Generar carta", "Muestran un aviso con el caso seleccionado. El teléfono y la dirección para trabajarlos fuera de la aplicación están en el detalle desplegado de la fila."),
+    ], [2000, 7360], 8.8)
+    h3(doc, "Enviar un correo desde la cola")
+    step(doc, 1, "Pulse Enviar email", "Se abre Correo al deudor con el nombre, el RUT y los expedientes del caso.")
+    step(doc, 2, "Seleccione plantilla y tipo de envío", "Individual usa un trabajador/licencia; Consolidado reúne todas las licencias del deudor.")
+    step(doc, 3, "Revise el destino", "Si aparece Sin correo disponible, corrija los datos del cliente antes de continuar.")
+    step(doc, 4, "Use Vista previa", "Confirme Para, Asunto y el detalle antes de enviar.")
+    step(doc, 5, "Pulse Enviar email", "Si la sesión SMTP no está activa, la aplicación solicita únicamente la contraseña del servidor.")
+    para(doc, "El envío queda registrado automáticamente como gestión Email / Enviado y la cola se recalcula al cerrar la ventana. Los detalles de plantillas, variables y resultados están en el capítulo 6.")
+    h3(doc, "Registrar una gestión desde la cola")
+    para(doc, "El botón Registrar gestión abre exactamente el mismo formulario descrito en la sección 6.3, con Tipo, Estado, Fecha y Observación. Al guardar, la prioridad y la antigüedad del caso se actualizan en la cola.")
+    callout(doc, "Cartera no asignada", "Si la cartera del deudor no está asignada a su usuario, dentro de la ventana Correo al deudor los botones de vista previa y envío aparecen deshabilitados con el aviso Bloqueado: cartera no asignada a tu usuario. En ese caso use Asignar tarea desde la ficha del deudor para derivar el caso a la ejecutiva responsable.", "warn")
+    h2(doc, "3.4 Vista general")
     table(doc, ["Indicador", "Interpretación"], [
         ("Cartera total", "Cantidad de deudores visibles en el período."),
         ("Saldo actual", "Suma de saldos pendientes."),
@@ -549,6 +571,7 @@ def chapter_6(doc):
     step(doc, 2, "Corrija únicamente lo necesario", "No elimine datos válidos que no pretende modificar.")
     step(doc, 3, "Pulse Guardar cambios", "Espere la confirmación antes de cerrar la ficha.")
     h2(doc, "6.3 Agregar una gestión manual")
+    para(doc, "Este mismo formulario se abre con el botón Registrar gestión de la cola priorizada del Dashboard, descrito en la sección 3.3.")
     step(doc, 1, "Pulse Agregar gestión manual", "Se abrirá el formulario del deudor actual.")
     step(doc, 2, "Seleccione Tipo", "Opciones: SMS, Email, Carta, Manual, Llamada, Visita, WhatsApp, Pago u Otro.")
     step(doc, 3, "Seleccione Estado", "Use el resultado que describa lo ocurrido, por ejemplo Sin Respuesta, Respondido, Acuerdo de pago, Promesa de pago o Cliente Sin deuda.")
@@ -569,6 +592,7 @@ def chapter_6(doc):
     h2(doc, "6.5 Asignar una tarea")
     para(doc, "Cuando una cartera no pueda ser gestionada directamente por el usuario, el botón Asignar tarea permite derivarla a la ejecutiva responsable. Seleccione la ejecutiva disponible para esa compañía, defina plazo y escriba una observación clara.")
     h2(doc, "6.6 Vista previa y envío de correo individual")
+    para(doc, "Estas mismas opciones están disponibles sin abrir la ficha, con el botón Enviar email de la cola priorizada del Dashboard (sección 3.3).")
     step(doc, 1, "Seleccione la plantilla", "Elija el texto apropiado para el objetivo del contacto.")
     step(doc, 2, "Seleccione el tipo de envío", "Individual usa un trabajador/licencia; Consolidado reúne todas las licencias del deudor.")
     step(doc, 3, "Revise el destino", "Si aparece Sin correo disponible, corrija los datos antes de continuar.")
@@ -702,7 +726,7 @@ def chapter_10(doc):
     table(doc, ["Momento", "Acción recomendada", "Control final"], [
         ("Inicio", "Abrir Dashboard > Mi trabajo; revisar salud, foco, alertas y tareas.", "Confirmar que aparecen las carteras correctas."),
         ("Priorización", "Aplicar filtros por antigüedad, saldo y contacto; comenzar por la cola priorizada.", "Evitar saltar casos críticos sin dejar motivo."),
-        ("Gestión", "Abrir deudor, verificar identidad y datos de contacto; realizar la acción.", "Registrar tipo, estado, fecha y observación."),
+        ("Gestión", "Desplegar el caso en la cola y usar Enviar email o Registrar gestión; abrir la ficha del deudor cuando se necesite el detalle completo.", "Registrar tipo, estado, fecha y observación."),
         ("Pagos", "Registrar monto, fecha y expediente; dejar el respaldo en la observación.", "Validar nuevo saldo y pagos acumulados."),
         ("Cierre", "Cerrar tareas realizadas, revisar pendientes y cerrar sesión.", "No dejar la aplicación abierta."),
     ], [1350, 5260, 2750], 8.4)
