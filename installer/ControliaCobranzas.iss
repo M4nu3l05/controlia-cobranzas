@@ -2,7 +2,7 @@
 ; Requiere tener compilado: dist\ControliaCobranzas\ControliaCobranzas.exe
 
 #define MyAppName "Controlia Cobranzas"
-#define MyAppVersion "2.2.0"
+#define MyAppVersion "2.3.0"
 #define MyAppPublisher "Controlia"
 #define MyAppExeName "ControliaCobranzas.exe"
 ; La llave doble es el escape de Inno Setup: el AppId real es {1D6E7720-...}
@@ -29,7 +29,9 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 #ifexist MyAppIconFile
 SetupIconFile={#MyAppIconFile}
 #endif
-ArchitecturesInstallIn64BitMode=x64
+; "x64" quedo obsoleto en Inno Setup 6.3; "x64compatible" es el reemplazo
+; recomendado y ademas cubre Windows ARM64 ejecutando el binario x64.
+ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 
 [Languages]

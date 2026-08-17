@@ -16,7 +16,7 @@ Guía corta para reconstruir `ControliaCobranzas_Setup_<version>.exe` después d
 1. **Subir la versión** en `installer\ControliaCobranzas.iss`:
 
    ```
-   #define MyAppVersion "2.2.0"
+   #define MyAppVersion "2.3.0"
    ```
 
    El `AppId` **no se toca**: es el que hace que el setup actualice la instalación

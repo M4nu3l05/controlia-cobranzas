@@ -311,7 +311,7 @@ def cover(doc: Document):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(72)
-    set_run(p.add_run("Versión del manual: 1.3  |  Agosto de 2026  |  Aplicación 2.2.0"), 10, BLUE_DARK, True)
+    set_run(p.add_run("Versión del manual: 1.3  |  Agosto de 2026  |  Aplicación 2.3.0"), 10, BLUE_DARK, True)
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     set_run(p.add_run("Documento de entrega de la aplicación"), 9.5, MUTED)
