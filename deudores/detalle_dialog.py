@@ -41,6 +41,7 @@ from .database import (
     revertir_pago_por_rut,
 )
 
+from comisiones.service import registrar_pago_local as registrar_comision_pago_local
 from envios.config import (
     cargar_config,
     cargar_sesion_smtp,
@@ -3052,6 +3053,9 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
                 tipo_pago=tipo_pago,
                 observaciones_usuario=observaciones,
             )
+
+            # En modo backend la comisión se deriva del libro de pagos del CRM.
+            registrar_comision_pago_local(self._session, empresa=empresa, monto=monto)
 
             self._refrescar_gestiones_con_reintentos()
 

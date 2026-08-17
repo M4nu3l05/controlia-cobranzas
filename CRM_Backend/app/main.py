@@ -36,6 +36,7 @@ from app.models.payment import (  # noqa: F401
     PaymentReversal,
     PaymentTransaction,
 )
+from app.models.commission import CommissionRate, CommissionReset  # noqa: F401
 from app.schemas.auth import HealthResponse
 from app.services.auth_service import ensure_first_admin
 from app.services.template_service import ensure_default_email_templates

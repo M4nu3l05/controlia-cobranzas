@@ -11,11 +11,23 @@ from app.core.authorization import AuthorizationError
 from app.db.session import get_db
 from app.models.user import User
 from app.models.payment import PaymentReceipt, PaymentTransaction
+from app.schemas.commission import (
+    CommissionRateBulkRequest,
+    CommissionRateItem,
+    CommissionResetRequest,
+    CommissionSummaryItem,
+)
 from app.schemas.operations import (
     CustomerChangeAuditItem,
     NotificationItem,
     ReplacementCreateRequest,
     ReplacementItem,
+)
+from app.services.commission_service import (
+    commission_summary_service,
+    list_commission_rates_service,
+    reset_commissions_service,
+    save_commission_rates_service,
 )
 from app.services.operations_service import (
     create_replacement_service,
@@ -138,3 +150,55 @@ def end_replacement(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/comisiones/tasas", response_model=list[CommissionRateItem])
+def list_commission_rates(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return list_commission_rates_service(db, executor=current_user)
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.put("/comisiones/tasas", response_model=list[CommissionRateItem])
+def save_commission_rates(
+    payload: CommissionRateBulkRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        normalized = [{"empresa": item.empresa, "percent": item.percent} for item in payload.rates]
+        return save_commission_rates_service(db, executor=current_user, rates=normalized)
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.get("/comisiones/resumen", response_model=list[CommissionSummaryItem])
+def commission_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return commission_summary_service(db, executor=current_user)
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.post("/comisiones/reset", response_model=list[CommissionSummaryItem])
+def reset_commissions(
+    payload: CommissionResetRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        return reset_commissions_service(
+            db,
+            executor=current_user,
+            user_id=payload.user_id,
+            note=payload.note,
+        )
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc

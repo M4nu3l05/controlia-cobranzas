@@ -52,6 +52,11 @@ MONTHLY_IMPORT_TABLES = (
     "debtor_birlado_transitions",
 )
 
+COMMISSION_TABLES = (
+    "commission_rates",
+    "commission_resets",
+)
+
 
 def _create_tables(db: Session, names: tuple[str, ...]) -> None:
     connection = db.connection()
@@ -124,6 +129,10 @@ def _migration_6_isapre_debt_fields(db: Session) -> None:
     ensure_deudores_optional_columns(db)
 
 
+def _migration_7_commissions(db: Session) -> None:
+    _create_tables(db, COMMISSION_TABLES)
+
+
 MIGRATIONS = (
     BackendMigration(1, "Registrar y completar el esquema CRM heredado", _migration_1_legacy_schema),
     BackendMigration(2, "Auditoría, notificaciones, derivaciones y reemplazos", _migration_2_operations),
@@ -131,6 +140,7 @@ MIGRATIONS = (
     BackendMigration(4, "Control de cargas mensuales y transiciones a Birlado", _migration_4_monthly_import_control),
     BackendMigration(5, "Compatibilidad con campos históricos de carteras", _migration_5_legacy_debtor_compatibility),
     BackendMigration(6, "Campos de deuda para Cruz Blanca y Colmena", _migration_6_isapre_debt_fields),
+    BackendMigration(7, "Comisiones por cartera y cortes de pago", _migration_7_commissions),
 )
 
 

@@ -34,6 +34,7 @@ from admin_carteras.service import (
 )
 from auth.auth_service import get_backend_base_url
 from auth.session_history_db import obtener_conexiones_hoy, obtener_conexiones_mes
+from comisiones.service import obtener_comision_propia, obtener_tasas
 from deudores.database import cargar_para_envio
 from deudores.detalle_dialog import (
     AgregarGestionDialog,
@@ -138,6 +139,65 @@ def _card(frame: QFrame, radius: int = 12) -> None:
     shadow.setOffset(0, 2)
     shadow.setColor(QColor(0, 0, 0, 13))
     frame.setGraphicsEffect(shadow)
+
+
+class CommissionCard(QFrame):
+    """Acumulado de comisiones de la ejecutiva en la pestaña Mi trabajo."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("commissionCard")
+        self.setStyleSheet(
+            "QFrame#commissionCard{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #065F46,stop:1 #10B981);"
+            "border:none;border-radius:14px;} QLabel{border:none;background:transparent;}"
+        )
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(12)
+        shadow.setOffset(0, 3)
+        shadow.setColor(QColor(0, 0, 0, 26))
+        self.setGraphicsEffect(shadow)
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(24, 16, 24, 16)
+        lay.setSpacing(16)
+
+        left = QVBoxLayout()
+        left.setSpacing(2)
+        kicker = QLabel("MIS COMISIONES ACUMULADAS")
+        kicker.setStyleSheet("color:rgba(255,255,255,0.78);font-size:11px;font-weight:600;letter-spacing:1px;")
+        self.amount = QLabel("$0")
+        self.amount.setStyleSheet("color:#FFFFFF;font-size:26px;font-weight:700;")
+        self.detail = QLabel("Sin pagos registrados en el período")
+        self.detail.setStyleSheet("color:rgba(255,255,255,0.82);font-size:12px;")
+        left.addWidget(kicker)
+        left.addWidget(self.amount)
+        left.addWidget(self.detail)
+
+        right = QVBoxLayout()
+        right.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        right.setSpacing(4)
+        self.rates = QLabel("Sin porcentaje asignado")
+        self.rates.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.rates.setWordWrap(True)
+        self.rates.setMaximumWidth(360)
+        self.rates.setStyleSheet(
+            "color:#FFFFFF;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.30);"
+            "border-radius:14px;padding:6px 14px;font-size:12px;"
+        )
+        self.since = QLabel("")
+        self.since.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.since.setStyleSheet("color:rgba(255,255,255,0.72);font-size:11px;")
+        right.addWidget(self.rates, 0, Qt.AlignmentFlag.AlignRight)
+        right.addWidget(self.since, 0, Qt.AlignmentFlag.AlignRight)
+
+        lay.addLayout(left, 1)
+        lay.addLayout(right, 1)
+
+    def set_data(self, amount: str, detail: str, rates: str, since: str) -> None:
+        self.amount.setText(amount)
+        self.detail.setText(detail)
+        self.rates.setText(rates)
+        self.since.setText(since)
 
 
 class MetricCard(QFrame):
@@ -369,7 +429,7 @@ class DashboardWidget(QWidget):
         self.content = QVBoxLayout(canvas)
         self.content.setContentsMargins(20, 20, 20, 20)
         self.content.setSpacing(12)
-        self._build_header()
+        self._build_commission()
         self._build_tabs()
         self._timer = QTimer(self)
         self._timer.setInterval(60_000)
@@ -377,34 +437,14 @@ class DashboardWidget(QWidget):
         self._timer.start()
         QTimer.singleShot(0, self.refresh)
 
-    def _build_header(self) -> None:
-        hero = QFrame()
-        hero.setObjectName("hero")
-        hero.setMinimumHeight(90)
-        hero.setStyleSheet("QFrame#hero{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #1A3A6B,stop:1 #2563EB);border-radius:14px;} QLabel{border:none;background:transparent;}")
-        lay = QHBoxLayout(hero)
-        lay.setContentsMargins(28, 18, 28, 18)
-        left = QVBoxLayout()
-        kicker = QLabel("CRM DE COBRANZAS · PRODUCTIVIDAD")
-        kicker.setStyleSheet("color:rgba(255,255,255,0.72);font-size:12px;font-weight:500;")
-        title = QLabel("Dashboard ejecutivo")
-        title.setStyleSheet("color:#FFFFFF;font-size:18px;font-weight:700;")
-        left.addWidget(kicker)
-        left.addWidget(title)
-        right = QVBoxLayout()
-        right.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.health = QLabel("Salud operativa: Sin datos")
-        self.health.setStyleSheet("color:#FFFFFF;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.30);border-radius:15px;padding:6px 14px;font-size:13px;")
-        self.focus = QLabel("Esperando actualización")
-        self.focus.setMaximumWidth(460)
-        self.focus.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.focus.setWordWrap(True)
-        self.focus.setStyleSheet("color:rgba(255,255,255,0.80);font-size:13px;")
-        right.addWidget(self.health, 0, Qt.AlignmentFlag.AlignRight)
-        right.addWidget(self.focus)
-        lay.addLayout(left, 1)
-        lay.addLayout(right, 1)
-        self.content.addWidget(hero)
+    def _build_commission(self) -> None:
+        # Sólo la ejecutiva ve su acumulado aquí; el supervisor lo revisa por
+        # ejecutiva en la sección "Comisiones por ejecutiva" de Vista general.
+        self.commission_card: CommissionCard | None = None
+        if not self._is_ejecutivo():
+            return
+        self.commission_card = CommissionCard()
+        self.content.addWidget(self.commission_card)
 
     def _build_tabs(self) -> None:
         tabs = QHBoxLayout()
@@ -677,6 +717,9 @@ class DashboardWidget(QWidget):
     def _can_view_team(self) -> bool:
         return bool(self._session and getattr(self._session, "role", "") in {"admin", "supervisor"})
 
+    def _is_ejecutivo(self) -> bool:
+        return bool(self._session and getattr(self._session, "role", "") == "ejecutivo")
+
     def _uses_backend(self) -> bool:
         return bool(self._session and getattr(self._session, "auth_source", "") == "backend" and getattr(self._session, "access_token", ""))
 
@@ -835,8 +878,8 @@ class DashboardWidget(QWidget):
             self._render_queue()
             self._refresh_team()
         except Exception as exc:
-            self.health.setText("Salud operativa: Sin conexión")
-            self.focus.setText(f"No fue posible actualizar el dashboard: {exc}")
+            self.warning.setText(f"⚠  No fue posible actualizar el dashboard: {exc}")
+        self._refresh_commission()
 
     def refrescar(self) -> None:
         self.refresh()
@@ -850,9 +893,7 @@ class DashboardWidget(QWidget):
         balance = float(data.get("saldo_total", 0) or 0)
         coverage = float(data.get("cobertura_pct", (managed / total * 100 if total else 0)) or 0)
         ratio = float(data.get("pagos_vs_copago_pct", (payments / copago * 100 if copago else 0)) or 0)
-        self.health.setText(f"Salud operativa: {data.get('health_label', 'Sin datos')}")
         focus = str(data.get("focus_text", "Carga una cartera para activar el panel operativo."))
-        self.focus.setText(focus)
         self.kpi_total.set_data(_number(total), f"{_number(managed)} gestionados · {_number(pending)} pendientes")
         self.kpi_saldo.set_data(_money(balance), f"Copago {_money(copago)} · Pagos {_money(payments)}")
         self.kpi_coverage.set_data(_pct(coverage), f"{_number(managed)} de {_number(total)} deudores", coverage)
@@ -1111,6 +1152,37 @@ class DashboardWidget(QWidget):
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
+
+    def _refresh_commission(self) -> None:
+        if getattr(self, "commission_card", None) is None:
+            return
+        fila, err = obtener_comision_propia(self._session)
+        if err:
+            self.commission_card.set_data(
+                "$0", f"No fue posible obtener las comisiones: {err}", "Sin porcentaje asignado", ""
+            )
+            return
+
+        pagos = int(fila.get("pagos", 0) or 0)
+        recaudado = int(fila.get("monto_pagado_clp", 0) or 0)
+        detalle = (
+            f"{_number(pagos)} pago{'s' if pagos != 1 else ''} registrado{'s' if pagos != 1 else ''}"
+            f" · {_money(recaudado)} recaudado"
+            if pagos
+            else "Aún no registras pagos en este período"
+        )
+
+        tasas, _tasas_err = obtener_tasas(self._session)
+        tasas_norm = {_text_norm(empresa): porcentaje for empresa, porcentaje in tasas.items()}
+        empresas = self._empresas_asignadas or sorted(tasas, key=_text_norm)
+        partes = [f"{empresa}: {_pct(tasas_norm.get(_text_norm(empresa), 0))}" for empresa in empresas]
+        rates = " · ".join(partes) if partes else "Sin porcentaje asignado"
+
+        desde = str(fila.get("desde", "") or "")[:10]
+        if len(desde) == 10:
+            desde = f"{desde[8:10]}/{desde[5:7]}/{desde[0:4]}"
+        since = f"Acumulado desde el último corte del {desde}" if desde else "Acumulado histórico"
+        self.commission_card.set_data(_money(fila.get("comision_clp", 0)), detalle, rates, since)
 
     def _refresh_team(self) -> None:
         if not self._can_view_team():

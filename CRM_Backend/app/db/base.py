@@ -20,3 +20,4 @@ from app.models.payment import (  # noqa: F401
     PaymentReversal,
     PaymentTransaction,
 )
+from app.models.commission import CommissionRate, CommissionReset  # noqa: F401

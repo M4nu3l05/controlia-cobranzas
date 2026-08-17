@@ -11,6 +11,7 @@ from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QComboBox,
     QDateTimeEdit,
+    QDoubleSpinBox,
     QFrame,
     QFileDialog,
     QGridLayout,
@@ -43,6 +44,7 @@ from auth.auth_service import (
     backend_list_replacements,
     backend_save_cartera_asignaciones,
 )
+from comisiones.service import guardar_tasas as guardar_tasas_comision, obtener_tasas as obtener_tasas_comision
 from core.paths import get_data_dir
 from core.excel_export import write_excel_report
 from deudores.database import EMPRESAS, limpiar_empresa, limpiar_todas, eliminar_deudor_individual
@@ -90,7 +92,7 @@ class AdminCarterasWidget(QWidget):
         )
         self.card_asignacion = self._build_card(
             "👨‍💼  Asignación de carteras",
-            "Asigna una empresa a un ejecutivo responsable.",
+            "",
         )
 
         body.addLayout(self.top_grid)
@@ -287,16 +289,16 @@ class AdminCarterasWidget(QWidget):
         lbl_title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         lbl_title.setStyleSheet("color:#0f172a;")
 
-        lbl_sub = QLabel(subtitle)
-        lbl_sub.setWordWrap(True)
-        lbl_sub.setStyleSheet("color:#64748b; font-size:9pt;")
-
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet("background:#eef2f7; max-height:1px; border:none;")
 
         lay.addWidget(lbl_title)
-        lay.addWidget(lbl_sub)
+        if subtitle:
+            lbl_sub = QLabel(subtitle)
+            lbl_sub.setWordWrap(True)
+            lbl_sub.setStyleSheet("color:#64748b; font-size:9pt;")
+            lay.addWidget(lbl_sub)
         lay.addWidget(sep)
 
         return card
@@ -530,9 +532,55 @@ class AdminCarterasWidget(QWidget):
     def _build_asignacion_ui(self):
         lay = self.card_asignacion.layout()
 
+        self.tbl_comisiones = QTableWidget(len(EMPRESAS), 2)
+        self.tbl_comisiones.setHorizontalHeaderLabels(["Cartera", "% Comisión"])
+        self.tbl_comisiones.verticalHeader().setVisible(False)
+        self.tbl_comisiones.verticalHeader().setDefaultSectionSize(40)
+        self.tbl_comisiones.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.tbl_comisiones.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.tbl_comisiones.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tbl_comisiones.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.tbl_comisiones.setStyleSheet(
+            """
+            QTableWidget {
+                background:#ffffff;
+                border:1px solid #e2e8f0;
+                border-radius:12px;
+                gridline-color:#eef2f7;
+            }
+            QHeaderView::section {
+                background:#f8fafc;
+                color:#334155;
+                border:none;
+                border-bottom:1px solid #e2e8f0;
+                padding:8px;
+                font-weight:700;
+            }
+            """
+        )
+
+        self._spins_comision = {}
+        for row, empresa in enumerate(EMPRESAS):
+            item = QTableWidgetItem(empresa)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.tbl_comisiones.setItem(row, 0, item)
+
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 100.0)
+            spin.setDecimals(2)
+            spin.setSingleStep(0.5)
+            spin.setSuffix(" %")
+            spin.setMinimumHeight(30)
+            spin.setStyleSheet("QDoubleSpinBox { border:1px solid #cbd5e1; border-radius:8px; padding:3px 6px; }")
+            self._spins_comision[empresa] = spin
+            self.tbl_comisiones.setCellWidget(row, 1, spin)
+
+        alto_filas = self.tbl_comisiones.horizontalHeader().height() + len(EMPRESAS) * 40 + 8
+        self.tbl_comisiones.setFixedHeight(alto_filas)
+        lay.addWidget(self.tbl_comisiones)
+
         info = QLabel(
-            "Selecciona el ejecutivo responsable por compañía. "
-            "Las asignaciones se guardan en una base administrativa propia."
+            "El porcentaje se aplica sobre cada pago que la ejecutiva registra en la cartera."
         )
         info.setWordWrap(True)
         info.setStyleSheet("color:#475569; font-size:9pt;")
@@ -566,7 +614,9 @@ class AdminCarterasWidget(QWidget):
         row_btn = QHBoxLayout()
         row_btn.addStretch(1)
 
-        self.btn_guardar_asignaciones = self._build_action_button("Guardar asignaciones", "#059669")
+        self.btn_guardar_asignaciones = self._build_action_button(
+            "Guardar asignaciones y comisiones", "#059669"
+        )
         self.btn_guardar_asignaciones.clicked.connect(self._accion_guardar_asignaciones)
 
         row_btn.addWidget(self.btn_guardar_asignaciones)
@@ -622,6 +672,24 @@ class AdminCarterasWidget(QWidget):
                     break
             if not found:
                 combo.setCurrentIndex(0)
+
+        self._cargar_comisiones()
+
+    def _cargar_comisiones(self):
+        tasas, err = obtener_tasas_comision(self._session)
+        if err:
+            self._append_log(f"Error al cargar los porcentajes de comisión: {err}")
+            return
+
+        normalizadas = {self._clave_empresa(empresa): valor for empresa, valor in tasas.items()}
+        for empresa, spin in self._spins_comision.items():
+            spin.blockSignals(True)
+            spin.setValue(float(normalizadas.get(self._clave_empresa(empresa), 0.0) or 0.0))
+            spin.blockSignals(False)
+
+    @staticmethod
+    def _clave_empresa(valor: str) -> str:
+        return "".join(ch for ch in str(valor or "").strip().lower() if ch.isalnum())
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -885,6 +953,25 @@ class AdminCarterasWidget(QWidget):
                 self._guardar_asignacion(empresa, user_data)
                 cambios += 1
 
-        self._append_log(f"Asignaciones de cartera guardadas ({cambios} compañías procesadas).")
+        tasas = {empresa: float(spin.value()) for empresa, spin in self._spins_comision.items()}
+        err_comision = guardar_tasas_comision(self._session, tasas)
+        if err_comision:
+            self._append_log(f"Error al guardar los porcentajes de comisión: {err_comision}")
+            QMessageBox.warning(
+                self,
+                "Comisiones no guardadas",
+                f"Las asignaciones se guardaron, pero los porcentajes de comisión no:\n\n{err_comision}",
+            )
+            self.datos_actualizados.emit()
+            return
+
+        self._append_log(
+            f"Asignaciones de cartera guardadas ({cambios} compañías procesadas) "
+            f"y porcentajes de comisión actualizados."
+        )
         self.datos_actualizados.emit()
-        QMessageBox.information(self, "Asignaciones guardadas", "✅ Asignaciones de cartera guardadas correctamente.")
+        QMessageBox.information(
+            self,
+            "Asignaciones guardadas",
+            "✅ Asignaciones de cartera y porcentajes de comisión guardados correctamente.",
+        )

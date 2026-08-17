@@ -1123,6 +1123,77 @@ def backend_save_cartera_asignaciones(
         return [], _friendly_backend_error(exc)
 
 
+def backend_list_comision_tasas(
+    session: UserSession,
+) -> Tuple[list[dict], str]:
+    try:
+        data = _http_request_auth(
+            "GET",
+            "/operations/comisiones/tasas",
+            token=_require_backend_token(session),
+        )
+        return (data if isinstance(data, list) else []), ""
+    except ValueError as exc:
+        return [], str(exc)
+    except requests.RequestException as exc:
+        return [], _friendly_backend_error(exc)
+
+
+def backend_save_comision_tasas(
+    session: UserSession,
+    *,
+    rates: list[dict],
+) -> Tuple[list[dict], str]:
+    try:
+        data = _http_request_auth(
+            "PUT",
+            "/operations/comisiones/tasas",
+            token=_require_backend_token(session),
+            payload={"rates": rates},
+        )
+        return (data if isinstance(data, list) else []), ""
+    except ValueError as exc:
+        return [], str(exc)
+    except requests.RequestException as exc:
+        return [], _friendly_backend_error(exc)
+
+
+def backend_get_comisiones_resumen(
+    session: UserSession,
+) -> Tuple[list[dict], str]:
+    try:
+        data = _http_request_auth(
+            "GET",
+            "/operations/comisiones/resumen",
+            token=_require_backend_token(session),
+        )
+        return (data if isinstance(data, list) else []), ""
+    except ValueError as exc:
+        return [], str(exc)
+    except requests.RequestException as exc:
+        return [], _friendly_backend_error(exc)
+
+
+def backend_reset_comisiones(
+    session: UserSession,
+    *,
+    user_id: int | None = None,
+    note: str = "",
+) -> Tuple[list[dict], str]:
+    try:
+        data = _http_request_auth(
+            "POST",
+            "/operations/comisiones/reset",
+            token=_require_backend_token(session),
+            payload={"user_id": user_id, "note": str(note or "").strip()},
+        )
+        return (data if isinstance(data, list) else []), ""
+    except ValueError as exc:
+        return [], str(exc)
+    except requests.RequestException as exc:
+        return [], _friendly_backend_error(exc)
+
+
 def backend_get_legal_acceptance_status(
     session: UserSession,
     *,

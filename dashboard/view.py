@@ -34,6 +34,10 @@ from auth.session_history_db import (
     preparar_reporte_excel,
 )
 from auth.auth_service import get_backend_base_url
+from comisiones.service import (
+    obtener_resumen as obtener_resumen_comisiones,
+    reestablecer_comisiones,
+)
 from core.excel_export import write_excel_report
 from core.paths import get_data_dir
 from deudores.database import EMPRESAS, cargar_empresas, cargar_todas, stats_por_empresa, stats_por_empresas
@@ -493,6 +497,48 @@ class _ListItemCard(QFrame):
         self.lbl_right.setText(right)
 
 
+class _CommissionExecCard(QFrame):
+    """Acumulado de comisiones de una ejecutiva para la vista del supervisor."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(
+            """
+            QFrame {
+                background:#f8fafc;
+                border:1px solid #e2e8f0;
+                border-radius: 14px;
+            }
+            QLabel { background: transparent; border:none; }
+            """
+        )
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(3)
+
+        self.lbl_user = QLabel("—")
+        self.lbl_user.setStyleSheet("color:#0f172a; font-weight:800; font-size:10pt;")
+        self.lbl_email = QLabel("")
+        self.lbl_email.setStyleSheet("color:#94a3b8; font-size:8.5pt;")
+        self.lbl_amount = QLabel("$ 0")
+        self.lbl_amount.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        self.lbl_amount.setStyleSheet("color:#059669;")
+        self.lbl_detail = QLabel("")
+        self.lbl_detail.setWordWrap(True)
+        self.lbl_detail.setStyleSheet("color:#475569; font-size:8.8pt;")
+
+        lay.addWidget(self.lbl_user)
+        lay.addWidget(self.lbl_email)
+        lay.addWidget(self.lbl_amount)
+        lay.addWidget(self.lbl_detail)
+
+    def set_data(self, username: str, email: str, amount: str, detail: str):
+        self.lbl_user.setText(username or "Sin nombre")
+        self.lbl_email.setText(email or "")
+        self.lbl_amount.setText(amount)
+        self.lbl_detail.setText(detail)
+
+
 class DashboardWidget(QWidget):
     bd_limpiada = pyqtSignal(list)
 
@@ -651,10 +697,6 @@ class DashboardWidget(QWidget):
             "Embudo de cartera",
             "Distribución actual por estado deudor consolidado.",
         )
-        self.card_actions = _SectionCard(
-            "Acciones y canales",
-            "Tipos de gestión del día para lectura táctica de ejecución.",
-        )
 
         self.funnel_rows: list[_ListItemCard] = []
         self.action_rows: list[_ListItemCard] = []
@@ -664,13 +706,62 @@ class DashboardWidget(QWidget):
             self.funnel_rows.append(row)
             self.card_funnel.body.addWidget(row)
 
-        for _ in range(5):
-            row = _ListItemCard("#7c3aed")
-            self.action_rows.append(row)
-            self.card_actions.body.addWidget(row)
-
         middle.addWidget(self.card_funnel, 1)
-        middle.addWidget(self.card_actions, 1)
+
+        # El supervisor cambia la lectura táctica de gestiones por el acumulado
+        # de comisiones de cada ejecutiva.
+        self.card_actions: _SectionCard | None = None
+        self.card_comisiones: _SectionCard | None = None
+        if self._can_view_reporte_ejecutiva():
+            self.card_comisiones = _SectionCard(
+                "Comisiones por ejecutiva",
+                "Monto acumulado por cada ejecutiva según los pagos que registró y el porcentaje de su cartera.",
+            )
+            self.comisiones_grid = QGridLayout()
+            self.comisiones_grid.setHorizontalSpacing(12)
+            self.comisiones_grid.setVerticalSpacing(12)
+            self.card_comisiones.body.addLayout(self.comisiones_grid)
+
+            self.lbl_comisiones_vacio = QLabel("Sin ejecutivas con comisiones registradas.")
+            self.lbl_comisiones_vacio.setWordWrap(True)
+            self.lbl_comisiones_vacio.setStyleSheet("color:#64748b; font-size:9pt;")
+            self.card_comisiones.body.addWidget(self.lbl_comisiones_vacio)
+
+            fila_reset = QHBoxLayout()
+            fila_reset.addStretch(1)
+            self.btn_reset_comisiones = QPushButton("↺ Reestablecer montos a $0")
+            self.btn_reset_comisiones.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_reset_comisiones.setStyleSheet(
+                """
+                QPushButton {
+                    background:#ffffff;
+                    color:#0f172a;
+                    border:1px solid #cbd5e1;
+                    border-radius: 12px;
+                    padding: 9px 12px;
+                    font-weight:700;
+                }
+                QPushButton:hover {
+                    background:#f1f5f9;
+                }
+                """
+            )
+            self.btn_reset_comisiones.clicked.connect(self._accion_reset_comisiones)
+            fila_reset.addWidget(self.btn_reset_comisiones)
+            self.card_comisiones.body.addLayout(fila_reset)
+
+            middle.addWidget(self.card_comisiones, 1)
+        else:
+            self.card_actions = _SectionCard(
+                "Acciones y canales",
+                "Tipos de gestión del día para lectura táctica de ejecución.",
+            )
+            for _ in range(5):
+                row = _ListItemCard("#7c3aed")
+                self.action_rows.append(row)
+                self.card_actions.body.addWidget(row)
+            middle.addWidget(self.card_actions, 1)
+
         self.content.addLayout(middle)
 
         self.sec_empresas = _SectionCard(
@@ -1169,7 +1260,66 @@ class DashboardWidget(QWidget):
             return "Media", "La cobertura es aceptable, pero conviene acelerar gestiones en cartera pendiente."
         return "Crítica", "Prioriza asignación sobre casos sin gestión y aumenta el volumen diario de contacto."
 
+    def _refrescar_comisiones(self):
+        if self.card_comisiones is None:
+            return
+
+        resumen, err = obtener_resumen_comisiones(self._session)
+        while self.comisiones_grid.count():
+            item = self.comisiones_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if err:
+            self.lbl_comisiones_vacio.setText(f"No fue posible obtener las comisiones: {err}")
+            self.lbl_comisiones_vacio.setVisible(True)
+            return
+
+        if not resumen:
+            self.lbl_comisiones_vacio.setText("Sin ejecutivas con comisiones registradas.")
+            self.lbl_comisiones_vacio.setVisible(True)
+            return
+
+        self.lbl_comisiones_vacio.setVisible(False)
+        for idx, fila in enumerate(resumen):
+            pagos = int(fila.get("pagos", 0) or 0)
+            card = _CommissionExecCard()
+            card.set_data(
+                str(fila.get("username", "")),
+                str(fila.get("email", "")),
+                _fmt_clp(fila.get("comision_clp", 0)),
+                f"{_fmt_int(pagos)} pago{'s' if pagos != 1 else ''} · "
+                f"{_fmt_clp(fila.get('monto_pagado_clp', 0))} recaudado",
+            )
+            self.comisiones_grid.addWidget(card, idx // 2, idx % 2)
+
+    def _accion_reset_comisiones(self):
+        resp = QMessageBox.question(
+            self,
+            "Reestablecer comisiones",
+            "¿Confirmas dejar en $0 el acumulado de comisiones de todas las ejecutivas?\n\n"
+            "Los pagos ya registrados no se modifican: sólo dejan de sumar al acumulado actual.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if resp != QMessageBox.StandardButton.Yes:
+            return
+
+        err = reestablecer_comisiones(self._session)
+        if err:
+            QMessageBox.warning(self, "No se pudo reestablecer", err)
+            return
+
+        self._refrescar_comisiones()
+        QMessageBox.information(
+            self,
+            "Comisiones reestablecidas",
+            "✅ El acumulado de comisiones quedó en $0 para todas las ejecutivas.",
+        )
+
     def refrescar(self):
+        self._refrescar_comisiones()
+
         if self._usa_restriccion_carteras():
             self._empresas_asignadas = obtener_empresas_asignadas_para_session(self._session)
 
