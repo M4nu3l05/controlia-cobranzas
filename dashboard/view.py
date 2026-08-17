@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 from datetime import datetime
 
 import pandas as pd
@@ -618,12 +619,24 @@ class DashboardWidget(QWidget):
 
         self._build_ui()
 
+        self._last_refresh = 0.0
         self._timer = QTimer(self)
         self._timer.setInterval(60_000)
         self._timer.timeout.connect(self.refrescar)
-        self._timer.start()
+        # Arranca en showEvent: refrescar mientras el panel está oculto bloquea
+        # la interfaz del módulo que el usuario sí está mirando.
 
         QTimer.singleShot(0, self.refrescar)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._timer.start()
+        if self._last_refresh and (time.monotonic() - self._last_refresh) > 60:
+            QTimer.singleShot(0, self.refrescar)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._timer.stop()
 
     def _usa_restriccion_carteras(self) -> bool:
         return session_tiene_restriccion_por_cartera(self._session)
@@ -1318,6 +1331,7 @@ class DashboardWidget(QWidget):
         )
 
     def refrescar(self):
+        self._last_refresh = time.monotonic()
         self._refrescar_comisiones()
 
         if self._usa_restriccion_carteras():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import time
 import unicodedata
 
 import pandas as pd
@@ -35,6 +36,7 @@ from admin_carteras.service import (
 from auth.auth_service import get_backend_base_url
 from auth.session_history_db import obtener_conexiones_hoy, obtener_conexiones_mes
 from comisiones.service import obtener_comision_propia, obtener_tasas
+from dashboard.worker import DashboardLoadWorker
 from deudores.database import cargar_para_envio
 from deudores.detalle_dialog import (
     AgregarGestionDialog,
@@ -44,6 +46,10 @@ from deudores.detalle_dialog import (
 from deudores.gestiones_db import ESTADO_DEUDOR_DEFAULT
 from dashboard.view import DashboardWidget as _LegacyDashboardWidget
 
+
+# Cada fila de la cola cuesta ~28 widgets: construirlas todas de golpe congela
+# la interfaz varios segundos. Se dibujan por tandas, en orden de prioridad.
+QUEUE_PAGE_SIZE = 100
 
 BG = "#F4F6FA"
 TEXT = "#1E293B"
@@ -348,6 +354,16 @@ class DebtorRow(QWidget):
         self.main.mousePressEvent = lambda _event: dashboard.toggle_debtor(self)
         outer.addWidget(self.main)
 
+        # El detalle se construye recién al desplegar la fila: son ~18 widgets
+        # que, multiplicados por toda la cola, congelaban el panel al dibujarlo.
+        self._outer = outer
+        self.detail: QFrame | None = None
+
+    def _build_detail(self) -> None:
+        debtor = self.debtor
+        dashboard = self.dashboard
+        outer = self._outer
+
         self.detail = QFrame()
         self.detail.setObjectName("debtorDetail")
         self.detail.setStyleSheet("QFrame#debtorDetail{background:#F8FAFC;border:1px solid #DBEAFE;border-top:none;border-bottom-left-radius:10px;border-bottom-right-radius:10px;}")
@@ -391,11 +407,13 @@ class DebtorRow(QWidget):
         register.clicked.connect(lambda _checked=False: dashboard.registrar_gestion(debtor))
         actions.addWidget(register)
         detail_lay.addLayout(actions)
-        self.detail.hide()
         outer.addWidget(self.detail)
 
     def set_expanded(self, expanded: bool) -> None:
-        self.detail.setVisible(expanded)
+        if expanded and self.detail is None:
+            self._build_detail()
+        if self.detail is not None:
+            self.detail.setVisible(expanded)
         border = BLUE if expanded else "#E8ECF2"
         self.main.setStyleSheet(f"QFrame#debtorMain{{background:#FFFFFF;border:1px solid {border};border-radius:10px;}} QFrame#debtorMain:hover{{border-color:#CBD5E1;}}")
 
@@ -412,7 +430,13 @@ class DashboardWidget(QWidget):
         self._channel = "todos"
         self._urgency = {"critical": True, "priority": True, "ok": True}
         self._smart_queue = "all"
+        self._queue_page = 1
+        self._queue_data: list[dict] = []
+        self._queue_label = ""
+        self._queue_saldo = 0.0
+        self._more_button: QPushButton | None = None
         self._open_row: DebtorRow | None = None
+        self._worker: DashboardLoadWorker | None = None
         # Segoe UI es el equivalente nativo disponible en Windows cuando Inter
         # no está instalada; evita depender de fuentes o recursos externos.
         self.setStyleSheet('QWidget{font-family:"Segoe UI";}')
@@ -429,13 +453,31 @@ class DashboardWidget(QWidget):
         self.content = QVBoxLayout(canvas)
         self.content.setContentsMargins(20, 20, 20, 20)
         self.content.setSpacing(12)
-        self._build_commission()
-        self._build_tabs()
+        self._last_refresh = 0.0
+        # El timer sólo corre mientras el panel está visible: refrescar en
+        # segundo plano bloquea la interfaz aunque el usuario esté en otro módulo.
         self._timer = QTimer(self)
         self._timer.setInterval(60_000)
         self._timer.timeout.connect(self.refresh)
-        self._timer.start()
+        # Debe existir antes de _build_tabs(), que conecta el buscador.
+        self._search_debounce = QTimer(self)
+        self._search_debounce.setSingleShot(True)
+        self._search_debounce.setInterval(250)
+        self._search_debounce.timeout.connect(self._render_queue)
+        self._build_commission()
+        self._build_tabs()
         QTimer.singleShot(0, self.refresh)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._timer.start()
+        if self._last_refresh and (time.monotonic() - self._last_refresh) > 60:
+            # Se difiere para que el cambio de módulo se pinte antes de bloquear.
+            QTimer.singleShot(0, self.refresh)
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._timer.stop()
 
     def _build_commission(self) -> None:
         # Sólo la ejecutiva ve su acumulado aquí; el supervisor lo revisa por
@@ -611,7 +653,9 @@ class DashboardWidget(QWidget):
         self.btn_clear_filters.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_clear_filters.setStyleSheet(self.action_style(False))
         filters_lay.addWidget(self.btn_clear_filters, 2, 2, Qt.AlignmentFlag.AlignBottom)
-        self.search_filter.textChanged.connect(self._render_queue)
+        # Sin debounce, cada tecla reconstruye la cola completa. La lambda evita
+        # que textChanged pase el texto como intervalo del timer.
+        self.search_filter.textChanged.connect(lambda _text: self._search_debounce.start())
         for combo in (self.company_filter, self.state_filter, self.age_filter, self.balance_filter, self.contact_filter):
             combo.currentIndexChanged.connect(self._render_queue)
         self.btn_clear_filters.clicked.connect(self._clear_filters)
@@ -867,19 +911,54 @@ class DashboardWidget(QWidget):
         return score, " · ".join(reasons) if reasons else "sin factores adicionales"
 
     def refresh(self) -> None:
+        # La carga ocurre en un hilo aparte; el hilo de la interfaz sólo pinta
+        # el resultado cuando llega.
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._last_refresh = time.monotonic()
+        self._worker = DashboardLoadWorker(self._load_data, self._load_extras, parent=self)
+        self._worker.finished_ok.connect(self._on_data_loaded)
+        self._worker.failed.connect(self._on_load_failed)
+        self._worker.finished.connect(self._on_worker_done)
+        self._worker.start()
+
+    def _load_data(self) -> tuple[list[dict], dict]:
+        """Corre en el hilo del worker: sólo red y cálculo, nada de widgets."""
+        if session_tiene_restriccion_por_cartera(self._session):
+            self._empresas_asignadas = obtener_empresas_asignadas_para_session(self._session)
+        return self._load_backend() if self._uses_backend() else self._load_local()
+
+    def _load_extras(self) -> dict:
+        """Corre en el hilo del worker: datos secundarios del panel."""
+        return {"comision": self._load_commission(), "equipo": self._load_team()}
+
+    def _load_commission(self) -> dict | None:
+        if getattr(self, "commission_card", None) is None:
+            return None
+        fila, err = obtener_comision_propia(self._session)
+        if err:
+            return {"error": err}
+        tasas, _tasas_err = obtener_tasas(self._session, usar_cache=True)
+        return {"fila": fila, "tasas": tasas}
+
+    def _on_data_loaded(self, debtors, summary, extras) -> None:
         try:
-            if session_tiene_restriccion_por_cartera(self._session):
-                self._empresas_asignadas = obtener_empresas_asignadas_para_session(self._session)
-            debtors, summary = self._load_backend() if self._uses_backend() else self._load_local()
             self._debtors = debtors
             self._populate_filter_options()
             self._apply_summary(summary)
             self._render_channels()
             self._render_queue()
-            self._refresh_team()
         except Exception as exc:
             self.warning.setText(f"⚠  No fue posible actualizar el dashboard: {exc}")
-        self._refresh_commission()
+        extras = extras or {}
+        self._apply_team(extras.get("equipo"))
+        self._apply_commission(extras.get("comision"))
+
+    def _on_load_failed(self, mensaje: str) -> None:
+        self.warning.setText(f"⚠  No fue posible actualizar el dashboard: {mensaje}")
+
+    def _on_worker_done(self) -> None:
+        self._worker = None
 
     def refrescar(self) -> None:
         self.refresh()
@@ -1006,8 +1085,10 @@ class DashboardWidget(QWidget):
         self._urgency[key] = checked
         self._render_queue()
 
-    def _render_queue(self) -> None:
+    def _render_queue(self, *_args) -> None:
+        self._queue_page = 1
         self._open_row = None
+        self._more_button = None
         while self.rows_layout.count():
             item = self.rows_layout.takeAt(0)
             if item.widget():
@@ -1073,17 +1154,55 @@ class DashboardWidget(QWidget):
             "all": labels[self._channel], "never": "nunca gestionados", "critical_high": "críticos de alto saldo",
             "contactable": "contactables hoy", "no_contact": "sin datos de contacto", "partial": "con pagos parciales",
         }
-        self.filter_label.setText(
-            f"— {queue_labels[self._smart_queue]} · {_number(len(data))} resultados · {_money(sum(d['monto'] for d in data))} de saldo"
-        )
+        self._queue_data = data
+        self._queue_label = queue_labels[self._smart_queue]
+        self._queue_saldo = sum(d["monto"] for d in data)
+
         if not data:
+            self.filter_label.setText(f"— {self._queue_label} · 0 resultados")
             empty = QLabel("No hay casos con los filtros seleccionados.")
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
             empty.setStyleSheet(f"color:{MUTED};font-size:13px;padding:32px;")
             self.rows_layout.addWidget(empty)
             return
-        for debtor in data:
+
+        self._append_queue_rows(0, self._queue_page * QUEUE_PAGE_SIZE)
+
+    def _append_queue_rows(self, desde: int, hasta: int) -> None:
+        """Agrega la tanda [desde, hasta) sin rehacer las filas ya dibujadas."""
+        data = self._queue_data
+        if self._more_button is not None:
+            self.rows_layout.removeWidget(self._more_button)
+            self._more_button.deleteLater()
+            self._more_button = None
+
+        for debtor in data[desde:hasta]:
             self.rows_layout.addWidget(DebtorRow(debtor, self))
+
+        mostrados = min(hasta, len(data))
+        restantes = len(data) - mostrados
+        etiqueta = f"{_number(mostrados)} de {_number(len(data))}" if restantes else _number(len(data))
+        self.filter_label.setText(
+            f"— {self._queue_label} · {etiqueta} resultados · {_money(self._queue_saldo)} de saldo"
+        )
+
+        if restantes > 0:
+            self._more_button = QPushButton(
+                f"Mostrar {_number(min(QUEUE_PAGE_SIZE, restantes))} casos más"
+                f"  ·  quedan {_number(restantes)} por revisar"
+            )
+            self._more_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._more_button.setStyleSheet(
+                f"QPushButton{{background:#FFFFFF;color:{BLUE};border:1px dashed #93C5FD;border-radius:10px;"
+                "padding:11px 16px;font-size:12px;font-weight:600;} QPushButton:hover{background:#EFF6FF;}"
+            )
+            self._more_button.clicked.connect(self._show_more_queue)
+            self.rows_layout.addWidget(self._more_button)
+
+    def _show_more_queue(self) -> None:
+        desde = self._queue_page * QUEUE_PAGE_SIZE
+        self._queue_page += 1
+        self._append_queue_rows(desde, self._queue_page * QUEUE_PAGE_SIZE)
 
     def toggle_debtor(self, row: DebtorRow) -> None:
         if self._open_row is row:
@@ -1153,16 +1272,18 @@ class DashboardWidget(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.refresh()
 
-    def _refresh_commission(self) -> None:
-        if getattr(self, "commission_card", None) is None:
+    def _apply_commission(self, comision: dict | None) -> None:
+        if getattr(self, "commission_card", None) is None or not comision:
             return
-        fila, err = obtener_comision_propia(self._session)
+        err = comision.get("error", "")
         if err:
             self.commission_card.set_data(
                 "$0", f"No fue posible obtener las comisiones: {err}", "Sin porcentaje asignado", ""
             )
             return
 
+        fila = comision.get("fila") or {}
+        tasas = comision.get("tasas") or {}
         pagos = int(fila.get("pagos", 0) or 0)
         recaudado = int(fila.get("monto_pagado_clp", 0) or 0)
         detalle = (
@@ -1172,7 +1293,6 @@ class DashboardWidget(QWidget):
             else "Aún no registras pagos en este período"
         )
 
-        tasas, _tasas_err = obtener_tasas(self._session)
         tasas_norm = {_text_norm(empresa): porcentaje for empresa, porcentaje in tasas.items()}
         empresas = self._empresas_asignadas or sorted(tasas, key=_text_norm)
         partes = [f"{empresa}: {_pct(tasas_norm.get(_text_norm(empresa), 0))}" for empresa in empresas]
@@ -1184,18 +1304,25 @@ class DashboardWidget(QWidget):
         since = f"Acumulado desde el último corte del {desde}" if desde else "Acumulado histórico"
         self.commission_card.set_data(_money(fila.get("comision_clp", 0)), detalle, rates, since)
 
-    def _refresh_team(self) -> None:
+    def _load_team(self):
+        """Corre en el hilo del worker: devuelve (hoy, mes) o None."""
         if not self._can_view_team():
-            return
+            return None
         try:
             if self._uses_backend():
                 legacy = _LegacyDashboardWidget.__new__(_LegacyDashboardWidget)
                 legacy._session = self._session
-                today, month = legacy._backend_session_history()
-            else:
-                now = datetime.now()
-                today = obtener_conexiones_hoy(role="ejecutivo")
-                month = obtener_conexiones_mes(now.year, now.month, role="ejecutivo")
+                return legacy._backend_session_history()
+            now = datetime.now()
+            return obtener_conexiones_hoy(role="ejecutivo"), obtener_conexiones_mes(now.year, now.month, role="ejecutivo")
+        except Exception:
+            return None
+
+    def _apply_team(self, equipo) -> None:
+        if not self._can_view_team() or not equipo:
+            return
+        try:
+            today, month = equipo
             active = today["username"].nunique() if not today.empty and "username" in today.columns else 0
             self.team_today.setText(f"Conexiones hoy: {_number(len(today))}")
             self.team_users.setText(f"Ejecutivas activas: {_number(active)}")

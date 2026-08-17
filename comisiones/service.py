@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 from datetime import datetime
 
 from auth.auth_service import (
@@ -22,6 +23,7 @@ from core.db_migrations import Migration, apply_migrations
 from core.paths import get_data_dir
 
 DB_NAME = "db_comisiones.sqlite"
+_TASAS_TTL_SEG = 300
 
 
 def _db_path() -> str:
@@ -103,17 +105,31 @@ def es_supervisor(session) -> bool:
 # ============================================================
 
 
-def obtener_tasas(session) -> tuple[dict[str, float], str]:
-    """Devuelve {empresa: porcentaje} y un mensaje de error si lo hubo."""
+def obtener_tasas(session, *, usar_cache: bool = False) -> tuple[dict[str, float], str]:
+    """Devuelve {empresa: porcentaje} y un mensaje de error si lo hubo.
+
+    Con `usar_cache` reutiliza la última respuesta durante `_TASAS_TTL_SEG`. Lo
+    usan las vistas que refrescan en bucle: los porcentajes cambian muy rara vez
+    y cada consulta al backend bloquea la interfaz mientras dura el viaje.
+    """
     if _usa_backend(session):
+        if usar_cache:
+            cacheado = getattr(session, "_comision_tasas_cache", None)
+            cacheado_en = float(getattr(session, "_comision_tasas_cache_at", 0.0) or 0.0)
+            if isinstance(cacheado, dict) and (time.monotonic() - cacheado_en) <= _TASAS_TTL_SEG:
+                return dict(cacheado), ""
+
         rows, err = backend_list_comision_tasas(session)
         if err:
             return {}, err
-        return {
+        tasas = {
             str(row.get("empresa", "")).strip(): float(row.get("percent", 0) or 0)
             for row in rows
             if str(row.get("empresa", "")).strip()
-        }, ""
+        }
+        session._comision_tasas_cache = dict(tasas)
+        session._comision_tasas_cache_at = time.monotonic()
+        return tasas, ""
 
     try:
         with _con() as con:
@@ -137,6 +153,10 @@ def guardar_tasas(session, tasas: dict[str, float]) -> str:
     if _usa_backend(session):
         rates = [{"empresa": empresa, "percent": porcentaje} for empresa, porcentaje in normalizadas.items()]
         _, err = backend_save_comision_tasas(session, rates=rates)
+        if not err:
+            # Invalida el caché para que las tarjetas tomen el valor nuevo ya.
+            session._comision_tasas_cache = None
+            session._comision_tasas_cache_at = 0.0
         return err
 
     try:
