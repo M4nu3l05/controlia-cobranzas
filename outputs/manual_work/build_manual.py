@@ -311,7 +311,7 @@ def cover(doc: Document):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.space_before = Pt(72)
-    set_run(p.add_run("Versión del manual: 1.2  |  Agosto de 2026  |  Aplicación 2.2.0"), 10, BLUE_DARK, True)
+    set_run(p.add_run("Versión del manual: 1.3  |  Agosto de 2026  |  Aplicación 2.2.0"), 10, BLUE_DARK, True)
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     set_run(p.add_run("Documento de entrega de la aplicación"), 9.5, MUTED)
@@ -325,12 +325,12 @@ def contents(doc):
     sections = [
         ("1", "Conocer la aplicación", "Propósito, conceptos, interfaz, seguridad, acceso y trabajo sin conexión."),
         ("2", "Roles y permisos", "Qué puede ver y hacer cada perfil."),
-        ("3", "Dashboard", "Indicadores, prioridades, filtros y acciones directas sobre la cola."),
+        ("3", "Dashboard", "Indicadores, comisiones, prioridades, filtros y acciones directas sobre la cola."),
         ("4", "Conciliación de Nóminas", "Comparación mensual y reporte Excel."),
         ("5", "Búsqueda de Deudores", "Carga, consulta, filtros y tareas."),
         ("6", "Ficha del deudor", "Gestiones, pagos, datos, correo y WhatsApp."),
         ("7", "Envíos Programados", "SMTP, plantillas, segmentación y envío masivo."),
-        ("8", "Administración de carteras", "Asignaciones, reemplazos y limpiezas."),
+        ("8", "Administración de carteras", "Asignaciones, porcentajes de comisión, reemplazos y limpiezas."),
         ("9", "Usuarios y recuperación", "Altas, roles, estados y contraseñas."),
         ("10", "Procedimientos por rol", "Rutinas recomendadas y controles."),
         ("11", "Solución de problemas", "Mensajes frecuentes y acciones seguras."),
@@ -403,6 +403,10 @@ def chapter_2(doc):
     h2(doc, "2.1 Matriz de acceso a módulos")
     table(doc, ["Módulo / función", "Administrador", "Supervisor", "Ejecutivo"], [
         ("Dashboard: Mi trabajo y Vista general", "Sí", "Sí", "Sí"),
+        ("Ver su propia comisión acumulada", "No aplica", "No aplica", "Sí, solo la suya"),
+        ("Ver las comisiones de todas las ejecutivas", "Sí", "Sí", "No"),
+        ("Definir el porcentaje de comisión por cartera", "Sí", "Sí", "No"),
+        ("Reestablecer las comisiones a $0", "Sí", "Sí", "No"),
         ("Conciliación de Nóminas", "Sí", "Sí", "No"),
         ("Búsqueda de Deudores", "Sí", "Sí", "Consulta todas; opera solo las asignadas"),
         ("Cargar base de deudores", "Sí", "Sí", "No"),
@@ -420,6 +424,7 @@ def chapter_2(doc):
     para(doc, "Coordina la operación. Puede conciliar nóminas, cargar bases y gestiones, asignar o reemplazar responsables de cartera, utilizar el envío masivo y consultar productividad. No puede administrar usuarios.")
     h2(doc, "2.4 Ejecutivo")
     para(doc, "Trabaja la cobranza diaria. Puede consultar la ficha de cualquier deudor, incluso de una cartera que no tenga asignada, para atender una llamada y derivar el caso. En cambio, las acciones operativas -registrar gestión o pago- quedan limitadas a sus carteras asignadas y a los reemplazos temporales vigentes. No puede cargar bases ni usar módulos administrativos.")
+    callout(doc, "Comisiones a la vista", "En Dashboard > Mi trabajo, cada ejecutiva ve únicamente su propia comisión acumulada. Ninguna ejecutiva puede ver los montos de otra: la aplicación entrega solo la información del usuario que inició sesión.", "info")
     callout(doc, "Seguridad por cartera", "Una ejecutiva sin cartera asignada verá el mensaje Sin carteras asignadas. Un supervisor o administrador debe realizar la asignación; cerrar sesión y volver a ingresar ayuda a actualizar el alcance.", "warn")
     h2(doc, "2.5 Acciones sensibles")
     bullet(doc, "Eliminar deudor: borra el registro y sus gestiones asociadas.")
@@ -437,15 +442,25 @@ def chapter_3(doc):
     para(doc, "En la parte superior del Dashboard se encuentran dos modos. Mi trabajo prioriza la gestión diaria; Vista general muestra la lectura consolidada. El perfil Ejecutivo abre por defecto Mi trabajo y los perfiles de coordinación abren Vista general.")
     h2(doc, "3.2 Mi trabajo")
     table(doc, ["Elemento", "Qué indica / cómo usarlo"], [
-        ("Salud operativa", "Resumen automático del estado de la cartera visible."),
-        ("Foco del día", "Recomendación de atención inmediata basada en datos disponibles."),
+        ("Mis comisiones acumuladas", "Tarjeta superior, solo para el perfil Ejecutivo: monto ganado en comisiones hasta el momento."),
         ("Alertas críticas", "Acceso rápido a casos que requieren prioridad."),
         ("Oportunidades de contacto", "Casos con canales de contacto disponibles."),
         ("Colas inteligentes", "Agrupaciones de trabajo calculadas para orientar la jornada."),
         ("Filtros de trabajo", "Búsqueda libre, compañía, estado, antigüedad, saldo y disponibilidad de contacto."),
         ("Cola priorizada", "Lista ordenada de casos; muestra RUT, estado, motivo de prioridad, saldo y antigüedad."),
-        ("Embudo de cartera", "Distribución de deudores por estado."),
+        ("Resumen ejecutivo", "Segunda pestaña: cartera total, saldo, cobertura, embudo por estado y foco del día."),
     ], [2250, 7110], 8.8)
+    h3(doc, "Mis comisiones acumuladas")
+    para(doc, "Esta tarjeta muestra cuánto lleva ganado la ejecutiva en comisiones. El monto sube automáticamente cada vez que ella registra un pago: la aplicación toma el monto pagado y le aplica el porcentaje que el Supervisor definió para esa cartera.")
+    para(doc, "Ejemplo: si la cartera Cart-56 tiene un 10% de comisión y la ejecutiva registra un pago de $100.000, la tarjeta muestra $10.000. Si después registra un pago de $1.000.000, se suman $100.000 y la tarjeta pasa a mostrar $110.000.", "Ejemplo:")
+    table(doc, ["Dato de la tarjeta", "Qué significa"], [
+        ("Monto grande", "Total de comisiones acumuladas desde el último corte."),
+        ("Pagos registrados / recaudado", "Cantidad de pagos que suman a la comisión y monto total cobrado."),
+        ("Porcentaje por cartera", "Porcentaje vigente en cada cartera asignada a la ejecutiva."),
+        ("Acumulado desde", "Fecha del último corte hecho por el Supervisor. Si no hay cortes, dice Acumulado histórico."),
+    ], [2600, 6760], 8.8)
+    callout(doc, "Por qué el monto puede volver a $0", "Cuando el Supervisor paga las comisiones, deja los montos en $0 para empezar un nuevo período. Los pagos registrados no se borran ni se pierden: solo dejan de sumar al acumulado que se muestra desde esa fecha.", "info")
+    callout(doc, "Si la comisión no sube", "Un pago solo genera comisión si la cartera tiene un porcentaje definido. Si registra pagos y la tarjeta sigue en $0, avise al Supervisor para que revise el porcentaje en Administración de carteras. Un pago revertido tampoco suma.", "warn")
     h3(doc, "Filtros de antigüedad")
     bullet(doc, "Nunca gestionados; 0 a 6 días; 7 a 13 días; 14 a 29 días; 30 días o más.")
     h3(doc, "Filtros de saldo")
@@ -485,6 +500,21 @@ def chapter_3(doc):
     ], [2250, 7110], 8.8)
     para(doc, "Seleccione el período disponible y pulse Actualizar para recalcular los indicadores. El Supervisor puede usar Descargar Excel mensual para obtener el reporte de conexiones de ejecutivas.")
     callout(doc, "Lectura responsable", "Los indicadores reflejan la información cargada y visible para la sesión. Si una cartera, gestión o asignación aún no está disponible, el Dashboard puede mostrar valores parciales o el mensaje Sin datos.", "info")
+    h2(doc, "3.5 Comisiones por ejecutiva — Administrador y Supervisor")
+    para(doc, "En la Vista general, los perfiles de coordinación disponen de la sección Comisiones por ejecutiva. Muestra una tarjeta por cada ejecutiva activa con su nombre, su correo, el monto acumulado en comisiones y la cantidad de pagos que lo generaron. El perfil Ejecutivo no ve esta sección.")
+    table(doc, ["Dato de cada tarjeta", "Qué significa"], [
+        ("Usuario y correo", "Ejecutiva a la que corresponde el acumulado."),
+        ("Monto en verde", "Comisión acumulada desde el último corte."),
+        ("Pagos y recaudado", "Cantidad de pagos registrados y monto total cobrado que originó la comisión."),
+    ], [2600, 6760], 8.8)
+    h3(doc, "Reestablecer los montos a $0")
+    para(doc, "Cuando las comisiones ya fueron pagadas, use el botón Reestablecer montos a $0 para comenzar un período nuevo. La aplicación pedirá confirmación antes de aplicar el corte.")
+    step(doc, 1, "Verifique los montos", "Registre o exporte los valores mostrados antes del corte; la pantalla dejará de mostrarlos.")
+    step(doc, 2, "Pague las comisiones", "Realice el pago por el canal administrativo que corresponda.")
+    step(doc, 3, "Pulse Reestablecer montos a $0", "Confirme en el mensaje de la aplicación.")
+    step(doc, 4, "Compruebe el resultado", "Todas las tarjetas deben quedar en $ 0 y las ejecutivas verán su tarjeta reiniciada.")
+    callout(doc, "El corte no borra pagos", "Reestablecer solo marca desde qué fecha se vuelve a acumular. Los pagos registrados, los saldos de los deudores y el historial de gestiones no se modifican en absoluto.", "info")
+    callout(doc, "El corte aplica a todas", "El botón reinicia el acumulado de todas las ejecutivas a la vez, no de una sola. Úselo cuando el pago de comisiones ya se haya hecho para todo el equipo.", "warn")
     page_break(doc)
 
 
@@ -589,6 +619,7 @@ def chapter_6(doc):
     step(doc, 6, "Añada observaciones", "Incluya referencia, forma de pago, número de operación o antecedente del comprobante recibido.")
     step(doc, 7, "Pulse Registrar pago", "Revise la confirmación y los nuevos valores de Pagos y Saldo Actual.")
     callout(doc, "Antes de confirmar", "Compruebe RUT, compañía, expediente, fecha y monto. Un pago mal asignado afecta saldos y reportes; la reversa está restringida al Supervisor.", "danger")
+    para(doc, "Cada pago confirmado suma automáticamente a la tarjeta Mis comisiones acumuladas del Dashboard, según el porcentaje definido para esa cartera (sección 3.2). No hay que registrar la comisión por separado. Si el Supervisor revierte el pago, la comisión correspondiente deja de sumar.")
     h2(doc, "6.5 Asignar una tarea")
     para(doc, "Cuando una cartera no pueda ser gestionada directamente por el usuario, el botón Asignar tarea permite derivarla a la ejecutiva responsable. Seleccione la ejecutiva disponible para esa compañía, defina plazo y escriba una observación clara.")
     h2(doc, "6.6 Vista previa y envío de correo individual")
@@ -665,12 +696,21 @@ def chapter_8(doc):
     title(doc, "8. Administración de carteras", "Asignaciones, reemplazos, limpieza y bitácora")
     h2(doc, "8.1 Alcance")
     para(doc, "Este módulo restringido está disponible para Administrador y Supervisor. Centraliza acciones sensibles sobre cargas, gestiones y responsables de cartera. La bitácora inferior registra las operaciones ejecutadas desde la pantalla con fecha y hora.")
-    h2(doc, "8.2 Asignar carteras")
+    h2(doc, "8.2 Asignar carteras y definir comisiones")
+    para(doc, "La tarjeta Asignación de carteras reúne dos cosas: la tabla con el porcentaje de comisión de cada cartera y, más abajo, el responsable asignado a cada compañía. Un solo botón guarda ambas.")
+    h3(doc, "Porcentaje de comisión por cartera")
+    para(doc, "La tabla superior lista las carteras disponibles y, junto a cada una, el campo % Comisión. Ese porcentaje se aplica sobre cada pago que la ejecutiva registre en esa cartera y alimenta las tarjetas de comisiones del Dashboard.")
+    step(doc, 1, "Ubique la cartera", "Cada fila de la tabla corresponde a una compañía.")
+    step(doc, 2, "Escriba el porcentaje", "Admite valores entre 0 y 100, con hasta dos decimales. Por ejemplo, 10 significa 10% de comisión.")
+    step(doc, 3, "Deje en 0 lo que no comisiona", "Una cartera en 0% registra los pagos igual, pero no genera comisión.")
+    h3(doc, "Responsable de cada compañía")
     step(doc, 1, "Ubique la compañía", "Cada compañía tiene una lista de ejecutivos activos.")
     step(doc, 2, "Seleccione responsable", "Elija el ejecutivo o Sin asignación.")
     step(doc, 3, "Revise todas las compañías", "Evite sobrescribir por error una asignación existente.")
-    step(doc, 4, "Pulse Guardar asignaciones", "Espere el mensaje de confirmación.")
+    step(doc, 4, "Pulse Guardar asignaciones y comisiones", "Espere el mensaje de confirmación.")
     para(doc, "La asignación controla la información que ve y opera el Ejecutivo. Cuando cambie, solicite al usuario cerrar sesión y volver a ingresar.")
+    callout(doc, "El porcentaje rige hacia adelante y hacia atrás", "El acumulado se calcula siempre con el porcentaje vigente. Si modifica el porcentaje de una cartera, las comisiones aún no pagadas de esa cartera se recalculan con el valor nuevo. Ajuste el porcentaje justo después de un corte para evitar confusiones con el equipo.", "warn")
+    callout(doc, "Guardado parcial", "Si la aplicación avisa que las asignaciones se guardaron pero los porcentajes no, revise la conexión y vuelva a pulsar el botón. Las asignaciones ya guardadas no se duplican.", "info")
     h2(doc, "8.3 Reemplazos temporales")
     para(doc, "Un reemplazo entrega acceso operativo durante un intervalo definido sin compartir credenciales ni cambiar permanentemente la asignación titular.")
     step(doc, 1, "Seleccione cartera", "Elija la compañía del titular ausente.")
@@ -727,13 +767,14 @@ def chapter_10(doc):
         ("Inicio", "Abrir Dashboard > Mi trabajo; revisar salud, foco, alertas y tareas.", "Confirmar que aparecen las carteras correctas."),
         ("Priorización", "Aplicar filtros por antigüedad, saldo y contacto; comenzar por la cola priorizada.", "Evitar saltar casos críticos sin dejar motivo."),
         ("Gestión", "Desplegar el caso en la cola y usar Enviar email o Registrar gestión; abrir la ficha del deudor cuando se necesite el detalle completo.", "Registrar tipo, estado, fecha y observación."),
-        ("Pagos", "Registrar monto, fecha y expediente; dejar el respaldo en la observación.", "Validar nuevo saldo y pagos acumulados."),
+        ("Pagos", "Registrar monto, fecha y expediente; dejar el respaldo en la observación.", "Validar nuevo saldo, pagos acumulados y la tarjeta de comisiones."),
         ("Cierre", "Cerrar tareas realizadas, revisar pendientes y cerrar sesión.", "No dejar la aplicación abierta."),
     ], [1350, 5260, 2750], 8.4)
     h2(doc, "10.2 Rutina del Supervisor")
     bullet(doc, "Revisar Vista general, conexiones, cobertura y gestiones del día.")
     bullet(doc, "Atender recuperaciones, notificaciones y derivaciones pendientes.")
-    bullet(doc, "Comprobar asignaciones y reemplazos antes de la jornada.")
+    bullet(doc, "Comprobar asignaciones, porcentajes de comisión y reemplazos antes de la jornada.")
+    bullet(doc, "Revisar Comisiones por ejecutiva; al pagar el período, registrar los montos y luego reestablecerlos a $0.")
     bullet(doc, "Controlar cargas de deudores y gestiones; revisar duplicados y resultados.")
     bullet(doc, "Preparar campañas masivas con prueba previa, segmentación y revisión del log.")
     bullet(doc, "Revertir pagos solo con antecedente verificable y autorización interna.")
@@ -772,6 +813,8 @@ def chapter_11(doc):
         ("Variable visible en el correo", "Dato ausente o variable mal escrita.", "Corrija la plantilla o complete el dato; vuelva a abrir la vista previa."),
         ("Pago no se refleja", "No se confirmó, fue rechazado o la vista está desactualizada.", "Revise mensaje, historial y actualice; no duplique el pago."),
         ("Tarea no aparece", "No está asignada, fue cerrada o la lista no se actualizó.", "Pulse Actualizar y revise notificaciones y cartera."),
+        ("La comisión sigue en $0", "La cartera no tiene porcentaje definido o el pago fue revertido.", "Pida al Supervisor revisar el % Comisión en Administración de carteras."),
+        ("La comisión bajó sin corte", "El Supervisor cambió el porcentaje de la cartera o revirtió un pago.", "Consulte con el Supervisor antes de rehacer cualquier registro."),
         ("Gestión guardada sin conexión", "Se cortó Internet o el servidor no respondió.", "El trabajo quedó guardado en el equipo. No la registre de nuevo: se enviará sola al volver la conexión."),
         ("Aviso N sin enviar", "Una gestión en cola fue rechazada por el servidor.", "Informe al Administrador antes de volver a registrarla."),
     ], [2200, 3000, 4160], 7.8)
@@ -796,6 +839,8 @@ def chapter_12(doc):
         ("Baja", "ID que aparece en el mes anterior y no en el actual."),
         ("Birlado", "Estado operativo disponible en la gestión y en procesos mensuales específicos."),
         ("CIP", "Clasificación con intención de pago."),
+        ("Comisión", "Monto que gana la ejecutiva por cada pago que registra, calculado como un porcentaje del pago según la cartera."),
+        ("Corte de comisiones", "Acción del Supervisor que deja el acumulado en $0 tras pagarlo. No borra pagos ni gestiones."),
         ("SIP", "Clasificación sin intención de pago."),
         ("STARTTLS", "Protección de la conexión SMTP durante el envío."),
         ("Top montos", "Selección de una cantidad limitada de deudores con valores más altos."),
@@ -833,7 +878,7 @@ def chapter_12(doc):
     ], [3900, 5460], 9)
     h2(doc, "12.5 Cierre")
     para(doc, "El uso consistente de roles, asignaciones, registros de gestión y verificaciones posteriores permite que Controlia Cobranzas sea una fuente operativa confiable. Ante una duda, detenga la acción sensible, revise este manual y solicite apoyo por el canal institucional.")
-    callout(doc, "Versión del documento", "Manual de Usuario Controlia Cobranzas, versión 1.0, preparado para la entrega de la aplicación en agosto de 2026.", "info")
+    callout(doc, "Versión del documento", "Manual de Usuario Controlia Cobranzas, versión 1.3, preparado para la entrega de la aplicación en agosto de 2026.", "info")
 
 
 def core_properties(doc):
