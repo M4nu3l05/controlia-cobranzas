@@ -110,6 +110,7 @@ class ImportDeudoresResponse(BaseModel):
     periodo_carga: str = ""
     detalle_birlados: int = 0
     import_batch_id: int | None = None
+    asignaciones_aplicadas: int = 0
 
 
 class BirladoPreviewItem(BaseModel):
@@ -132,6 +133,42 @@ class ImportDeudoresPreviewResponse(BaseModel):
     nuevos_estimados: int
     existentes_estimados: int
     birlados: list[BirladoPreviewItem] = Field(default_factory=list)
+
+
+class DebtorAssignmentMatchItem(BaseModel):
+    source_label: str
+    normalized_label: str
+    row_count: int
+    debtor_count: int
+    user_id: int | None = None
+    username: str = ""
+    status: str
+
+
+class DebtorAssignmentPreviewResponse(BaseModel):
+    empresa: str
+    source_file: str
+    file_sha256: str
+    sheet_name: str
+    total_rows: int
+    unique_debtors: int
+    existing_debtors: int
+    missing_debtors: int
+    blank_assignments: int
+    conflicting_debtors: int
+    unresolved_labels: int
+    matches: list[DebtorAssignmentMatchItem] = Field(default_factory=list)
+
+
+class DebtorAssignmentApplyResponse(BaseModel):
+    empresa: str
+    source_file: str
+    processed_debtors: int
+    assigned_debtors: int
+    reassigned_debtors: int
+    unchanged_debtors: int
+    missing_debtors: int
+    aliases_saved: int
 
 
 class PaymentAllocationRequest(BaseModel):

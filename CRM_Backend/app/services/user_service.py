@@ -3,7 +3,7 @@
 import secrets
 from datetime import datetime
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.core.security import generate_salt, hash_password
@@ -252,11 +252,18 @@ def get_user_carteras_service(
     _ensure_can_view_assignments(executor, target_user_id)
     ensure_cartera_assignments_table(db)
 
+    assignment_union = """
+            UNION
+            SELECT empresa
+            FROM debtor_user_assignments
+            WHERE user_id = :user_id
+    """ if inspect(db.get_bind()).has_table("debtor_user_assignments") else ""
     rows = db.execute(
-        text("""
+        text(f"""
             SELECT empresa
             FROM cartera_asignaciones
             WHERE user_id = :user_id
+            {assignment_union}
             UNION
             SELECT empresa
             FROM cartera_temporary_replacements

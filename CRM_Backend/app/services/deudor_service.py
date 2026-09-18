@@ -5,15 +5,20 @@ import hashlib
 import uuid
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import case, or_, func, select
+from sqlalchemy import and_, case, inspect, or_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.deudor import DeudorDetalle, DeudorResumen
+from app.models.debtor_assignment import DebtorUserAssignment
 from app.models.operations import CustomerChangeAudit
 from app.models.payment import PaymentAllocation, PaymentReceipt, PaymentReversal, PaymentTransaction
 from app.models.user import User
-from app.core.authorization import assigned_user_id_for_company, require_supervisor
+from app.core.authorization import (
+    assigned_user_id_for_company,
+    assigned_user_id_for_debtor,
+    require_supervisor,
+)
 from app.core.text_utils import fix_mojibake_text
 from app.services.operations_service import create_notification
 try:
@@ -68,6 +73,10 @@ def _rut_db_expr(column):
     )
 
 
+def _has_debtor_assignments_table(db: Session) -> bool:
+    return inspect(db.get_bind()).has_table("debtor_user_assignments")
+
+
 def _saldo_pendiente_detalle(row: DeudorDetalle) -> float:
     saldo = float(getattr(row, "saldo_actual", 0) or 0)
     saldo_calc = max(
@@ -88,8 +97,13 @@ def clear_empresa_deudores_service(db: Session, *, empresa: str) -> bool:
 
     deleted_detalle = db.query(DeudorDetalle).filter(DeudorDetalle.empresa == empresa_txt).delete(synchronize_session=False)
     deleted_resumen = db.query(DeudorResumen).filter(DeudorResumen.empresa == empresa_txt).delete(synchronize_session=False)
+    deleted_assignments = 0
+    if _has_debtor_assignments_table(db):
+        deleted_assignments = db.query(DebtorUserAssignment).filter(
+            DebtorUserAssignment.empresa == empresa_txt
+        ).delete(synchronize_session=False)
     db.commit()
-    return bool(deleted_detalle or deleted_resumen)
+    return bool(deleted_detalle or deleted_resumen or deleted_assignments)
 
 
 def clear_all_deudores_service(db: Session) -> list[str]:
@@ -101,6 +115,8 @@ def clear_all_deudores_service(db: Session) -> list[str]:
 
     db.query(DeudorDetalle).delete(synchronize_session=False)
     db.query(DeudorResumen).delete(synchronize_session=False)
+    if _has_debtor_assignments_table(db):
+        db.query(DebtorUserAssignment).delete(synchronize_session=False)
     db.commit()
     return sorted(set(empresas))
 
@@ -146,8 +162,19 @@ def delete_deudor_individual_service(
             .delete(synchronize_session=False)
         )
 
+    deleted_assignments = 0
+    if _has_debtor_assignments_table(db):
+        deleted_assignments = (
+            db.query(DebtorUserAssignment)
+            .filter(
+                DebtorUserAssignment.empresa == empresa_txt,
+                DebtorUserAssignment.rut_afiliado == rut_norm,
+            )
+            .delete(synchronize_session=False)
+        )
+
     db.commit()
-    return bool(deleted_detalle or deleted_resumen or deleted_gestiones)
+    return bool(deleted_detalle or deleted_resumen or deleted_gestiones or deleted_assignments)
 
 
 def _to_resumen_item(row: DeudorResumen, contact: dict | None = None) -> DeudorListItem:
@@ -278,11 +305,20 @@ def list_destinatarios_service(
     periodo_carga: str = "",
     limit: int = 5000,
     empresas_permitidas: list[str] | None = None,
+    assigned_user_id: int | None = None,
 ) -> list[DestinatarioItem]:
     empresa_txt = _norm_text(empresa)
     periodo_txt = _norm_text(periodo_carga)
 
     resumen_q = db.query(DeudorResumen)
+    if assigned_user_id is not None:
+        resumen_q = resumen_q.join(
+            DebtorUserAssignment,
+            and_(
+                DebtorUserAssignment.empresa == DeudorResumen.empresa,
+                DebtorUserAssignment.rut_afiliado == _rut_db_expr(DeudorResumen.rut_afiliado),
+            ),
+        ).filter(DebtorUserAssignment.user_id == int(assigned_user_id))
     # None = sin restriccion (admin/supervisor). Una lista vacia significa
     # "sin carteras asignadas", nunca "todas las carteras".
     if empresas_permitidas is not None:
@@ -358,8 +394,18 @@ def list_deudores_service(
     offset: int = 0,
     include_contact: bool = False,
     empresas_permitidas: list[str] | None = None,
+    assigned_user_id: int | None = None,
 ) -> DeudorListResponse:
     query = db.query(DeudorResumen)
+
+    if assigned_user_id is not None:
+        query = query.join(
+            DebtorUserAssignment,
+            and_(
+                DebtorUserAssignment.empresa == DeudorResumen.empresa,
+                DebtorUserAssignment.rut_afiliado == _rut_db_expr(DeudorResumen.rut_afiliado),
+            ),
+        ).filter(DebtorUserAssignment.user_id == int(assigned_user_id))
 
     if empresas_permitidas is not None:
         permitidas = [_norm_text(item) for item in empresas_permitidas if _norm_text(item)]
@@ -854,10 +900,20 @@ def get_dashboard_summary_service(
     *,
     empresas: list[str] | None = None,
     periodo_carga: str = "",
+    assigned_user_id: int | None = None,
 ) -> DashboardSummaryResponse:
     empresas = [str(e).strip() for e in (empresas or []) if str(e).strip()]
 
     resumen_base_query = db.query(DeudorResumen)
+
+    if assigned_user_id is not None:
+        resumen_base_query = resumen_base_query.join(
+            DebtorUserAssignment,
+            and_(
+                DebtorUserAssignment.empresa == DeudorResumen.empresa,
+                DebtorUserAssignment.rut_afiliado == _rut_db_expr(DeudorResumen.rut_afiliado),
+            ),
+        ).filter(DebtorUserAssignment.user_id == int(assigned_user_id))
 
     if empresas:
         resumen_base_query = resumen_base_query.filter(func.trim(DeudorResumen.empresa).in_(empresas))
@@ -1287,6 +1343,14 @@ def update_deudor_cliente_service(
             row.rut_afiliado = rut_actualizado
             row.nombre_afiliado = nombre_txt
 
+    if _has_debtor_assignments_table(db) and rut_original != rut_actualizado:
+        assignment = db.query(DebtorUserAssignment).filter(
+            DebtorUserAssignment.empresa == empresa_txt,
+            DebtorUserAssignment.rut_afiliado == rut_original,
+        ).first()
+        if assignment is not None:
+            assignment.rut_afiliado = rut_actualizado
+
     changed_fields: list[str] = []
     for field_name, new_value in new_values.items():
         old_value = old_values.get(field_name, "")
@@ -1305,7 +1369,9 @@ def update_deudor_cliente_service(
             )
         )
 
-    owner_user_id = assigned_user_id_for_company(db, empresa_txt)
+    owner_user_id = assigned_user_id_for_debtor(db, empresa_txt, rut_actualizado)
+    if owner_user_id is None:
+        owner_user_id = assigned_user_id_for_company(db, empresa_txt)
     if changed_fields and owner_user_id is not None and int(owner_user_id) != int(executor.id):
         create_notification(
             db,

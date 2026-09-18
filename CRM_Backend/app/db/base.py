@@ -21,3 +21,8 @@ from app.models.payment import (  # noqa: F401
     PaymentTransaction,
 )
 from app.models.commission import CommissionRate, CommissionReset  # noqa: F401
+from app.models.debtor_assignment import (  # noqa: F401
+    DebtorAssignmentAlias,
+    DebtorAssignmentAudit,
+    DebtorUserAssignment,
+)

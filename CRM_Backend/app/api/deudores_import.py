@@ -8,7 +8,16 @@ from sqlalchemy.orm import Session
 from app.api.auth import get_current_user
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.deudor import ImportDeudoresPreviewResponse, ImportDeudoresResponse
+from app.schemas.deudor import (
+    DebtorAssignmentApplyResponse,
+    DebtorAssignmentPreviewResponse,
+    ImportDeudoresPreviewResponse,
+    ImportDeudoresResponse,
+)
+from app.services.debtor_assignment_service import (
+    apply_debtor_assignments_service,
+    preview_debtor_assignments_service,
+)
 from app.services.deudor_import_service import (
     EMPRESAS_VALIDAS,
     import_deudores_excel_service,
@@ -30,12 +39,82 @@ def _parse_column_mapping(raw: str) -> dict | None:
     return payload
 
 
+def _parse_assignment_overrides(raw: str) -> dict[str, int]:
+    if not str(raw or "").strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("La relación de ejecutivas recibida no es válida.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("La relación de ejecutivas recibida no es válida.")
+    return {str(label): int(user_id) for label, user_id in payload.items()}
+
+
 def _ensure_supervisor_or_admin(current_user: User) -> None:
     if current_user.role not in {"admin", "supervisor"}:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permiso para cargar bases de deudores.",
         )
+
+
+@router.post("/assignments/preview", response_model=DebtorAssignmentPreviewResponse)
+async def preview_debtor_assignments(
+    empresa: str = Form(...),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_supervisor_or_admin(current_user)
+    filename = file.filename or "archivo.xlsx"
+    if not filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="Debes subir un archivo Excel válido.")
+    try:
+        result = preview_debtor_assignments_service(
+            db,
+            empresa=str(empresa or "").strip(),
+            content=await file.read(),
+            source_file=filename,
+        )
+        return DebtorAssignmentPreviewResponse(**result)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/assignments/apply", response_model=DebtorAssignmentApplyResponse)
+async def apply_debtor_assignments(
+    empresa: str = Form(...),
+    expected_file_sha256: str = Form(...),
+    overrides_json: str = Form(""),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_supervisor_or_admin(current_user)
+    filename = file.filename or "archivo.xlsx"
+    if not filename.lower().endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="Debes subir un archivo Excel válido.")
+    try:
+        result = apply_debtor_assignments_service(
+            db,
+            empresa=str(empresa or "").strip(),
+            content=await file.read(),
+            source_file=filename,
+            executor=current_user,
+            expected_file_sha256=expected_file_sha256,
+            overrides=_parse_assignment_overrides(overrides_json),
+        )
+        return DebtorAssignmentApplyResponse(**result)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se pudo aplicar la distribución de casos: {exc}",
+        ) from exc
 
 
 @router.post("/import", response_model=ImportDeudoresResponse)

@@ -7,8 +7,9 @@ from app.api.auth import get_current_user
 from app.core.authorization import (
     AuthorizationError,
     can_operate_company,
+    can_operate_debtor,
     is_privileged_operator,
-    require_company_operation,
+    require_debtor_operation,
 )
 from app.db.session import get_db
 from app.models.user import User
@@ -33,6 +34,7 @@ from app.services.deudor_service import (
 from app.schemas.deudor import DestinatarioItem
 from app.schemas.auth import MessageResponse
 from app.services.user_service import get_current_user_carteras_service
+from app.services.debtor_assignment_service import user_has_debtor_assignments
 
 router = APIRouter(prefix="/deudores", tags=["deudores"])
 
@@ -57,6 +59,7 @@ def list_deudores(
     current_user: User = Depends(get_current_user),
 ):
     empresas_permitidas: list[str] | None = None
+    assigned_user_id: int | None = None
     if not is_privileged_operator(current_user):
         if empresa and not can_operate_company(db, current_user, empresa):
             raise HTTPException(
@@ -67,6 +70,8 @@ def list_deudores(
             db=db,
             executor=current_user,
         )
+        if user_has_debtor_assignments(db, int(current_user.id)):
+            assigned_user_id = int(current_user.id)
     return list_deudores_service(
         db,
         q=q,
@@ -76,6 +81,7 @@ def list_deudores(
         offset=offset,
         include_contact=include_contact,
         empresas_permitidas=empresas_permitidas,
+        assigned_user_id=assigned_user_id,
     )
 
 
@@ -90,6 +96,7 @@ def list_destinatarios(
     # Consultar la ficha de un deudor de otra cartera esta permitido, pero
     # extraer el padron masivo de correos queda acotado a las carteras propias.
     empresas_permitidas: list[str] | None = None
+    assigned_user_id: int | None = None
     if not is_privileged_operator(current_user):
         if empresa and not can_operate_company(db, current_user, empresa):
             raise HTTPException(
@@ -100,6 +107,8 @@ def list_destinatarios(
             db=db,
             executor=current_user,
         )
+        if user_has_debtor_assignments(db, int(current_user.id)):
+            assigned_user_id = int(current_user.id)
 
     return list_destinatarios_service(
         db,
@@ -107,6 +116,7 @@ def list_destinatarios(
         periodo_carga=periodo_carga,
         limit=limit,
         empresas_permitidas=empresas_permitidas,
+        assigned_user_id=assigned_user_id,
     )
 
 
@@ -118,11 +128,17 @@ def get_deudor_detalle(
     current_user: User = Depends(get_current_user),
 ):
     try:
+        if not is_privileged_operator(current_user) and not can_operate_debtor(
+            db, current_user, empresa, rut
+        ):
+            raise AuthorizationError("Este deudor está asignado a otra ejecutiva.")
         return get_deudor_detalle_service(
             db,
             rut=rut,
             empresa=empresa,
         )
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -138,7 +154,7 @@ def registrar_pago(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        require_company_operation(db, current_user, payload.empresa)
+        require_debtor_operation(db, current_user, payload.empresa, rut)
         return registrar_pago_service(
             db,
             executor=current_user,
@@ -177,6 +193,7 @@ def update_deudor_cliente(
     current_user: User = Depends(get_current_user),
 ):
     try:
+        require_debtor_operation(db, current_user, payload.empresa, rut)
         return update_deudor_cliente_service(
             db,
             executor=current_user,

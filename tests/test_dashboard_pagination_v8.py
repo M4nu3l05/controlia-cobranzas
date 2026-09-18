@@ -130,7 +130,7 @@ def test_migration_8_backfills_historical_dates_trims_and_is_idempotent():
         connection.exec_driver_sql("INSERT INTO deudores_gestiones VALUES (4, 'Consalud', '4', 'fecha invalida')")
 
     with Session(engine) as session:
-        assert apply_backend_migrations(session) == [8]
+        assert apply_backend_migrations(session) == [8, 9]
         assert apply_backend_migrations(session) == []
         dates = session.execute(text("SELECT fecha_gestion_iso FROM deudores_gestiones ORDER BY id")).scalars().all()
         normalized = session.execute(text("SELECT empresa, periodo_carga FROM deudores_resumen")).one()
@@ -139,3 +139,6 @@ def test_migration_8_backfills_historical_dates_trims_and_is_idempotent():
     assert normalized == ("Consalud", "202609")
     indexes = {item["name"] for item in inspect(engine).get_indexes("deudores_gestiones")}
     assert "idx_gestiones_empresa_fecha_rut" in indexes
+    assert inspect(engine).has_table("debtor_user_assignments")
+    assert inspect(engine).has_table("debtor_assignment_aliases")
+    assert inspect(engine).has_table("debtor_assignment_audit")

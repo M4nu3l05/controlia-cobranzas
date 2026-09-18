@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
-from app.core.authorization import AuthorizationError
+from app.core.authorization import AuthorizationError, require_debtor_operation
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.gestion import GestionCreateRequest, GestionItem
@@ -54,7 +54,11 @@ def list_gestiones(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return list_gestiones_service(db, rut=rut, empresa=empresa)
+    try:
+        require_debtor_operation(db, current_user, empresa, rut)
+        return list_gestiones_service(db, rut=rut, empresa=empresa)
+    except AuthorizationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
 
 @router.get("/gestiones/asignadas/me", response_model=list[GestionItem])

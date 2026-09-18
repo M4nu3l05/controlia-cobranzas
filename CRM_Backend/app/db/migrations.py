@@ -9,6 +9,11 @@ from sqlalchemy.orm import Session
 
 import app.db.base  # noqa: F401 - registra todos los modelos en Base.metadata
 from app.db.session import Base
+from app.models.debtor_assignment import (
+    DebtorAssignmentAlias,
+    DebtorAssignmentAudit,
+    DebtorUserAssignment,
+)
 from app.services.deudor_schema_service import ensure_deudores_optional_columns
 from app.services.gestion_service import ensure_gestiones_optional_columns
 from app.services.user_service import ensure_cartera_assignments_table
@@ -226,6 +231,13 @@ def _migration_8_dashboard_indexes(db: Session) -> None:
         db.execute(text(statement))
 
 
+def _migration_9_debtor_user_assignments(db: Session) -> None:
+    bind = db.get_bind()
+    DebtorUserAssignment.__table__.create(bind=bind, checkfirst=True)
+    DebtorAssignmentAlias.__table__.create(bind=bind, checkfirst=True)
+    DebtorAssignmentAudit.__table__.create(bind=bind, checkfirst=True)
+
+
 MIGRATIONS = (
     BackendMigration(1, "Registrar y completar el esquema CRM heredado", _migration_1_legacy_schema),
     BackendMigration(2, "Auditoría, notificaciones, derivaciones y reemplazos", _migration_2_operations),
@@ -235,6 +247,7 @@ MIGRATIONS = (
     BackendMigration(6, "Campos de deuda para Cruz Blanca y Colmena", _migration_6_isapre_debt_fields),
     BackendMigration(7, "Comisiones por cartera y cortes de pago", _migration_7_commissions),
     BackendMigration(8, "Fechas normalizadas e indices para dashboard", _migration_8_dashboard_indexes),
+    BackendMigration(9, "Asignacion individual de deudores a ejecutivas", _migration_9_debtor_user_assignments),
 )
 
 

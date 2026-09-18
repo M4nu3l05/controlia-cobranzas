@@ -15,6 +15,7 @@ from app.models.deudor import DeudorDetalle, DeudorResumen
 from app.models.operations import DebtorBirladoTransition, DebtorImportBatch
 from app.models.user import User
 from app.core.text_utils import fix_mojibake_text
+from app.services.debtor_assignment_service import apply_debtor_assignments_service
 
 EMPRESAS_VALIDAS = ["Colmena", "Consalud", "Cruz Blanca", "Cart-56"]
 HOJA_RESUMEN = "RESUMEN"
@@ -1303,6 +1304,22 @@ def import_deudores_excel_service(
         db.query(DeudorResumen).filter(DeudorResumen.empresa == empresa_txt).delete(synchronize_session=False)
         db.bulk_save_objects(resumen_objs)
         resumen_insertados = len(resumen_objs)
+    db.flush()
+
+    assignment_result = None
+    try:
+        assignment_result = apply_debtor_assignments_service(
+            db,
+            empresa=empresa_txt,
+            content=content,
+            source_file=source_file,
+            executor=executor,
+            expected_file_sha256=actual_hash,
+            commit=False,
+        )
+    except ValueError as exc:
+        if "No se encontraron en una misma hoja" not in str(exc):
+            raise
     db.commit()
 
     return {
@@ -1316,4 +1333,8 @@ def import_deudores_excel_service(
         "periodo_carga": periodo_carga,
         "detalle_birlados": len(detalles_birlados),
         "import_batch_id": batch.id,
+        "asignaciones_aplicadas": int(
+            (assignment_result or {}).get("assigned_debtors", 0)
+            + (assignment_result or {}).get("reassigned_debtors", 0)
+        ),
     }

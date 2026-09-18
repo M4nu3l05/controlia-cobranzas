@@ -14,6 +14,7 @@ from app.core.authorization import (
     AuthorizationError,
     is_derivation,
     require_company_operation,
+    require_debtor_operation,
     require_supervisor,
     resolve_derivation_target,
 )
@@ -296,10 +297,11 @@ def create_gestion_service(
         assigned_to_user_id = resolve_derivation_target(
             db,
             company=empresa_txt,
+            rut=rut_norm,
             requested_user_id=payload.assigned_to_user_id,
         )
     else:
-        require_company_operation(db, executor, empresa_txt)
+        require_debtor_operation(db, executor, empresa_txt, rut_norm)
         assigned_to_user_id = None
 
     row = DeudorGestion(
@@ -393,7 +395,7 @@ def delete_gestion_service(db: Session, *, gestion_id: int, executor: User) -> N
         _recalcular_estado_deudor(db, empresa=empresa, rut=rut)
         return
 
-    require_company_operation(db, executor, empresa)
+    require_debtor_operation(db, executor, empresa, rut)
     db.query(DerivationTracking).filter(
         DerivationTracking.gestion_id == int(row.id)
     ).delete(synchronize_session=False)
