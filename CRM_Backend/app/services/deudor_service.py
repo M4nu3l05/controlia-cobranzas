@@ -3,9 +3,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta
 
-from sqlalchemy import or_, func
+from sqlalchemy import case, or_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -150,7 +150,8 @@ def delete_deudor_individual_service(
     return bool(deleted_detalle or deleted_resumen or deleted_gestiones)
 
 
-def _to_resumen_item(row: DeudorResumen) -> DeudorListItem:
+def _to_resumen_item(row: DeudorResumen, contact: dict | None = None) -> DeudorListItem:
+    contact = contact or {}
     return DeudorListItem(
         empresa=row.empresa,
         rut_afiliado=row.rut_afiliado,
@@ -167,7 +168,59 @@ def _to_resumen_item(row: DeudorResumen) -> DeudorListItem:
         saldo_actual=float(row.saldo_actual or 0),
         source_file=_norm_text(getattr(row, "source_file", "")),
         periodo_carga=_norm_text(getattr(row, "periodo_carga", "")),
+        mail_afiliado=_norm_text(contact.get("mail_afiliado", "")),
+        telefono_fijo_afiliado=_norm_text(contact.get("telefono_fijo_afiliado", "")),
+        telefono_movil_afiliado=_norm_text(contact.get("telefono_movil_afiliado", "")),
+        direccion_deudor=_norm_text(contact.get("direccion_deudor", "")),
     )
+
+
+def _contactos_para_resumen(
+    db: Session,
+    rows: list[DeudorResumen],
+) -> dict[tuple[str, str], dict]:
+    """Obtiene contacto sólo para los deudores de la página solicitada."""
+    por_empresa: dict[str, set[str]] = {}
+    for row in rows:
+        empresa = _norm_text(row.empresa)
+        rut = _norm_rut(row.rut_afiliado)
+        if empresa and rut:
+            por_empresa.setdefault(empresa, set()).add(rut)
+
+    contactos: dict[tuple[str, str], dict] = {}
+    for empresa, ruts in por_empresa.items():
+        ruts_ordenados = sorted(ruts)
+        for inicio in range(0, len(ruts_ordenados), 400):
+            lote = ruts_ordenados[inicio:inicio + 400]
+            detalles = (
+                db.query(DeudorDetalle)
+                .filter(
+                    func.trim(DeudorDetalle.empresa) == empresa,
+                    _rut_db_expr(DeudorDetalle.rut_afiliado).in_(lote),
+                    DeudorDetalle.is_active.is_(True),
+                )
+                .order_by(DeudorDetalle.updated_at.desc(), DeudorDetalle.id.desc())
+                .all()
+            )
+            for detalle in detalles:
+                key = (_norm_text(detalle.empresa), _norm_rut(detalle.rut_afiliado))
+                actual = contactos.setdefault(key, {
+                    "mail_afiliado": "",
+                    "telefono_fijo_afiliado": "",
+                    "telefono_movil_afiliado": "",
+                    "direccion_deudor": "",
+                    "nro_expediente": "",
+                })
+                for campo in (
+                    "mail_afiliado",
+                    "telefono_fijo_afiliado",
+                    "telefono_movil_afiliado",
+                    "direccion_deudor",
+                    "nro_expediente",
+                ):
+                    if not actual[campo]:
+                        actual[campo] = _norm_text(getattr(detalle, campo, ""))
+    return contactos
 
 
 def _to_detalle_item(row: DeudorDetalle) -> DeudorDetalleItem:
@@ -230,8 +283,6 @@ def list_destinatarios_service(
     periodo_txt = _norm_text(periodo_carga)
 
     resumen_q = db.query(DeudorResumen)
-    detalle_q = db.query(DeudorDetalle)
-
     # None = sin restriccion (admin/supervisor). Una lista vacia significa
     # "sin carteras asignadas", nunca "todas las carteras".
     if empresas_permitidas is not None:
@@ -239,15 +290,12 @@ def list_destinatarios_service(
         if not permitidas:
             return []
         resumen_q = resumen_q.filter(func.trim(DeudorResumen.empresa).in_(permitidas))
-        detalle_q = detalle_q.filter(func.trim(DeudorDetalle.empresa).in_(permitidas))
 
     if empresa_txt:
         resumen_q = resumen_q.filter(func.trim(DeudorResumen.empresa) == empresa_txt)
-        detalle_q = detalle_q.filter(func.trim(DeudorDetalle.empresa) == empresa_txt)
 
     if periodo_txt and periodo_txt.lower() != "acumulado":
         resumen_q = resumen_q.filter(func.trim(DeudorResumen.periodo_carga) == periodo_txt)
-        detalle_q = detalle_q.filter(func.trim(DeudorDetalle.periodo_carga) == periodo_txt)
 
     resumen_rows = (
         resumen_q.order_by(
@@ -264,31 +312,7 @@ def list_destinatarios_service(
         txt = _norm_text(email).lower()
         return bool(txt and txt not in {"nan", "none", "n", "—"} and "@" in txt)
 
-    email_by_key: dict[tuple[str, str], str] = {}
-    expediente_by_key: dict[tuple[str, str], str] = {}
-    detalle_rows = (
-        detalle_q.order_by(
-            DeudorDetalle.updated_at.desc(),
-            DeudorDetalle.id.desc(),
-        )
-        .all()
-    )
-    for det in detalle_rows:
-        key = (_norm_text(det.empresa), _norm_rut(det.rut_afiliado))
-        if not key[0] or not key[1]:
-            continue
-
-        expediente = _norm_text(getattr(det, "nro_expediente", ""))
-        if expediente and key not in expediente_by_key:
-            expediente_by_key[key] = expediente
-
-        if key in email_by_key and _email_valido(email_by_key[key]):
-            continue
-        mail = _norm_text(det.mail_afiliado)
-        if _email_valido(mail):
-            email_by_key[key] = mail
-        elif key not in email_by_key:
-            email_by_key[key] = mail
+    contactos = _contactos_para_resumen(db, resumen_rows)
 
     seen_keys: set[tuple[str, str]] = set()
     out: list[DestinatarioItem] = []
@@ -303,9 +327,15 @@ def list_destinatarios_service(
                 empresa=row.empresa,
                 rut_afiliado=row.rut_afiliado,
                 nombre_afiliado=row.nombre_afiliado,
-                mail_afiliado=email_by_key.get(key, ""),
+                mail_afiliado=(
+                    contactos.get(key, {}).get("mail_afiliado", "")
+                    if _email_valido(contactos.get(key, {}).get("mail_afiliado", ""))
+                    else ""
+                ),
                 estado_deudor=row.estado_deudor,
-                nro_expediente=expediente_by_key.get(key, _norm_text(getattr(row, "nro_expediente", ""))),
+                nro_expediente=contactos.get(key, {}).get(
+                    "nro_expediente", _norm_text(getattr(row, "nro_expediente", ""))
+                ),
                 copago=float(row.copago or 0),
                 total_pagos=float(row.total_pagos or 0),
                 saldo_actual=float(row.saldo_actual or 0),
@@ -325,8 +355,17 @@ def list_deudores_service(
     empresa: str = "",
     periodo_carga: str = "",
     limit: int = 500,
+    offset: int = 0,
+    include_contact: bool = False,
+    empresas_permitidas: list[str] | None = None,
 ) -> DeudorListResponse:
     query = db.query(DeudorResumen)
+
+    if empresas_permitidas is not None:
+        permitidas = [_norm_text(item) for item in empresas_permitidas if _norm_text(item)]
+        if not permitidas:
+            return DeudorListResponse(items=[], total=0)
+        query = query.filter(func.trim(DeudorResumen.empresa).in_(permitidas))
 
     empresa_txt = _norm_text(empresa)
     if empresa_txt:
@@ -352,17 +391,27 @@ def list_deudores_service(
             )
         )
 
+    total = int(query.order_by(None).count())
     rows = (
         query.order_by(
             DeudorResumen.nombre_afiliado.asc(),
             DeudorResumen.rut_afiliado.asc(),
+            DeudorResumen.id.asc(),
         )
+        .offset(max(0, int(offset)))
         .limit(max(1, min(int(limit), 5000)))
         .all()
     )
 
-    items = [_to_resumen_item(row) for row in rows]
-    return DeudorListResponse(items=items, total=len(items))
+    contactos = _contactos_para_resumen(db, rows) if include_contact else {}
+    items = [
+        _to_resumen_item(
+            row,
+            contactos.get((_norm_text(row.empresa), _norm_rut(row.rut_afiliado))),
+        )
+        for row in rows
+    ]
+    return DeudorListResponse(items=items, total=total)
 
 
 def get_deudor_detalle_service(
@@ -711,7 +760,7 @@ def registrar_pago_service(
         if observaciones_txt:
             observacion_gestion += f" | Observaciones: {observaciones_txt}"
 
-        from datetime import datetime
+        fecha_gestion = datetime.now()
         db.add(
             DeudorGestion(
                 empresa=empresa_txt,
@@ -719,7 +768,8 @@ def registrar_pago_service(
                 nombre_afiliado=nombre_gestion,
                 tipo_gestion="Pago",
                 estado=estado_gestion,
-                fecha_gestion=datetime.now().strftime("%d/%m/%Y"),
+                fecha_gestion=fecha_gestion.strftime("%d/%m/%Y"),
+                fecha_gestion_iso=fecha_gestion.date().isoformat(),
                 observacion=observacion_gestion,
                 origen="backend_pago",
             )
@@ -808,11 +858,9 @@ def get_dashboard_summary_service(
     empresas = [str(e).strip() for e in (empresas or []) if str(e).strip()]
 
     resumen_base_query = db.query(DeudorResumen)
-    detalle_base_query = db.query(DeudorDetalle)
 
     if empresas:
-        resumen_base_query = resumen_base_query.filter(DeudorResumen.empresa.in_(empresas))
-        detalle_base_query = detalle_base_query.filter(DeudorDetalle.empresa.in_(empresas))
+        resumen_base_query = resumen_base_query.filter(func.trim(DeudorResumen.empresa).in_(empresas))
 
     periodos_disponibles = sorted(
         [
@@ -825,25 +873,46 @@ def get_dashboard_summary_service(
 
     periodo_txt = _norm_text(periodo_carga)
     resumen_query = resumen_base_query
-    detalle_query = detalle_base_query
     if periodo_txt and periodo_txt.lower() != "acumulado":
         resumen_query = resumen_query.filter(func.trim(DeudorResumen.periodo_carga) == periodo_txt)
-        detalle_query = detalle_query.filter(func.trim(DeudorDetalle.periodo_carga) == periodo_txt)
 
-    resumen_rows = resumen_query.all()
-    detalle_rows = detalle_query.all()
+    aggregate_rows = resumen_query.with_entities(
+        DeudorResumen.empresa.label("empresa"),
+        DeudorResumen.estado_deudor.label("estado"),
+        func.count(DeudorResumen.id).label("cantidad"),
+        func.coalesce(func.sum(DeudorResumen.copago), 0).label("copago"),
+        func.coalesce(func.sum(DeudorResumen.total_pagos), 0).label("pagos"),
+        func.coalesce(func.sum(DeudorResumen.saldo_actual), 0).label("saldo"),
+    ).group_by(DeudorResumen.empresa, DeudorResumen.estado_deudor).all()
 
     estado_counts: dict[str, int] = {}
-    companies_out: list[DashboardCompanyItem] = []
-
-    total_deudores = len(resumen_rows)
-    copago_total = float(sum(float(r.copago or 0) for r in resumen_rows))
-    total_pagos_total = float(sum(float(r.total_pagos or 0) for r in resumen_rows))
-    saldo_total = float(sum(float(r.saldo_actual or 0) for r in resumen_rows))
-
-    for row in resumen_rows:
-        estado = _norm_text(getattr(row, "estado_deudor", "")) or "Sin Gestión"
-        estado_counts[estado] = int(estado_counts.get(estado, 0)) + 1
+    company_values: dict[str, dict[str, float | int]] = {}
+    total_deudores = 0
+    copago_total = 0.0
+    total_pagos_total = 0.0
+    saldo_total = 0.0
+    for row in aggregate_rows:
+        empresa = _norm_text(row.empresa)
+        estado = _norm_text(row.estado) or "Sin Gestión"
+        cantidad = int(row.cantidad or 0)
+        copago = float(row.copago or 0)
+        pagos = float(row.pagos or 0)
+        saldo = float(row.saldo or 0)
+        estado_counts[estado] = estado_counts.get(estado, 0) + cantidad
+        values = company_values.setdefault(
+            empresa,
+            {"deudores": 0, "copago": 0.0, "pagos": 0.0, "saldo": 0.0, "sin_gestion": 0},
+        )
+        values["deudores"] += cantidad
+        values["copago"] += copago
+        values["pagos"] += pagos
+        values["saldo"] += saldo
+        if estado == "Sin Gestión":
+            values["sin_gestion"] += cantidad
+        total_deudores += cantidad
+        copago_total += copago
+        total_pagos_total += pagos
+        saldo_total += saldo
 
     sin_gestion_total = int(estado_counts.get("Sin Gestión", 0))
     gestionados_total = max(total_deudores - sin_gestion_total, 0)
@@ -864,56 +933,59 @@ def get_dashboard_summary_service(
     tipos_hoy: dict[str, int] = {}
     gestiones_hoy = 0
     gestiones_7d = 0
-    allowed_ruts = {_norm_rut(getattr(r, "rut_afiliado", "")) for r in resumen_rows if _norm_rut(getattr(r, "rut_afiliado", ""))}
-
     if DeudorGestion is not None:
-        gest_query = db.query(DeudorGestion)
+        rut_resumen = _rut_db_expr(DeudorResumen.rut_afiliado).label("rut")
+        allowed_ruts = resumen_query.with_entities(rut_resumen).distinct().subquery()
+        rut_gestion = _rut_db_expr(DeudorGestion.rut_afiliado)
+        gest_query = db.query(DeudorGestion).filter(
+            rut_gestion.in_(select(allowed_ruts.c.rut)),
+            rut_gestion != "",
+        )
         if empresas:
-            gest_query = gest_query.filter(DeudorGestion.empresa.in_(empresas))
-        gest_rows = gest_query.all()
+            gest_query = gest_query.filter(func.trim(DeudorGestion.empresa).in_(empresas))
 
-        today = __import__("datetime").datetime.now().date()
-        rut_hoy = set()
-        rut_7d = set()
+        today = datetime.now().date()
+        today_iso = today.isoformat()
+        desde_iso = (today - timedelta(days=6)).isoformat()
+        gestiones_hoy, gestiones_7d = gest_query.with_entities(
+            func.count(func.distinct(case(
+                (DeudorGestion.fecha_gestion_iso == today_iso, rut_gestion),
+                else_=None,
+            ))),
+            func.count(func.distinct(case(
+                (
+                    (DeudorGestion.fecha_gestion_iso >= desde_iso)
+                    & (DeudorGestion.fecha_gestion_iso <= today_iso),
+                    rut_gestion,
+                ),
+                else_=None,
+            ))),
+        ).one()
+        gestiones_hoy = int(gestiones_hoy or 0)
+        gestiones_7d = int(gestiones_7d or 0)
+        tipo_rows = (
+            gest_query.filter(DeudorGestion.fecha_gestion_iso == today_iso)
+            .with_entities(DeudorGestion.tipo_gestion, func.count(DeudorGestion.id))
+            .group_by(DeudorGestion.tipo_gestion)
+            .order_by(func.min(DeudorGestion.id).asc())
+            .all()
+        )
+        for tipo, cantidad in tipo_rows:
+            tipo_txt = _norm_text(tipo) or "Sin tipo"
+            tipos_hoy[tipo_txt] = tipos_hoy.get(tipo_txt, 0) + int(cantidad or 0)
 
-        for row in gest_rows:
-            fecha_txt = _norm_text(getattr(row, "fecha_gestion", ""))
-            fecha_dt = None
-            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
-                try:
-                    fecha_dt = __import__("datetime").datetime.strptime(fecha_txt, fmt).date()
-                    break
-                except Exception:
-                    pass
-            if fecha_dt is None:
-                continue
-
-            rut_g = _norm_rut(getattr(row, "rut_afiliado", ""))
-            if allowed_ruts and rut_g not in allowed_ruts:
-                continue
-
-            if fecha_dt == today:
-                rut_hoy.add(rut_g)
-                tipo = _norm_text(getattr(row, "tipo_gestion", "")) or "Sin tipo"
-                tipos_hoy[tipo] = int(tipos_hoy.get(tipo, 0)) + 1
-
-            if 0 <= (today - fecha_dt).days <= 6:
-                rut_7d.add(rut_g)
-
-        gestiones_hoy = len(rut_hoy)
-        gestiones_7d = len(rut_7d)
-
-    empresas_keys = empresas or sorted({str(r.empresa) for r in resumen_rows})
+    companies_out: list[DashboardCompanyItem] = []
+    empresas_keys = empresas or sorted(company_values)
     for empresa in empresas_keys:
-        emp_rows = [r for r in resumen_rows if _norm_text(r.empresa) == empresa]
-        if not emp_rows:
+        values = company_values.get(empresa)
+        if not values:
             continue
 
-        total_emp = len(emp_rows)
-        copago_emp = float(sum(float(r.copago or 0) for r in emp_rows))
-        pagos_emp = float(sum(float(r.total_pagos or 0) for r in emp_rows))
-        saldo_emp = float(sum(float(r.saldo_actual or 0) for r in emp_rows))
-        sin_gestion_emp = sum(1 for r in emp_rows if (_norm_text(r.estado_deudor) or "Sin Gestión") == "Sin Gestión")
+        total_emp = int(values["deudores"])
+        copago_emp = float(values["copago"])
+        pagos_emp = float(values["pagos"])
+        saldo_emp = float(values["saldo"])
+        sin_gestion_emp = int(values["sin_gestion"])
         gestionados_emp = max(total_emp - sin_gestion_emp, 0)
         cobertura_emp = _safe_ratio(gestionados_emp, total_emp)
 

@@ -21,6 +21,10 @@ class DeudorListItem(BaseModel):
     saldo_actual: float
     source_file: str = ""
     periodo_carga: str = ""
+    mail_afiliado: str = ""
+    telefono_fijo_afiliado: str = ""
+    telefono_movil_afiliado: str = ""
+    direccion_deudor: str = ""
 
 
 class DeudorListResponse(BaseModel):

@@ -18,6 +18,7 @@ class DeudorGestion(Base):
     tipo_gestion: Mapped[str] = mapped_column(String(80), nullable=False, default="Manual")
     estado: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     fecha_gestion: Mapped[str] = mapped_column(String(20), nullable=False, default="")
+    fecha_gestion_iso: Mapped[str | None] = mapped_column(String(10), nullable=True)
     observacion: Mapped[str] = mapped_column(Text, nullable=False, default="")
     origen: Mapped[str] = mapped_column(String(80), nullable=False, default="manual")
     assigned_to_user_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)

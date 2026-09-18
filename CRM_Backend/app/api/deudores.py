@@ -51,15 +51,31 @@ def list_deudores(
     empresa: str = Query(default=""),
     periodo_carga: str = Query(default=""),
     limit: int = Query(default=500, ge=1, le=5000),
+    offset: int = Query(default=0, ge=0),
+    include_contact: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    empresas_permitidas: list[str] | None = None
+    if not is_privileged_operator(current_user):
+        if empresa and not can_operate_company(db, current_user, empresa):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para consultar esta cartera.",
+            )
+        empresas_permitidas = get_current_user_carteras_service(
+            db=db,
+            executor=current_user,
+        )
     return list_deudores_service(
         db,
         q=q,
         empresa=empresa,
         periodo_carga=periodo_carga,
         limit=limit,
+        offset=offset,
+        include_contact=include_contact,
+        empresas_permitidas=empresas_permitidas,
     )
 
 

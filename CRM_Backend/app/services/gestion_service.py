@@ -71,6 +71,17 @@ def _fecha_sort_key(fecha: str, fallback_id: int) -> tuple:
     return (datetime.min, fallback_id)
 
 
+def normalizar_fecha_gestion_iso(fecha: str) -> str | None:
+    """Convierte los formatos historicos admitidos a YYYY-MM-DD."""
+    txt = _norm_text(fecha)
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(txt, fmt).date().isoformat()
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 import re
 
 
@@ -298,6 +309,7 @@ def create_gestion_service(
         tipo_gestion=_norm_text(payload.tipo_gestion),
         estado=estado_txt,
         fecha_gestion=_norm_text(payload.fecha_gestion),
+        fecha_gestion_iso=normalizar_fecha_gestion_iso(payload.fecha_gestion),
         observacion=_norm_text(payload.observacion),
         origen=_norm_text(payload.origen) or "manual",
         assigned_to_user_id=assigned_to_user_id,

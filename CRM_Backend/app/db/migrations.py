@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 
 from sqlalchemy import text
@@ -133,6 +134,98 @@ def _migration_7_commissions(db: Session) -> None:
     _create_tables(db, COMMISSION_TABLES)
 
 
+def _table_columns(db: Session, table_name: str) -> set[str]:
+    dialect = db.get_bind().dialect.name
+    if dialect == "sqlite":
+        return {
+            str(row[1])
+            for row in db.execute(text(f"PRAGMA table_info({table_name})")).all()
+        }
+    return {
+        str(row[0])
+        for row in db.execute(
+            text("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = :table_name
+            """),
+            {"table_name": table_name},
+        ).all()
+    }
+
+
+def _fecha_gestion_iso(value: object) -> str | None:
+    txt = str(value or "").strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(txt, fmt).date().isoformat()
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _migration_8_dashboard_indexes(db: Session) -> None:
+    if "fecha_gestion_iso" not in _table_columns(db, "deudores_gestiones"):
+        db.execute(text(
+            "ALTER TABLE deudores_gestiones ADD COLUMN fecha_gestion_iso VARCHAR(10) NULL"
+        ))
+
+    # La normalizacion es intencionalmente conservadora: sólo elimina espacios
+    # exteriores y no modifica valores ni datos historicos visibles.
+    for table_name in ("deudores_resumen", "deudores_detalle"):
+        db.execute(text(
+            f"UPDATE {table_name} SET empresa = TRIM(empresa), "
+            "periodo_carga = TRIM(periodo_carga)"
+        ))
+    db.execute(text(
+        "UPDATE deudores_gestiones SET empresa = TRIM(empresa)"
+    ))
+
+    last_id = 0
+    while True:
+        rows = db.execute(
+            text("""
+                SELECT id, fecha_gestion
+                FROM deudores_gestiones
+                WHERE id > :last_id
+                  AND (fecha_gestion_iso IS NULL OR fecha_gestion_iso = '')
+                ORDER BY id
+                LIMIT 1000
+            """),
+            {"last_id": last_id},
+        ).all()
+        if not rows:
+            break
+        updates = [
+            {"id": int(row[0]), "fecha_iso": fecha_iso}
+            for row in rows
+            if (fecha_iso := _fecha_gestion_iso(row[1])) is not None
+        ]
+        if updates:
+            db.execute(
+                text("""
+                    UPDATE deudores_gestiones
+                    SET fecha_gestion_iso = :fecha_iso
+                    WHERE id = :id
+                """),
+                updates,
+            )
+        last_id = int(rows[-1][0])
+
+    indexes = (
+        "CREATE INDEX IF NOT EXISTS idx_resumen_empresa_periodo_estado "
+        "ON deudores_resumen(empresa, periodo_carga, estado_deudor)",
+        "CREATE INDEX IF NOT EXISTS idx_detalle_empresa_activo_rut "
+        "ON deudores_detalle(empresa, is_active, rut_afiliado)",
+        "CREATE INDEX IF NOT EXISTS idx_gestiones_empresa_fecha_rut "
+        "ON deudores_gestiones(empresa, fecha_gestion_iso, rut_afiliado)",
+        "CREATE INDEX IF NOT EXISTS idx_resumen_orden_estable "
+        "ON deudores_resumen(nombre_afiliado, rut_afiliado, id)",
+    )
+    for statement in indexes:
+        db.execute(text(statement))
+
+
 MIGRATIONS = (
     BackendMigration(1, "Registrar y completar el esquema CRM heredado", _migration_1_legacy_schema),
     BackendMigration(2, "Auditoría, notificaciones, derivaciones y reemplazos", _migration_2_operations),
@@ -141,6 +234,7 @@ MIGRATIONS = (
     BackendMigration(5, "Compatibilidad con campos históricos de carteras", _migration_5_legacy_debtor_compatibility),
     BackendMigration(6, "Campos de deuda para Cruz Blanca y Colmena", _migration_6_isapre_debt_fields),
     BackendMigration(7, "Comisiones por cartera y cortes de pago", _migration_7_commissions),
+    BackendMigration(8, "Fechas normalizadas e indices para dashboard", _migration_8_dashboard_indexes),
 )
 
 
