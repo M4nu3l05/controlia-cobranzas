@@ -93,3 +93,34 @@ def test_deudores_navigates_all_pages_and_searches_global_dataset(monkeypatch):
     assert calls[-1]["offset"] == 0
     assert widget.table.model().rowCount() == 1
     widget.close()
+
+
+def test_supervisor_sidebar_places_search_and_filters_first(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+
+    monkeypatch.setattr(
+        deudores_worker,
+        "backend_list_deudores_page",
+        lambda _session, **_params: ({"items": [], "total": 0}, ""),
+    )
+    session = UserSession(
+        user_id=2, email="supervisor@example.test", username="Supervisor", role="supervisor",
+        is_active=True, must_change_password=False, access_token="token", auth_source="backend",
+    )
+    widget = DeudoresWidget(session=session)
+    layout = widget.sidebar.layout()
+    visible_widgets = [
+        layout.itemAt(index).widget()
+        for index in range(layout.count())
+        if layout.itemAt(index).widget() is not None and layout.itemAt(index).widget().isVisibleTo(widget.sidebar)
+    ]
+
+    assert visible_widgets[:6] == [
+        widget.sidebar.card_busq,
+        widget.sidebar.card_carga,
+        widget.sidebar.card_gest,
+        widget.sidebar.card_descarga_gest,
+        widget.sidebar.lbl_periodo,
+        widget.sidebar.cmb_periodo,
+    ]
+    widget.close()

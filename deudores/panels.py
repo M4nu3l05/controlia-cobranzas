@@ -246,6 +246,10 @@ class DeudoresSidebar(QWidget):
         self.card_tareas.setVisible(_is_ejecutivo)
         left_layout.addWidget(self.card_tareas)
 
+        if str(getattr(session, "role", "")).strip().lower() == "supervisor":
+            left_layout.removeWidget(self.card_busq)
+            left_layout.insertWidget(0, self.card_busq)
+
         left_layout.addStretch(1)
 
 
