@@ -39,7 +39,8 @@ __all__ = [
     "admin_update_user", "admin_delete_user",
     "backend_list_deudores", "backend_list_deudores_page", "backend_get_deudor_detalle",
     "backend_list_destinatarios",
-    "backend_import_deudores",
+    "backend_import_deudores", "backend_preview_import_deudores",
+    "backend_preview_debtor_assignments", "backend_apply_debtor_assignments",
     "backend_list_gestiones", "backend_create_gestion", "backend_create_gestion_con_estado",
     "backend_delete_gestion", "backend_register_pago", "backend_update_deudor_cliente",
     "backend_list_mis_gestiones_asignadas", "backend_marcar_gestion_asignada_realizada",
@@ -710,6 +711,62 @@ def backend_preview_import_deudores(
                 data={
                     "empresa": empresa,
                     "column_mapping_json": json.dumps(column_mapping or {}, ensure_ascii=False),
+                },
+                files={"file": (filename, fh, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            )
+        return data if isinstance(data, dict) else None, ""
+    except ValueError as exc:
+        return None, str(exc)
+    except requests.RequestException as exc:
+        return None, _friendly_backend_error(exc)
+    except OSError as exc:
+        return None, f"No se pudo abrir el archivo Excel: {exc}"
+
+
+def backend_preview_debtor_assignments(
+    session: UserSession,
+    *,
+    empresa: str,
+    excel_path: str,
+) -> Tuple[dict | None, str]:
+    try:
+        token = _require_backend_token(session)
+        filename = os.path.basename(excel_path)
+        with open(excel_path, "rb") as fh:
+            data = _http_multipart_auth(
+                "/deudores/assignments/preview",
+                token=token,
+                data={"empresa": empresa.strip()},
+                files={"file": (filename, fh, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+            )
+        return data if isinstance(data, dict) else None, ""
+    except ValueError as exc:
+        return None, str(exc)
+    except requests.RequestException as exc:
+        return None, _friendly_backend_error(exc)
+    except OSError as exc:
+        return None, f"No se pudo abrir el archivo Excel: {exc}"
+
+
+def backend_apply_debtor_assignments(
+    session: UserSession,
+    *,
+    empresa: str,
+    excel_path: str,
+    expected_file_sha256: str,
+    overrides: dict[str, int] | None = None,
+) -> Tuple[dict | None, str]:
+    try:
+        token = _require_backend_token(session)
+        filename = os.path.basename(excel_path)
+        with open(excel_path, "rb") as fh:
+            data = _http_multipart_auth(
+                "/deudores/assignments/apply",
+                token=token,
+                data={
+                    "empresa": empresa.strip(),
+                    "expected_file_sha256": expected_file_sha256.strip(),
+                    "overrides_json": json.dumps(overrides or {}, ensure_ascii=False),
                 },
                 files={"file": (filename, fh, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
             )

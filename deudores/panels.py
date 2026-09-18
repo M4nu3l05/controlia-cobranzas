@@ -82,6 +82,14 @@ class DeudoresSidebar(QWidget):
         btn_row.addWidget(self.btn_cargar, 1)
 
         self.card_carga.body.addLayout(btn_row)
+
+        self.btn_actualizar_distribucion = QPushButton("Actualizar distribución por ejecutiva")
+        self.btn_actualizar_distribucion.setObjectName("GhostButton")
+        self.btn_actualizar_distribucion.setMinimumHeight(40)
+        self.btn_actualizar_distribucion.setToolTip(
+            "Relaciona masivamente los RUT del Excel con las ejecutivas existentes sin recargar las deudas."
+        )
+        self.card_carga.body.addWidget(self.btn_actualizar_distribucion)
         self.card_carga.setVisible(not _is_ejecutivo)
         left_layout.addWidget(self.card_carga)
 

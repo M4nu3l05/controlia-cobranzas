@@ -82,6 +82,23 @@ class AssignedTasksWorker(QThread):
         self.completed.emit(rows, error)
 
 
+class BackendAssignmentWorker(QThread):
+    """Ejecuta la vista previa o aplicación de asignaciones fuera del hilo gráfico."""
+
+    completed = pyqtSignal(object, str)
+
+    def __init__(self, loader, parent=None):
+        super().__init__(parent)
+        self._loader = loader
+
+    def run(self) -> None:
+        try:
+            payload, error = self._loader()
+        except Exception as exc:
+            payload, error = None, str(exc)
+        self.completed.emit(payload, error)
+
+
 def _friendly_excel_load_error(exc: Exception, excel_path: str) -> str:
     msg = str(exc or "").strip()
     lower = msg.lower()

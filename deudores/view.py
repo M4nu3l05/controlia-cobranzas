@@ -9,7 +9,7 @@ from time import sleep
 
 import pandas as pd
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
-from PyQt6.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox, QWidget, QLabel, QComboBox, QTableWidgetItem
+from PyQt6.QtWidgets import QApplication, QDialog, QFileDialog, QInputDialog, QMessageBox, QWidget, QLabel, QComboBox, QTableWidgetItem
 
 from core.excel_export import write_excel_report
 from core.paths import get_data_dir, get_exports_dir
@@ -31,10 +31,13 @@ from auth.auth_service import (
     backend_get_deudor_detalle,
     backend_import_deudores,
     backend_preview_import_deudores,
+    backend_apply_debtor_assignments,
+    backend_preview_debtor_assignments,
     backend_list_all_gestiones,
     backend_list_deudores,
     backend_list_mis_gestiones_asignadas,
     backend_marcar_gestion_asignada_realizada,
+    list_users,
 )
 from .detalle_dialog import DetalleDeudorDialog
 from .import_mapping_dialog import ImportColumnMappingDialog, apply_column_mapping
@@ -49,7 +52,13 @@ from .gestiones_worker import CargaGestionesParams, CargaGestionesWorker
 from .panels import build_splitter_layout
 from .schema import COLUMNA_EMPRESA, COLUMNA_RUT, ETIQUETAS, transformar_cart56_raw
 from .ui_components import DeudoresTableModel, EmpresaFilterProxy
-from .worker import AssignedTasksWorker, BackendDeudoresWorker, CargaDeudoresParams, CargaDeudoresWorker
+from .worker import (
+    AssignedTasksWorker,
+    BackendAssignmentWorker,
+    BackendDeudoresWorker,
+    CargaDeudoresParams,
+    CargaDeudoresWorker,
+)
 
 
 class DeudoresWidget(QWidget):
@@ -70,6 +79,8 @@ class DeudoresWidget(QWidget):
         self._backend_focus_rut: str | None = None
         self._backend_retry_page: int | None = None
         self._tasks_worker: AssignedTasksWorker | None = None
+        self._assignment_preview_worker: BackendAssignmentWorker | None = None
+        self._assignment_apply_worker: BackendAssignmentWorker | None = None
         self._gest_worker: CargaGestionesWorker | None = None
         self._columnas: list[str] = []
         self._etiquetas: list[str] = []
@@ -133,6 +144,9 @@ class DeudoresWidget(QWidget):
             s.btn_cargar.setVisible(puede_cargar)
             if not puede_cargar:
                 s.btn_cargar.setToolTip("Solo administradores y supervisores pueden cargar bases.")
+        if hasattr(s, "btn_actualizar_distribucion"):
+            s.btn_actualizar_distribucion.setEnabled(puede_cargar and self._usa_backend_deudores())
+            s.btn_actualizar_distribucion.setVisible(puede_cargar)
         if hasattr(s, "txt_excel"):
             s.txt_excel.setEnabled(puede_cargar)
             if not puede_cargar:
@@ -515,6 +529,7 @@ class DeudoresWidget(QWidget):
         s = self.sidebar
         s.btn_pick.clicked.connect(self._pick_excel)
         s.btn_cargar.clicked.connect(self._cargar_base)
+        s.btn_actualizar_distribucion.clicked.connect(self._actualizar_distribucion_desde_excel)
         s.txt_search.textChanged.connect(self._on_search_changed)
         s.btn_cls.clicked.connect(lambda: s.txt_search.clear())
         s.cmb_filtro_empresa.currentIndexChanged.connect(self._on_search_changed)
@@ -1466,6 +1481,182 @@ class DeudoresWidget(QWidget):
             "que espera el sistema."
         )
 
+    def _actualizar_distribucion_desde_excel(self) -> None:
+        if not self._puede_cargar_bases() or not self._usa_backend_deudores():
+            QMessageBox.warning(
+                self,
+                "Acceso restringido",
+                "La distribución masiva requiere un perfil Administrador o Supervisor conectado al backend.",
+            )
+            return
+
+        path = self.sidebar.txt_excel.text().strip()
+        if not path or not os.path.isfile(path):
+            path = self._seleccionar_excel_deudores()
+            if not path:
+                return
+            self.sidebar.txt_excel.setText(path)
+
+        empresa = self.sidebar.cmb_empresa.currentText().strip()
+        self._set_loading(True)
+        self.sidebar.progress.setVisible(True)
+        self.sidebar.progress.setValue(15)
+
+        def load_preview():
+            preview, error = backend_preview_debtor_assignments(
+                self._session,
+                empresa=empresa,
+                excel_path=path,
+            )
+            if preview is not None and not error:
+                preview["_active_executives"] = [
+                    user for user in list_users(self._session)
+                    if str(user.get("role", "")).strip() == "ejecutivo"
+                    and bool(user.get("is_active"))
+                ]
+            return preview, error
+
+        worker = BackendAssignmentWorker(load_preview, self)
+        self._assignment_preview_worker = worker
+        worker.completed.connect(
+            lambda preview, error: self._on_assignment_preview_ready(
+                path=path,
+                empresa=empresa,
+                preview=preview,
+                error=error,
+            )
+        )
+        worker.finished.connect(
+            lambda: self._release_assignment_worker("_assignment_preview_worker", worker)
+        )
+        worker.start()
+
+    def _release_assignment_worker(self, attribute: str, worker: BackendAssignmentWorker) -> None:
+        if getattr(self, attribute, None) is worker:
+            setattr(self, attribute, None)
+        worker.deleteLater()
+
+    def _on_assignment_preview_ready(
+        self,
+        *,
+        path: str,
+        empresa: str,
+        preview: dict | None,
+        error: str,
+    ) -> None:
+        self._set_loading(False)
+        self.sidebar.progress.setValue(35)
+        if error or not preview:
+            self.sidebar.progress.setVisible(False)
+            QMessageBox.critical(self, "No se pudo revisar la distribución", error or "Respuesta inválida del servidor.")
+            return
+
+        blank = int(preview.get("blank_assignments", 0) or 0)
+        conflicts = int(preview.get("conflicting_debtors", 0) or 0)
+        if blank or conflicts:
+            self.sidebar.progress.setVisible(False)
+            QMessageBox.critical(
+                self,
+                "Distribución con errores",
+                f"Asignaciones vacías: {blank:,}\nRUT con más de una ejecutiva: {conflicts:,}\n\n"
+                "Corrige el archivo antes de aplicar la distribución.",
+            )
+            return
+
+        overrides: dict[str, int] = {}
+        unresolved = [item for item in preview.get("matches", []) if not item.get("user_id")]
+        if unresolved:
+            executives = list(preview.get("_active_executives", []))
+            options = [
+                f"{str(user.get('username', '')).strip()} — {str(user.get('email', '')).strip()}"
+                for user in executives
+            ]
+            if not options:
+                self.sidebar.progress.setVisible(False)
+                QMessageBox.critical(self, "Sin ejecutivas", "No hay usuarios activos con rol Ejecutiva para resolver la distribución.")
+                return
+            for item in unresolved:
+                selected, accepted = QInputDialog.getItem(
+                    self,
+                    "Relacionar ejecutiva",
+                    (
+                        f"Nombre encontrado: {item.get('source_label', '')}\n"
+                        f"Deudores asociados: {int(item.get('debtor_count', 0) or 0):,}\n\n"
+                        "Selecciona el usuario correspondiente:"
+                    ),
+                    options,
+                    0,
+                    False,
+                )
+                if not accepted:
+                    self.sidebar.progress.setVisible(False)
+                    return
+                selected_user = executives[options.index(selected)]
+                overrides[str(item.get("normalized_label", ""))] = int(selected_user.get("id", 0) or 0)
+
+        match_lines = [
+            f"• {item.get('source_label', '')}: {item.get('username', '') or 'selección manual'} "
+            f"({int(item.get('debtor_count', 0) or 0):,} deudores)"
+            for item in preview.get("matches", [])
+        ]
+        confirmation = QMessageBox.question(
+            self,
+            "Confirmar distribución",
+            (
+                f"Empresa: {empresa}\n"
+                f"Filas leídas: {int(preview.get('total_rows', 0) or 0):,}\n"
+                f"RUT únicos: {int(preview.get('unique_debtors', 0) or 0):,}\n"
+                f"RUT existentes en la aplicación: {int(preview.get('existing_debtors', 0) or 0):,}\n"
+                f"RUT no encontrados: {int(preview.get('missing_debtors', 0) or 0):,}\n\n"
+                + "\n".join(match_lines)
+                + "\n\nSolo se actualizará la responsable de cada RUT. Pagos y gestiones no cambiarán."
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if confirmation != QMessageBox.StandardButton.Yes:
+            self.sidebar.progress.setVisible(False)
+            return
+
+        self._set_loading(True)
+        self.sidebar.progress.setValue(55)
+        worker = BackendAssignmentWorker(
+            lambda: backend_apply_debtor_assignments(
+                self._session,
+                empresa=empresa,
+                excel_path=path,
+                expected_file_sha256=str(preview.get("file_sha256", "")),
+                overrides=overrides,
+            ),
+            self,
+        )
+        self._assignment_apply_worker = worker
+        worker.completed.connect(self._on_assignment_apply_ready)
+        worker.finished.connect(
+            lambda: self._release_assignment_worker("_assignment_apply_worker", worker)
+        )
+        worker.start()
+
+    def _on_assignment_apply_ready(self, result: dict | None, error: str) -> None:
+        self._set_loading(False)
+        self.sidebar.progress.setVisible(False)
+        if error or not result:
+            QMessageBox.critical(self, "No se pudo aplicar la distribución", error or "Respuesta inválida del servidor.")
+            return
+
+        self._session.empresas_asignadas = None
+        self.refrescar_datos()
+        QMessageBox.information(
+            self,
+            "Distribución aplicada",
+            (
+                f"Nuevas asignaciones: {int(result.get('assigned_debtors', 0) or 0):,}\n"
+                f"Reasignaciones: {int(result.get('reassigned_debtors', 0) or 0):,}\n"
+                f"Sin cambios: {int(result.get('unchanged_debtors', 0) or 0):,}\n"
+                f"RUT no encontrados: {int(result.get('missing_debtors', 0) or 0):,}"
+            ),
+        )
+
     def _cargar_base(self):
         if not self._puede_cargar_bases():
             QMessageBox.warning(self, "Acceso restringido", "Solo administradores y supervisores pueden cargar bases.")
@@ -1983,6 +2174,8 @@ class DeudoresWidget(QWidget):
     def _set_loading(self, loading: bool):
         s = self.sidebar
         s.btn_cargar.setEnabled(not loading)
+        if hasattr(s, "btn_actualizar_distribucion"):
+            s.btn_actualizar_distribucion.setEnabled(not loading and self._puede_cargar_bases() and self._usa_backend_deudores())
         s.cmb_empresa.setEnabled(not loading)
         s.txt_search.setEnabled(not loading and self._df is not None)
 
