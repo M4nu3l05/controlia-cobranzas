@@ -23,6 +23,63 @@ from .schema import (
     transformar_isapre_raw,
 )
 from .schema_detalle import HOJA_DETALLE
+from auth.auth_service import backend_list_deudores_page
+
+
+class BackendDeudoresWorker(QThread):
+    """Obtiene una página del backend sin bloquear el hilo de Qt."""
+
+    completed = pyqtSignal(int, object, int, str, bool)
+
+    def __init__(
+        self,
+        session,
+        *,
+        generation: int,
+        q: str,
+        empresa: str,
+        periodo_carga: str,
+        offset: int,
+        limit: int,
+        append: bool,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._session = session
+        self._generation = int(generation)
+        self._params = {
+            "q": q,
+            "empresa": empresa,
+            "periodo_carga": periodo_carga,
+            "offset": int(offset),
+            "limit": int(limit),
+        }
+        self._append = bool(append)
+
+    def run(self) -> None:
+        payload, error = backend_list_deudores_page(self._session, **self._params)
+        self.completed.emit(
+            self._generation,
+            payload.get("items", []) if isinstance(payload, dict) else [],
+            int(payload.get("total", 0) or 0) if isinstance(payload, dict) else 0,
+            error,
+            self._append,
+        )
+
+
+class AssignedTasksWorker(QThread):
+    completed = pyqtSignal(object, str)
+
+    def __init__(self, loader, parent=None):
+        super().__init__(parent)
+        self._loader = loader
+
+    def run(self) -> None:
+        try:
+            rows, error = self._loader()
+        except Exception as exc:
+            rows, error = [], str(exc)
+        self.completed.emit(rows, error)
 
 
 def _friendly_excel_load_error(exc: Exception, excel_path: str) -> str:

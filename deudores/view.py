@@ -49,7 +49,7 @@ from .gestiones_worker import CargaGestionesParams, CargaGestionesWorker
 from .panels import build_splitter_layout
 from .schema import COLUMNA_EMPRESA, COLUMNA_RUT, ETIQUETAS, transformar_cart56_raw
 from .ui_components import DeudoresTableModel, EmpresaFilterProxy
-from .worker import CargaDeudoresParams, CargaDeudoresWorker
+from .worker import AssignedTasksWorker, BackendDeudoresWorker, CargaDeudoresParams, CargaDeudoresWorker
 
 
 class DeudoresWidget(QWidget):
@@ -60,6 +60,16 @@ class DeudoresWidget(QWidget):
         self._df: pd.DataFrame | None = None
         self._df_detalle: pd.DataFrame | None = None
         self._worker: CargaDeudoresWorker | None = None
+        self._backend_worker: BackendDeudoresWorker | None = None
+        self._backend_generation = 0
+        self._backend_total = 0
+        self._backend_page_size = 500
+        self._backend_page_index = 0
+        self._backend_worker_page = 0
+        self._backend_pending_page: int | None = None
+        self._backend_focus_rut: str | None = None
+        self._backend_retry_page: int | None = None
+        self._tasks_worker: AssignedTasksWorker | None = None
         self._gest_worker: CargaGestionesWorker | None = None
         self._columnas: list[str] = []
         self._etiquetas: list[str] = []
@@ -73,6 +83,20 @@ class DeudoresWidget(QWidget):
         _, self.lbl_total, self._splitter, self.sidebar, self.table_panel = build_splitter_layout(self, session=session)
         self.table = self.table_panel.table
         self.lbl_placeholder = self.table_panel.lbl_placeholder
+        self.table_panel.btn_cargar_mas.clicked.connect(self._backend_more_or_retry)
+        self.table_panel.btn_primera_pagina.clicked.connect(lambda: self._ir_a_pagina_backend(0))
+        self.table_panel.btn_pagina_anterior.clicked.connect(
+            lambda: self._ir_a_pagina_backend(self._backend_page_index - 1)
+        )
+        self.table_panel.btn_pagina_siguiente.clicked.connect(
+            lambda: self._ir_a_pagina_backend(self._backend_page_index + 1)
+        )
+        self.table_panel.btn_ultima_pagina.clicked.connect(
+            lambda: self._ir_a_pagina_backend(self._total_paginas_backend() - 1)
+        )
+        self.table_panel.spn_pagina.editingFinished.connect(
+            lambda: self._ir_a_pagina_backend(self.table_panel.spn_pagina.value() - 1)
+        )
 
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -318,9 +342,28 @@ class DeudoresWidget(QWidget):
             return
 
         if self._usa_backend_deudores():
-            tareas, err = self._listar_tareas_asignadas_backend()
-        else:
-            tareas, err = self._listar_tareas_asignadas_local()
+            if self._tasks_worker is not None and self._tasks_worker.isRunning():
+                return
+            self._tasks_worker = AssignedTasksWorker(
+                self._listar_tareas_asignadas_backend,
+                parent=self,
+            )
+            self._tasks_worker.completed.connect(self._mostrar_tareas_asignadas)
+            self._tasks_worker.finished.connect(self._on_tasks_worker_finished)
+            self._tasks_worker.start()
+            return
+
+        tareas, err = self._listar_tareas_asignadas_local()
+        self._mostrar_tareas_asignadas(tareas, err)
+
+    def _on_tasks_worker_finished(self) -> None:
+        worker = self._tasks_worker
+        self._tasks_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _mostrar_tareas_asignadas(self, tareas: list[dict], err: str = "") -> None:
+        s = self.sidebar
 
         if err:
             tareas = []
@@ -447,6 +490,8 @@ class DeudoresWidget(QWidget):
         self._etiquetas = []
         self.table.setModel(None)
         self.table.setVisible(False)
+        self.table_panel.pagination_bar.setVisible(False)
+        self.table_panel.btn_cargar_mas.setVisible(False)
         self.lbl_placeholder.setVisible(True)
         self.lbl_placeholder.setText("Carga un archivo Excel para visualizar la base de deudores.")
         self.lbl_placeholder.setText("Sin carteras asignadas. Contacta a un supervisor o administrador.")
@@ -860,62 +905,144 @@ class DeudoresWidget(QWidget):
 
         return df
 
-    def _cargar_desde_backend(self) -> bool:
+    def _total_paginas_backend(self) -> int:
+        return max(1, (self._backend_total + self._backend_page_size - 1) // self._backend_page_size)
+
+    def _ir_a_pagina_backend(self, page_index: int) -> None:
+        if not self._usa_backend_deudores():
+            return
+        target = max(0, min(int(page_index), self._total_paginas_backend() - 1))
+        if target == self._backend_page_index and self._df is not None:
+            return
+        self._cargar_desde_backend(reset=False, page=target)
+
+    def _cargar_desde_backend(self, *, reset: bool = True, page: int | None = None) -> bool:
         if self._sin_carteras_asignadas():
             self._mostrar_sin_carteras_asignadas()
-            return
+            return False
 
-        items_total: list[dict] = []
+        target_page = 0 if reset else max(0, int(self._backend_page_index if page is None else page))
+        self._backend_generation += 1
+        if self._backend_worker is not None and self._backend_worker.isRunning():
+            self._backend_pending_page = target_page
+            self.sidebar.lbl_resultados.setText("Cargando… actualización pendiente")
+            return False
 
-        if self._tiene_restriccion_por_cartera() and self._empresas_asignadas:
-            for empresa in self._empresas_asignadas_actuales():
-                items, err = backend_list_deudores(self._session, empresa=empresa, periodo_carga="" if self._periodo_actual() == "Acumulado" else self._periodo_actual(), limit=5000)
-                if err:
-                    QMessageBox.warning(self, "Error de conexión", err)
-                    return
-                items_total.extend(items)
-        else:
-            items_total, err = backend_list_deudores(self._session, periodo_carga="" if self._periodo_actual() == "Acumulado" else self._periodo_actual(), limit=5000)
-            if err:
-                QMessageBox.warning(self, "Error de conexión", err)
-                return
-
-        if not items_total:
-            self._limpiar_vista()
-            self.lbl_placeholder.setVisible(True)
-            self.lbl_placeholder.setText("No hay deudores cargados en el backend. Usa 'Cargar base' para subir una empresa.")
-            return
-
-        df_all = self._backend_items_a_dataframe(items_total)
-        self._df_detalle = None
-        self._mostrar_dataframe(df_all)
-        self.sidebar.btn_cargar.setToolTip(f"Datos cargados desde CRM_Backend  {len(df_all):,} registros.")
-
-
-    def _cargar_desde_backend(self) -> bool:
-        items_total: list[dict] = []
+        s = self.sidebar
+        empresa = s.cmb_filtro_empresa.currentText().strip()
+        if empresa == "Todas":
+            empresa = ""
         periodo = "" if self._periodo_actual() == "Acumulado" else self._periodo_actual()
+        offset = target_page * self._backend_page_size
 
-        items_total, err = backend_list_deudores(
+        self.table_panel.btn_cargar_mas.setEnabled(False)
+        self.table_panel.pagination_bar.setEnabled(False)
+        s.lbl_resultados.setText("Cargando…")
+        self._backend_worker_page = target_page
+        self._backend_worker = BackendDeudoresWorker(
             self._session,
+            generation=self._backend_generation,
+            q=s.txt_search.text().strip(),
+            empresa=empresa,
             periodo_carga=periodo,
-            limit=5000,
+            offset=offset,
+            limit=self._backend_page_size,
+            append=False,
+            parent=self,
         )
-        if err:
-            QMessageBox.warning(self, "Error de conexión", err)
-            return False
-
-        if not items_total:
-            self._limpiar_vista()
-            self.lbl_placeholder.setVisible(True)
-            self.lbl_placeholder.setText("No hay deudores cargados en el backend. Usa 'Cargar base' para subir una empresa.")
-            return False
-
-        df_all = self._backend_items_a_dataframe(items_total)
-        self._df_detalle = None
-        self._mostrar_dataframe(df_all)
-        self.sidebar.btn_cargar.setToolTip(f"Datos cargados desde CRM_Backend  {len(df_all):,} registros.")
+        self._backend_worker.completed.connect(self._on_backend_page_loaded)
+        self._backend_worker.finished.connect(self._on_backend_worker_finished)
+        self._backend_worker.start()
         return True
+
+    def _backend_more_or_retry(self) -> None:
+        page = self._backend_retry_page
+        self._backend_retry_page = None
+        self._cargar_desde_backend(reset=False, page=self._backend_page_index if page is None else page)
+
+    def _actualizar_paginador_backend(self) -> None:
+        panel = self.table_panel
+        total_pages = self._total_paginas_backend()
+        current = min(self._backend_page_index, total_pages - 1)
+        panel.spn_pagina.blockSignals(True)
+        panel.spn_pagina.setRange(1, total_pages)
+        panel.spn_pagina.setValue(current + 1)
+        panel.spn_pagina.blockSignals(False)
+        panel.lbl_paginas.setText(f"de {total_pages:,}")
+        panel.btn_primera_pagina.setEnabled(current > 0)
+        panel.btn_pagina_anterior.setEnabled(current > 0)
+        panel.btn_pagina_siguiente.setEnabled(current + 1 < total_pages)
+        panel.btn_ultima_pagina.setEnabled(current + 1 < total_pages)
+        panel.pagination_bar.setEnabled(True)
+        panel.pagination_bar.setVisible(self._backend_total > 0)
+
+    def _on_backend_page_loaded(
+        self,
+        generation: int,
+        items: list[dict],
+        total: int,
+        error: str,
+        _append: bool,
+    ) -> None:
+        if generation != self._backend_generation:
+            return
+        if error:
+            self.sidebar.lbl_resultados.setText(f"No fue posible cargar: {error} · Reintentar")
+            self.lbl_placeholder.setText(f"No fue posible consultar el backend.\n{error}")
+            self.lbl_placeholder.setVisible(self._df is None or self._df.empty)
+            self._backend_retry_page = self._backend_worker_page
+            self.table_panel.btn_cargar_mas.setText("Reintentar")
+            self.table_panel.btn_cargar_mas.setEnabled(True)
+            self.table_panel.btn_cargar_mas.setVisible(True)
+            self.table_panel.pagination_bar.setEnabled(True)
+            return
+
+        self._backend_total = max(0, int(total))
+        self._backend_retry_page = None
+        page_df = self._backend_items_a_dataframe(items)
+        total_pages = self._total_paginas_backend()
+        if page_df.empty and self._backend_total > 0 and self._backend_worker_page >= total_pages:
+            self._backend_pending_page = total_pages - 1
+            return
+
+        self._backend_page_index = min(self._backend_worker_page, total_pages - 1)
+        if not page_df.empty:
+            self._df_detalle = None
+            self._mostrar_dataframe(page_df)
+        else:
+            self._df = pd.DataFrame()
+            self.table.setModel(None)
+            self.table.setVisible(False)
+            self.lbl_placeholder.setText("No hay coincidencias para los filtros seleccionados.")
+            self.lbl_placeholder.setVisible(True)
+
+        page_count = len(page_df)
+        first = self._backend_page_index * self._backend_page_size + 1 if page_count else 0
+        last = first + page_count - 1 if page_count else 0
+        self.lbl_total.setText(f"Base cargada: {self._backend_total:,} deudores")
+        self.sidebar.lbl_resultados.setText(
+            f"Mostrando {first:,}–{last:,} de {self._backend_total:,} registros"
+        )
+        self.table_panel.btn_cargar_mas.setVisible(False)
+        self._actualizar_paginador_backend()
+        self.sidebar.txt_search.setEnabled(True)
+        self.sidebar.cmb_col.setEnabled(True)
+        if self.table.model() is not None and self.table.model().rowCount() > 0:
+            self.table.scrollToTop()
+        if self._backend_focus_rut:
+            self._seleccionar_rut_en_tabla(self._backend_focus_rut)
+            self._backend_focus_rut = None
+
+    def _on_backend_worker_finished(self) -> None:
+        worker = self._backend_worker
+        self._backend_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self.table_panel.pagination_bar.setEnabled(True)
+        if self._backend_pending_page is not None:
+            page = self._backend_pending_page
+            self._backend_pending_page = None
+            self._cargar_desde_backend(reset=False, page=page)
 
     def _restaurar_filtros_ui(self, *, texto: str, empresa: str, col_idx: int, periodo: str = "Acumulado") -> None:
         s = self.sidebar
@@ -960,11 +1087,13 @@ class DeudoresWidget(QWidget):
                 return
 
             for row in range(source_model.rowCount()):
-                item = source_model.item(row, rut_col_idx)
-                if item is None:
+                cell_index = source_model.index(row, rut_col_idx)
+                if not cell_index.isValid():
                     continue
 
-                item_rut = str(item.text()).strip().replace(".", "").replace("-", "").lstrip("0")
+                item_rut = str(
+                    source_model.data(cell_index, Qt.ItemDataRole.DisplayRole)
+                ).strip().replace(".", "").replace("-", "").lstrip("0")
                 if item_rut == rut_norm:
                     src_index = source_model.index(row, 0)
                     proxy_index = proxy.mapFromSource(src_index)
@@ -976,17 +1105,8 @@ class DeudoresWidget(QWidget):
             return
 
     def _refrescar_backend_manteniendo_contexto(self, rut_focus: str | None = None) -> None:
-        s = self.sidebar
-        texto = s.txt_search.text()
-        empresa = s.cmb_filtro_empresa.currentText()
-        col_idx = s.cmb_col.currentIndex()
-        periodo = self._periodo_actual()
-
-        self._cargar_desde_backend()
-        self._restaurar_filtros_ui(texto=texto, empresa=empresa, col_idx=col_idx, periodo=periodo)
-
-        if rut_focus:
-            self._seleccionar_rut_en_tabla(rut_focus)
+        self._backend_focus_rut = rut_focus
+        self._cargar_desde_backend(reset=False, page=self._backend_page_index)
 
     def _recargar_backend_post_import(self, empresa: str, source_file: str) -> bool:
         source_name = os.path.basename(str(source_file or "")).strip().lower()
@@ -1660,7 +1780,7 @@ class DeudoresWidget(QWidget):
             self._limpiar_vista()
             return
 
-        df_base = self._agregar_estado_deudor(df)
+        df_base = df.copy() if self._usa_backend_deudores() else self._agregar_estado_deudor(df)
 
         def _excluir(col: str) -> bool:
             c_up = col.upper()
@@ -1693,27 +1813,44 @@ class DeudoresWidget(QWidget):
         if COLUMNA_EMPRESA in cols_mostrar:
             proxy.empresa_col_idx = cols_mostrar.index(COLUMNA_EMPRESA)
         self.table.setModel(proxy)
-        self.table.resizeColumnsToContents()
+        if len(df_display) <= self._backend_page_size:
+            self.table.resizeColumnsToContents()
         self._actualizar_indicador_orden()
 
         s = self.sidebar
         s.txt_search.setEnabled(True)
         s.cmb_col.setEnabled(True)
+        empresa_actual = s.cmb_filtro_empresa.currentText()
         s.cmb_filtro_empresa.blockSignals(True)
         s.cmb_filtro_empresa.clear()
-        empresas_visibles = [e for e in EMPRESAS if e in self._df[COLUMNA_EMPRESA].astype(str).unique().tolist()]
+        if self._usa_backend_deudores():
+            empresas_visibles = (
+                self._empresas_asignadas_actuales()
+                if self._tiene_restriccion_por_cartera()
+                else list(EMPRESAS)
+            )
+        else:
+            empresas_visibles = [e for e in EMPRESAS if e in self._df[COLUMNA_EMPRESA].astype(str).unique().tolist()]
         if len(empresas_visibles) != 1:
             s.cmb_filtro_empresa.addItem("Todas")
         s.cmb_filtro_empresa.addItems(empresas_visibles)
+        idx_empresa = s.cmb_filtro_empresa.findText(empresa_actual)
+        if idx_empresa >= 0:
+            s.cmb_filtro_empresa.setCurrentIndex(idx_empresa)
         if len(empresas_visibles) == 1:
             s.cmb_filtro_empresa.setCurrentIndex(0)
             s.cmb_filtro_empresa.setEnabled(False)
         else:
             s.cmb_filtro_empresa.setEnabled(True)
         s.cmb_filtro_empresa.blockSignals(False)
+        columna_actual = s.cmb_col.currentText()
+        s.cmb_col.blockSignals(True)
         s.cmb_col.clear()
         s.cmb_col.addItem("Todas las columnas")
         s.cmb_col.addItems(etiquetas)
+        idx_columna = s.cmb_col.findText(columna_actual)
+        s.cmb_col.setCurrentIndex(idx_columna if idx_columna >= 0 else 0)
+        s.cmb_col.blockSignals(False)
 
         if hasattr(s, "cmb_periodo"):
             periodo_actual = s.cmb_periodo.currentText().strip()
@@ -1737,7 +1874,8 @@ class DeudoresWidget(QWidget):
         self.table.setVisible(True)
         self.lbl_placeholder.setVisible(False)
 
-        self._apply_filter()
+        if not self._usa_backend_deudores():
+            self._apply_filter()
         self._refrescar_panel_tareas_asignadas()
         QTimer.singleShot(0, self._ajustar_splitter_inicial)
 
@@ -1745,6 +1883,9 @@ class DeudoresWidget(QWidget):
         self._search_timer.start()
 
     def _apply_filter(self):
+        if self._usa_backend_deudores():
+            self._cargar_desde_backend(reset=True)
+            return
         if self._df is None or self._df.empty:
             return
 
@@ -1790,7 +1931,9 @@ class DeudoresWidget(QWidget):
         if rut_col_idx is None:
             return
 
-        rut = model.item(src.row(), rut_col_idx).text().strip()
+        rut = str(
+            model.data(model.index(src.row(), rut_col_idx), Qt.ItemDataRole.DisplayRole)
+        ).strip()
         if not rut:
             return
 
@@ -1851,6 +1994,8 @@ class DeudoresWidget(QWidget):
         self._sort_column = None
         self._sort_order = Qt.SortOrder.AscendingOrder
         self.table.setModel(None)
+        self.table_panel.btn_cargar_mas.setVisible(False)
+        self.table_panel.pagination_bar.setVisible(False)
         self.table.setVisible(False)
         self.lbl_placeholder.setVisible(True)
         s = self.sidebar

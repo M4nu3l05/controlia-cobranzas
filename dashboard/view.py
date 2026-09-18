@@ -48,6 +48,7 @@ from deudores.gestiones_db import (
     TABLA as TABLA_GESTIONES,
     obtener_estados_deudor_por_rut,
 )
+from dashboard.worker import GeneralDashboardLoadWorker
 
 
 EMPRESA_CONFIG = {
@@ -543,11 +544,14 @@ class _CommissionExecCard(QFrame):
 class DashboardWidget(QWidget):
     bd_limpiada = pyqtSignal(list)
 
-    def __init__(self, parent=None, session=None):
+    def __init__(self, parent=None, session=None, auto_refresh: bool = True):
         super().__init__(parent)
         self._session = session
         self._empresas_asignadas = obtener_empresas_asignadas_para_session(session)
         self._periodos_disponibles: list[str] = []
+        self._backend_worker: GeneralDashboardLoadWorker | None = None
+        self._refresh_generation = 0
+        self._refresh_pending = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 14, 14, 14)
@@ -626,7 +630,8 @@ class DashboardWidget(QWidget):
         # Arranca en showEvent: refrescar mientras el panel está oculto bloquea
         # la interfaz del módulo que el usuario sí está mirando.
 
-        QTimer.singleShot(0, self.refrescar)
+        if auto_refresh:
+            QTimer.singleShot(0, self.refrescar)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -928,20 +933,24 @@ class DashboardWidget(QWidget):
     def _backend_empresas_param(self) -> str:
         return ",".join(self._empresas_visibles())
 
-    def _refrescar_dashboard_backend(self) -> bool:
-        try:
-            resp = requests.get(
-                f"{_backend_base_url()}/dashboard/summary",
-                params={"empresas": self._backend_empresas_param(), "periodo_carga": "" if self._periodo_actual() == "Acumulado" else self._periodo_actual()},
-                headers=self._backend_headers(),
-                timeout=15,
+    def _load_dashboard_backend(self, empresas: str, periodo: str) -> dict:
+        resp = requests.get(
+            f"{_backend_base_url()}/dashboard/summary",
+            params={
+                "empresas": empresas,
+                "periodo_carga": "" if periodo == "Acumulado" else periodo,
+            },
+            headers=self._backend_headers(),
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return resp.json() or {}
+
+    def _refrescar_dashboard_backend(self, payload: dict | None = None) -> bool:
+        if payload is None:
+            payload = self._load_dashboard_backend(
+                self._backend_empresas_param(), self._periodo_actual()
             )
-            resp.raise_for_status()
-            payload = resp.json()
-        except Exception as e:
-            self.hero.set_health("Sin conexión backend", f"No se pudo cargar el dashboard desde backend: {e}")
-            self.lbl_updated.setText(f"Actualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-            return False
 
         self._set_periodos_disponibles(list(payload.get("periodos_disponibles", []) or []))
 
@@ -1050,7 +1059,7 @@ class DashboardWidget(QWidget):
         self.lbl_updated.setText(f"Actualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         return True
 
-    def _backend_session_history(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def _backend_session_history(self, *, strict: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
         empty = pd.DataFrame(columns=["id", "user_id", "email", "username", "role", "login_at", "logout_at"])
         try:
             now = datetime.now()
@@ -1080,6 +1089,8 @@ class DashboardWidget(QWidget):
 
             return df_today, df_month
         except Exception:
+            if strict:
+                raise
             return empty.copy(), empty.copy()
 
     def _gestiones_db_path(self) -> str:
@@ -1273,11 +1284,14 @@ class DashboardWidget(QWidget):
             return "Media", "La cobertura es aceptable, pero conviene acelerar gestiones en cartera pendiente."
         return "Crítica", "Prioriza asignación sobre casos sin gestión y aumenta el volumen diario de contacto."
 
-    def _refrescar_comisiones(self):
+    def _load_comisiones(self) -> tuple[list[dict], str]:
+        if self.card_comisiones is None:
+            return [], ""
+        return obtener_resumen_comisiones(self._session)
+
+    def _apply_comisiones(self, resumen: list[dict], err: str = ""):
         if self.card_comisiones is None:
             return
-
-        resumen, err = obtener_resumen_comisiones(self._session)
         while self.comisiones_grid.count():
             item = self.comisiones_grid.takeAt(0)
             if item.widget():
@@ -1306,6 +1320,109 @@ class DashboardWidget(QWidget):
             )
             self.comisiones_grid.addWidget(card, idx // 2, idx % 2)
 
+    def _refrescar_comisiones(self):
+        resumen, err = self._load_comisiones()
+        self._apply_comisiones(resumen, err)
+
+    def _apply_backend_sessions(self, data: tuple[pd.DataFrame, pd.DataFrame]) -> None:
+        if not self._can_view_reporte_ejecutiva():
+            return
+        df_hoy, df_mes = data
+        hoy = datetime.now()
+        team_stats = self._build_team_stats(df_hoy, df_mes)
+        self._fill_ejecutivas_table(df_hoy)
+        unique_today = int(df_hoy["username"].nunique()) if not df_hoy.empty and "username" in df_hoy.columns else 0
+        self.pill_conexiones_hoy.set_data(
+            _fmt_int(len(df_hoy)), f"{_fmt_int(unique_today)} ejecutivas activas", "Número total de sesiones iniciadas hoy."
+        )
+        self.pill_ejecutivas_hoy.set_data(
+            _fmt_int(unique_today), f"{_fmt_int(len(df_hoy))} sesiones hoy", "Usuarios únicos conectados hoy con rol ejecutivo."
+        )
+        self.pill_conexiones_mes.set_data(
+            _fmt_int(len(df_mes)), f"Mes actual: {hoy.strftime('%m/%Y')}", "Acumulado de sesiones del mes actual."
+        )
+        self.pill_duracion_prom.set_data(
+            team_stats.get("avg_today", "00:00:00"), "Duración promedio por sesión del día", "Sirve para leer continuidad operativa del equipo."
+        )
+        self.lbl_mes_reporte.setText(f"Mes actual: {hoy.strftime('%m/%Y')}")
+        ranking_rows = [
+            (
+                item.get("username", "Sin usuario"),
+                f"Total: {item.get('total', '00:00:00')} · Promedio: {item.get('promedio', '00:00:00')}",
+                _fmt_int(item.get("conexiones", 0)),
+            )
+            for item in team_stats.get("ranking", [])
+        ]
+        self._set_rows(
+            self.team_rank_rows,
+            ranking_rows or [("Sin actividad", "Aún no hay conexiones mensuales registradas", "0")],
+        )
+
+    def _start_backend_refresh(self, generation: int) -> None:
+        empresas = self._backend_empresas_param()
+        periodo = self._periodo_actual()
+        loaders = {
+            "summary": lambda: self._load_dashboard_backend(empresas, periodo),
+        }
+        if self.card_comisiones is not None:
+            loaders["commissions"] = self._load_comisiones
+        if self._can_view_reporte_ejecutiva():
+            loaders["sessions"] = lambda: self._backend_session_history(strict=True)
+
+        self.lbl_updated.setText("Cargando…")
+        self.btn_refresh.setEnabled(False)
+        self._backend_worker = GeneralDashboardLoadWorker(generation, loaders, parent=self)
+        self._backend_worker.completed.connect(self._on_backend_loaded)
+        self._backend_worker.finished.connect(self._on_backend_worker_finished)
+        self._backend_worker.start()
+
+    def _request_backend_refresh(self) -> None:
+        self._refresh_generation += 1
+        if self._backend_worker is not None and self._backend_worker.isRunning():
+            self._refresh_pending = True
+            self.lbl_updated.setText("Cargando… actualización pendiente")
+            return
+        self._start_backend_refresh(self._refresh_generation)
+
+    def _on_backend_loaded(self, generation: int, results: dict) -> None:
+        if generation != self._refresh_generation:
+            return
+        errors: list[str] = []
+        summary_result = results.get("summary", {})
+        if summary_result.get("error"):
+            errors.append(f"Resumen: {summary_result['error']}")
+        elif summary_result.get("value") is not None:
+            self._refrescar_dashboard_backend(summary_result["value"])
+
+        commissions_result = results.get("commissions")
+        if commissions_result:
+            if commissions_result.get("error"):
+                errors.append(f"Comisiones: {commissions_result['error']}")
+            elif commissions_result.get("value") is not None:
+                resumen, err = commissions_result["value"]
+                self._apply_comisiones(resumen, err)
+
+        sessions_result = results.get("sessions")
+        if sessions_result:
+            if sessions_result.get("error"):
+                errors.append(f"Sesiones: {sessions_result['error']}")
+            elif sessions_result.get("value") is not None:
+                self._apply_backend_sessions(sessions_result["value"])
+
+        if errors:
+            self.hero.set_health("Datos parciales", " · ".join(errors))
+        self.lbl_updated.setText(f"Actualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+
+    def _on_backend_worker_finished(self) -> None:
+        worker = self._backend_worker
+        self._backend_worker = None
+        self.btn_refresh.setEnabled(True)
+        if worker is not None:
+            worker.deleteLater()
+        if self._refresh_pending:
+            self._refresh_pending = False
+            self._start_backend_refresh(self._refresh_generation)
+
     def _accion_reset_comisiones(self):
         resp = QMessageBox.question(
             self,
@@ -1332,6 +1449,10 @@ class DashboardWidget(QWidget):
 
     def refrescar(self):
         self._last_refresh = time.monotonic()
+        if self._usa_backend_dashboard():
+            self._request_backend_refresh()
+            return
+
         self._refrescar_comisiones()
 
         if self._usa_restriccion_carteras():

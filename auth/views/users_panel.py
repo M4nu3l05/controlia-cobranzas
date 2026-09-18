@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication,
@@ -45,6 +45,17 @@ _BTN_SEC = """
         font-size:9pt; font-weight:600; }
     QPushButton:hover { background:#e2e8f0; }
 """
+
+
+class _UsersLoadWorker(QThread):
+    completed = pyqtSignal(object)
+
+    def __init__(self, session, parent=None):
+        super().__init__(parent)
+        self._session = session
+
+    def run(self) -> None:
+        self.completed.emit(list_users(self._session))
 
 
 class _TempPasswordDialog(QDialog):
@@ -265,6 +276,8 @@ class UsersPanel(QWidget):
     def __init__(self, session: UserSession, parent=None):
         super().__init__(parent)
         self._session = session
+        self._load_worker: _UsersLoadWorker | None = None
+        self._reload_pending = False
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 24)
@@ -330,7 +343,28 @@ class UsersPanel(QWidget):
         self.reload()
 
     def reload(self):
-        users = list_users(self._session)
+        if self._load_worker is not None and self._load_worker.isRunning():
+            self._reload_pending = True
+            return
+        self.table.setRowCount(1)
+        self.table.setSpan(0, 0, 1, self.table.columnCount())
+        self.table.setItem(0, 0, QTableWidgetItem("Cargando usuarios…"))
+        self._load_worker = _UsersLoadWorker(self._session, parent=self)
+        self._load_worker.completed.connect(self._render_users)
+        self._load_worker.finished.connect(self._users_load_finished)
+        self._load_worker.start()
+
+    def _users_load_finished(self) -> None:
+        worker = self._load_worker
+        self._load_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        if self._reload_pending:
+            self._reload_pending = False
+            self.reload()
+
+    def _render_users(self, users: list[dict]):
+        self.table.clearSpans()
         self.table.setRowCount(len(users))
 
         for row, u in enumerate(users):

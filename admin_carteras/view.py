@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 import pandas as pd
 
-from PyQt6.QtCore import QDateTime, Qt, pyqtSignal
+from PyQt6.QtCore import QDateTime, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -51,6 +52,26 @@ from deudores.database import EMPRESAS, limpiar_empresa, limpiar_todas, eliminar
 from deudores.gestiones_db import limpiar_gestiones, limpiar_gestiones_por_ruts
 
 
+class _AdminInitialLoadWorker(QThread):
+    completed = pyqtSignal(object)
+
+    def __init__(self, loaders: dict[str, object], parent=None):
+        super().__init__(parent)
+        self._loaders = dict(loaders)
+
+    def run(self) -> None:
+        results = {}
+        with ThreadPoolExecutor(max_workers=max(1, len(self._loaders))) as pool:
+            pending = {pool.submit(loader): name for name, loader in self._loaders.items()}
+            for future in as_completed(pending):
+                name = pending[future]
+                try:
+                    results[name] = {"value": future.result(), "error": ""}
+                except Exception as exc:
+                    results[name] = {"value": None, "error": str(exc)}
+        self.completed.emit(results)
+
+
 class AdminCarterasWidget(QWidget):
     datos_actualizados = pyqtSignal()
     bd_limpiada = pyqtSignal(list)
@@ -59,6 +80,8 @@ class AdminCarterasWidget(QWidget):
         super().__init__(parent)
         self._session = session
         self._cards_stacked = False
+        self._users_cache: list[dict] = []
+        self._initial_worker: _AdminInitialLoadWorker | None = None
 
         self._combos_asignacion: dict[str, QComboBox] = {}
 
@@ -132,8 +155,8 @@ class AdminCarterasWidget(QWidget):
         )
         self.card_log.layout().addWidget(self.txt_log)
 
-        self._cargar_asignaciones()
-        self._append_log("Módulo de Administración de carteras listo.")
+        self._append_log("Módulo listo. Cargando datos administrativos…")
+        QTimer.singleShot(0, self._start_initial_load)
 
     # ============================================================
     # DB local de asignaciones
@@ -623,10 +646,7 @@ class AdminCarterasWidget(QWidget):
         lay.addLayout(row_btn)
 
     def _obtener_ejecutivos_activos(self) -> list[dict]:
-        if self._session and getattr(self._session, "auth_source", "") == "backend":
-            users = list_users(self._session)
-        else:
-            users = get_all_users()
+        users = list(self._users_cache)
 
         salida = []
         for u in users:
@@ -634,6 +654,130 @@ class AdminCarterasWidget(QWidget):
                 salida.append(u)
         salida.sort(key=lambda x: str(x.get("username", "")).lower())
         return salida
+
+    def _start_initial_load(self) -> None:
+        backend = bool(self._session and getattr(self._session, "auth_source", "") == "backend")
+        loaders = {
+            "users": (lambda: list_users(self._session)) if backend else get_all_users,
+            "assignments": (
+                (lambda: backend_list_cartera_asignaciones(self._session))
+                if backend else self._obtener_asignaciones
+            ),
+            "rates": lambda: obtener_tasas_comision(self._session),
+        }
+        if backend:
+            loaders["replacements"] = lambda: backend_list_replacements(self._session)
+        self._initial_worker = _AdminInitialLoadWorker(loaders, parent=self)
+        self._initial_worker.completed.connect(self._apply_initial_data)
+        self._initial_worker.finished.connect(self._initial_load_finished)
+        self._initial_worker.start()
+
+    def _populate_user_selectors(self, users: list[dict]) -> None:
+        self._users_cache = [dict(user) for user in users]
+        ejecutivos = self._obtener_ejecutivos_activos()
+        for combo in self._combos_asignacion.values():
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("— Sin asignación —", None)
+            for user in ejecutivos:
+                combo.addItem(f"{user['username']} · {user['email']}", user)
+            combo.blockSignals(False)
+
+        self._replacement_users = list(ejecutivos)
+        self.cmb_reemplazo_usuario.blockSignals(True)
+        self.cmb_reemplazo_usuario.clear()
+        for user in ejecutivos:
+            self.cmb_reemplazo_usuario.addItem(
+                f"{user.get('username', '')} ({user.get('email', '')})",
+                int(user.get("id", 0) or 0),
+            )
+        self.cmb_reemplazo_usuario.blockSignals(False)
+
+    def _apply_assignment_values(self, value) -> None:
+        rows, err = value if isinstance(value, tuple) else (value, "")
+        if err:
+            self._append_log(f"Error al cargar asignaciones desde backend: {err}")
+            rows = []
+        if isinstance(rows, dict):
+            asignaciones = rows
+        else:
+            asignaciones = {
+                str(row.get("empresa", "")).strip(): row
+                for row in (rows or [])
+                if str(row.get("empresa", "")).strip()
+            }
+        for empresa, combo in self._combos_asignacion.items():
+            data = asignaciones.get(empresa)
+            user_id = data.get("user_id") if data else None
+            target = 0
+            if user_id:
+                for index in range(combo.count()):
+                    item = combo.itemData(index)
+                    if isinstance(item, dict) and int(item.get("id", 0) or 0) == int(user_id):
+                        target = index
+                        break
+            combo.setCurrentIndex(target)
+
+    def _apply_rate_values(self, value) -> None:
+        tasas, err = value if isinstance(value, tuple) else (value, "")
+        if err:
+            self._append_log(f"Error al cargar porcentajes de comisión: {err}")
+            return
+        normalizadas = {self._clave_empresa(empresa): valor for empresa, valor in (tasas or {}).items()}
+        for empresa, spin in self._spins_comision.items():
+            spin.setValue(float(normalizadas.get(self._clave_empresa(empresa), 0.0) or 0.0))
+
+    def _apply_replacement_values(self, value) -> None:
+        rows, err = value if isinstance(value, tuple) else (value, "")
+        if err:
+            self._append_log(f"No se pudieron cargar reemplazos: {err}")
+            return
+        self.tbl_reemplazos.setRowCount(len(rows or []))
+        for index, row in enumerate(rows or []):
+            values = [
+                row.get("empresa", ""), row.get("titular_username", ""),
+                row.get("replacement_username", ""), row.get("starts_at", ""),
+                row.get("ends_at", ""), "Activo" if bool(row.get("is_active")) else "Finalizado",
+            ]
+            for column, cell_value in enumerate(values):
+                item = QTableWidgetItem(str(cell_value))
+                if column == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, int(row.get("id", 0) or 0))
+                    item.setData(Qt.ItemDataRole.UserRole + 1, bool(row.get("is_active")))
+                self.tbl_reemplazos.setItem(index, column, item)
+
+    def _apply_initial_data(self, results: dict) -> None:
+        users_result = results.get("users", {})
+        if users_result.get("error"):
+            self._append_log(f"No fue posible cargar usuarios: {users_result['error']}")
+        else:
+            self._populate_user_selectors(users_result.get("value") or [])
+
+        assignments = results.get("assignments", {})
+        if assignments.get("error"):
+            self._append_log(f"No fue posible cargar asignaciones: {assignments['error']}")
+        else:
+            self._apply_assignment_values(assignments.get("value"))
+
+        rates = results.get("rates", {})
+        if rates.get("error"):
+            self._append_log(f"No fue posible cargar comisiones: {rates['error']}")
+        else:
+            self._apply_rate_values(rates.get("value"))
+
+        replacements = results.get("replacements")
+        if replacements:
+            if replacements.get("error"):
+                self._append_log(f"No fue posible cargar reemplazos: {replacements['error']}")
+            else:
+                self._apply_replacement_values(replacements.get("value"))
+        self._append_log("Datos administrativos cargados.")
+
+    def _initial_load_finished(self) -> None:
+        worker = self._initial_worker
+        self._initial_worker = None
+        if worker is not None:
+            worker.deleteLater()
 
     def _cargar_asignaciones(self):
         if self._session and getattr(self._session, "auth_source", "") == "backend":

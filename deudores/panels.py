@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QSizePolicy,
     QSplitter,
     QTableWidget,
@@ -256,7 +257,7 @@ class DeudoresTablePanel(QWidget):
 
         card_tabla = Card(
             "Base de deudores",
-            "Doble clic en una fila para ver el detalle completo del deudor.",
+            "Navega por páginas de 500 registros. Doble clic abre el detalle completo.",
         )
         card_tabla.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -276,8 +277,51 @@ class DeudoresTablePanel(QWidget):
         self.table.setVisible(False)
         self.table.setMinimumWidth(280)
 
+        self.pagination_bar = QFrame()
+        self.pagination_bar.setObjectName("PaginationBar")
+        pagination = QHBoxLayout(self.pagination_bar)
+        pagination.setContentsMargins(0, 4, 0, 0)
+        pagination.setSpacing(8)
+        pagination.addStretch(1)
+
+        self.btn_primera_pagina = QPushButton("« Primera")
+        self.btn_pagina_anterior = QPushButton("‹ Anterior")
+        self.spn_pagina = QSpinBox()
+        self.spn_pagina.setRange(1, 1)
+        self.spn_pagina.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.spn_pagina.setMinimumWidth(72)
+        self.lbl_paginas = QLabel("de 1")
+        self.lbl_paginas.setObjectName("MutedLabel")
+        self.btn_pagina_siguiente = QPushButton("Siguiente ›")
+        self.btn_ultima_pagina = QPushButton("Última »")
+        for button in (
+            self.btn_primera_pagina,
+            self.btn_pagina_anterior,
+            self.btn_pagina_siguiente,
+            self.btn_ultima_pagina,
+        ):
+            button.setObjectName("GhostButton")
+            button.setMinimumHeight(34)
+        self.spn_pagina.setMinimumHeight(34)
+        pagination.addWidget(self.btn_primera_pagina)
+        pagination.addWidget(self.btn_pagina_anterior)
+        pagination.addWidget(QLabel("Página"))
+        pagination.addWidget(self.spn_pagina)
+        pagination.addWidget(self.lbl_paginas)
+        pagination.addWidget(self.btn_pagina_siguiente)
+        pagination.addWidget(self.btn_ultima_pagina)
+        pagination.addStretch(1)
+        self.pagination_bar.setVisible(False)
+
+        self.btn_cargar_mas = QPushButton("Reintentar")
+        self.btn_cargar_mas.setObjectName("GhostButton")
+        self.btn_cargar_mas.setMinimumHeight(38)
+        self.btn_cargar_mas.setVisible(False)
+
         card_tabla.body.addWidget(self.lbl_placeholder)
         card_tabla.body.addWidget(self.table, 1)
+        card_tabla.body.addWidget(self.pagination_bar)
+        card_tabla.body.addWidget(self.btn_cargar_mas)
         layout.addWidget(card_tabla, 1)
 
 

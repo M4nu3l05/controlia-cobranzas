@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -69,8 +69,8 @@ class DashboardWidget(QWidget):
 
         self.stack = QStackedWidget()
         self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.work_dashboard = WorkDashboardWidget(session=session)
-        self.general_dashboard = GeneralDashboardWidget(session=session)
+        self.work_dashboard = WorkDashboardWidget(session=session, auto_refresh=False)
+        self.general_dashboard = GeneralDashboardWidget(session=session, auto_refresh=False)
         self.stack.addWidget(self.work_dashboard)
         self.stack.addWidget(self.general_dashboard)
         root.addWidget(self.stack, 1)
@@ -78,6 +78,7 @@ class DashboardWidget(QWidget):
         self.work_dashboard.bd_limpiada.connect(self.bd_limpiada.emit)
         self.general_dashboard.bd_limpiada.connect(self.bd_limpiada.emit)
         self.mode_group.idClicked.connect(self._set_mode)
+        self._loaded = {self.WORK_INDEX: False, self.GENERAL_INDEX: False}
 
         default_index = self._default_index()
         self.mode_group.button(default_index).setChecked(True)
@@ -125,8 +126,17 @@ class DashboardWidget(QWidget):
             self.mode_description.setText("Prioridades, canales disponibles y acciones para la gestión diaria")
         else:
             self.mode_description.setText("Visión consolidada de cartera, cobertura y productividad")
+        if not self._loaded.get(index, False):
+            self._loaded[index] = True
+            QTimer.singleShot(0, self._current_dashboard().refrescar)
+
+    def _current_dashboard(self):
+        return self.work_dashboard if self.stack.currentIndex() == self.WORK_INDEX else self.general_dashboard
 
     def refrescar(self) -> None:
         """Mantiene la interfaz pública usada por el resto de la aplicación."""
-        self.work_dashboard.refrescar()
-        self.general_dashboard.refrescar()
+        current = self.stack.currentIndex()
+        other = self.GENERAL_INDEX if current == self.WORK_INDEX else self.WORK_INDEX
+        self._loaded[current] = True
+        self._loaded[other] = False
+        self._current_dashboard().refrescar()

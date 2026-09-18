@@ -9,6 +9,7 @@ import os
 import json
 import re
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,9 +35,9 @@ __all__ = [
     "login", "admin_create_user", "request_password_reset",
     "confirm_password_reset", "force_change_password",
     "validate_email", "validate_password", "validate_username",
-    "password_strength", "list_users", "toggle_user_active",
+    "password_strength", "list_users", "invalidate_users_cache", "toggle_user_active",
     "admin_update_user", "admin_delete_user",
-    "backend_list_deudores", "backend_get_deudor_detalle",
+    "backend_list_deudores", "backend_list_deudores_page", "backend_get_deudor_detalle",
     "backend_list_destinatarios",
     "backend_import_deudores",
     "backend_list_gestiones", "backend_create_gestion", "backend_create_gestion_con_estado",
@@ -59,6 +60,8 @@ DEFAULT_BACKEND_URL = "https://crm-backend-4712.onrender.com"
 DEFAULT_TIMEOUT = 12
 _HTTP_POOL_SIZE = 20
 _CARTERA_ASSIGNMENTS_TTL_SEC = 120
+_USERS_CACHE_TTL_SEC = 60
+_USERS_CACHE_LOCK = threading.Lock()
 _HTTP_SESSION = requests.Session()
 _HTTP_SESSION.mount("http://", HTTPAdapter(pool_connections=_HTTP_POOL_SIZE, pool_maxsize=_HTTP_POOL_SIZE))
 _HTTP_SESSION.mount("https://", HTTPAdapter(pool_connections=_HTTP_POOL_SIZE, pool_maxsize=_HTTP_POOL_SIZE))
@@ -439,6 +442,7 @@ def admin_create_user(
                     "confirm_password": confirm_password,
                 },
             )
+            invalidate_users_cache(executor)
             return data, []
         except ValueError as exc:
             return None, [str(exc)]
@@ -448,19 +452,33 @@ def admin_create_user(
     return None, ["La creación local de usuarios ya no está habilitada en este flujo."]
 
 
-def list_users(session: UserSession) -> List[dict]:
+def invalidate_users_cache(session: UserSession) -> None:
+    with _USERS_CACHE_LOCK:
+        setattr(session, "_users_cache", None)
+        setattr(session, "_users_cache_at", 0.0)
+
+
+def list_users(session: UserSession, *, force_refresh: bool = False) -> List[dict]:
     if getattr(session, "auth_source", "") == "backend":
-        try:
-            data = _http_request_auth(
-                "GET",
-                "/users",
-                token=_require_backend_token(session),
-            )
-            return data if isinstance(data, list) else []
-        except ValueError:
-            return []
-        except requests.RequestException:
-            return []
+        with _USERS_CACHE_LOCK:
+            cached = getattr(session, "_users_cache", None)
+            cached_at = float(getattr(session, "_users_cache_at", 0.0) or 0.0)
+            if not force_refresh and isinstance(cached, list) and time.monotonic() - cached_at < _USERS_CACHE_TTL_SEC:
+                return [dict(item) for item in cached]
+            try:
+                data = _http_request_auth(
+                    "GET",
+                    "/users",
+                    token=_require_backend_token(session),
+                )
+                users = data if isinstance(data, list) else []
+                setattr(session, "_users_cache", [dict(item) for item in users])
+                setattr(session, "_users_cache_at", time.monotonic())
+                return users
+            except ValueError:
+                return []
+            except requests.RequestException:
+                return []
 
     return []
 
@@ -491,6 +509,7 @@ def admin_update_user(
                 token=_require_backend_token(executor),
                 payload=payload,
             )
+            invalidate_users_cache(executor)
             return []
         except ValueError as exc:
             return [str(exc)]
@@ -526,6 +545,7 @@ def admin_delete_user(
                 f"/users/{target_user_id}",
                 token=_require_backend_token(executor),
             )
+            invalidate_users_cache(executor)
             return []
         except ValueError as exc:
             return [str(exc)]
@@ -543,6 +563,26 @@ def backend_list_deudores(
     periodo_carga: str = "",
     limit: int = 5000,
 ) -> Tuple[list[dict], str]:
+    data, err = backend_list_deudores_page(
+        session,
+        q=q,
+        empresa=empresa,
+        periodo_carga=periodo_carga,
+        limit=limit,
+    )
+    return (data.get("items", []) if isinstance(data, dict) else []), err
+
+
+def backend_list_deudores_page(
+    session: UserSession,
+    *,
+    q: str = "",
+    empresa: str = "",
+    periodo_carga: str = "",
+    limit: int = 500,
+    offset: int = 0,
+    include_contact: bool = False,
+) -> Tuple[dict, str]:
     try:
         data = _http_request_auth(
             "GET",
@@ -553,14 +593,20 @@ def backend_list_deudores(
                 "empresa": empresa.strip(),
                 "periodo_carga": periodo_carga.strip(),
                 "limit": max(1, min(int(limit), 5000)),
+                "offset": max(0, int(offset)),
+                "include_contact": bool(include_contact),
             },
         )
-        items = data.get("items", []) if isinstance(data, dict) else []
-        return items if isinstance(items, list) else [], ""
+        if not isinstance(data, dict):
+            return {"items": [], "total": 0}, "Respuesta inválida del backend."
+        items = data.get("items", [])
+        data["items"] = items if isinstance(items, list) else []
+        data["total"] = int(data.get("total", len(data["items"])) or 0)
+        return data, ""
     except ValueError as exc:
-        return [], str(exc)
+        return {"items": [], "total": 0}, str(exc)
     except requests.RequestException as exc:
-        return [], _friendly_backend_error(exc)
+        return {"items": [], "total": 0}, _friendly_backend_error(exc)
 
 
 def backend_list_destinatarios(

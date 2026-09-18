@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import pandas as pd
-from PyQt6.QtCore import Qt, QSortFilterProxyModel
-from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel
+from PyQt6.QtCore import QAbstractTableModel, QModelIndex, Qt, QSortFilterProxyModel
+from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout
 
 from core.text_utils import fix_mojibake_text
@@ -40,7 +40,7 @@ class Card(QFrame):
         outer.addLayout(self.body)
 
 
-class DeudoresTableModel(QStandardItemModel):
+class DeudoresTableModel(QAbstractTableModel):
     def __init__(self, df: pd.DataFrame, columnas: list[str], etiquetas: list[str], parent=None):
         super().__init__(parent)
         pares = [
@@ -48,24 +48,51 @@ class DeudoresTableModel(QStandardItemModel):
             if not c.startswith("_") or c == COLUMNA_EMPRESA
         ]
         self._cols_vis = [p[0] for p in pares]
-        self.setColumnCount(len(self._cols_vis))
-        self.setHorizontalHeaderLabels([p[1] for p in pares])
+        self._labels = [p[1] for p in pares]
+        self._df = df.reindex(columns=self._cols_vis).reset_index(drop=True).copy()
 
         try:
             self._emp_idx = self._cols_vis.index(COLUMNA_EMPRESA)
         except ValueError:
             self._emp_idx = -1
 
-        for row_data in df[self._cols_vis].itertuples(index=False):
-            items = [QStandardItem(fix_mojibake_text(v)) for v in row_data]
-            empresa_val = str(row_data[self._emp_idx]) if self._emp_idx >= 0 else ""
-            color = EMPRESA_COLORES.get(empresa_val)
-            for item in items:
-                item.setEditable(False)
-            if color and self._emp_idx >= 0:
-                items[self._emp_idx].setBackground(color)
-                items[self._emp_idx].setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-            self.appendRow(items)
+    def rowCount(self, parent=QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._df)
+
+    def columnCount(self, parent=QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._cols_vis)
+
+    def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or index.row() >= len(self._df):
+            return None
+        value = self._df.iat[index.row(), index.column()]
+        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+            return fix_mojibake_text(value)
+        if index.column() == self._emp_idx:
+            empresa = str(value or "")
+            if role == Qt.ItemDataRole.BackgroundRole:
+                return EMPRESA_COLORES.get(empresa)
+            if role == Qt.ItemDataRole.FontRole and empresa in EMPRESA_COLORES:
+                return QFont("Segoe UI", 9, QFont.Weight.Bold)
+        return None
+
+    def headerData(self, section: int, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+            return self._labels[section] if 0 <= section < len(self._labels) else ""
+        return super().headerData(section, orientation, role)
+
+    def flags(self, index: QModelIndex):
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+    def append_dataframe(self, df: pd.DataFrame) -> None:
+        if df is None or df.empty:
+            return
+        incoming = df.reindex(columns=self._cols_vis).reset_index(drop=True)
+        start = len(self._df)
+        end = start + len(incoming) - 1
+        self.beginInsertRows(QModelIndex(), start, end)
+        self._df = pd.concat([self._df, incoming], ignore_index=True)
+        self.endInsertRows()
 
 
 class EmpresaFilterProxy(QSortFilterProxyModel):
@@ -79,7 +106,7 @@ class EmpresaFilterProxy(QSortFilterProxyModel):
             return False
         if self.empresa_filtro:
             model = self.sourceModel()
-            item = model.item(source_row, self.empresa_col_idx)
-            if item is None or item.text() != self.empresa_filtro:
+            index = model.index(source_row, self.empresa_col_idx)
+            if not index.isValid() or str(model.data(index, Qt.ItemDataRole.DisplayRole)) != self.empresa_filtro:
                 return False
         return True

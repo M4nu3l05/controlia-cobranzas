@@ -422,7 +422,7 @@ class DashboardWidget(QWidget):
     # Interfaz pública conservada para las conexiones existentes en app.py.
     bd_limpiada = pyqtSignal(list)
 
-    def __init__(self, parent=None, session=None):
+    def __init__(self, parent=None, session=None, auto_refresh: bool = True):
         super().__init__(parent)
         self._session = session
         self._empresas_asignadas = obtener_empresas_asignadas_para_session(session)
@@ -466,7 +466,8 @@ class DashboardWidget(QWidget):
         self._search_debounce.timeout.connect(self._render_queue)
         self._build_commission()
         self._build_tabs()
-        QTimer.singleShot(0, self.refresh)
+        if auto_refresh:
+            QTimer.singleShot(0, self.refresh)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -785,19 +786,31 @@ class DashboardWidget(QWidget):
         all_items = []
         targets = companies or [""]
         for company in targets:
-            resp = requests.get(f"{base}/deudores", params={"empresa": company, "limit": 5000}, headers=self._headers(), timeout=20)
-            resp.raise_for_status()
-            all_items.extend((resp.json() or {}).get("items", []) or [])
-        email_map = {}
-        for company in targets:
-            resp = requests.get(f"{base}/deudores/destinatarios", params={"empresa": company, "limit": 50000}, headers=self._headers(), timeout=20)
-            if resp.ok:
-                for item in resp.json() or []:
-                    email_map[(_rut_norm(item.get("rut_afiliado", "")), item.get("empresa", ""))] = item.get("mail_afiliado", "")
+            offset = 0
+            while True:
+                resp = requests.get(
+                    f"{base}/deudores",
+                    params={
+                        "empresa": company,
+                        "limit": 500,
+                        "offset": offset,
+                        "include_contact": True,
+                    },
+                    headers=self._headers(),
+                    timeout=20,
+                )
+                resp.raise_for_status()
+                page = resp.json() or {}
+                items = page.get("items", []) or []
+                all_items.extend(items)
+                offset += len(items)
+                total = int(page.get("total", offset) or 0)
+                if not items or offset >= total:
+                    break
         debtors = []
         for item in all_items:
             rut = item.get("rut_completo") or item.get("rut_afiliado", "")
-            email = email_map.get((_rut_norm(rut), item.get("empresa", "")), "") or item.get("bn", "")
+            email = item.get("mail_afiliado", "") or item.get("bn", "")
             debtors.append(self._make_debtor(item, email=email, backend=True))
         return debtors, summary
 
@@ -857,7 +870,7 @@ class DashboardWidget(QWidget):
             days = max(0, (pd.Timestamp.now().normalize() - pd.Timestamp(latest_date).normalize()).days)
         phone = getter("telefono_movil_afiliado", "telefono_fijo_afiliado", "Telefono Empleador", "telefono_empleador")
         mail = email or getter("mail_afiliado", "BN", "bn")
-        address = getter("direccion", "Direccion", "Dirección", "Domicilio", "domicilio")
+        address = getter("direccion_deudor", "direccion", "Direccion", "Dirección", "Domicilio", "domicilio")
         debtor = {"rut": rut, "nombre": getter("nombre_afiliado", "Nombre_Afiliado"), "estado": state, "dias": days,
             "monto": _to_number(row.get("saldo_actual", row.get("Saldo_Actual", 0))), "copago": _to_number(row.get("copago", row.get("Copago", 0))),
             "pagos": _to_number(row.get("total_pagos", row.get("Total_Pagos", 0))), "tel": bool(phone), "mail": "@" in mail,

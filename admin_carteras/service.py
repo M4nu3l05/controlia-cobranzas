@@ -91,6 +91,9 @@ def obtener_empresas_asignadas_para_session(session) -> list[str]:
     if getattr(session, 'role', '') in ('admin', 'supervisor'):
         return []
     if getattr(session, 'auth_source', '') == 'backend':
+        cached = getattr(session, 'empresas_asignadas', None)
+        if isinstance(cached, list):
+            return _normalizar_empresas(cached)
         empresas, err = backend_get_user_carteras(
             session,
             user_id=getattr(session, 'user_id', None) or 0,
