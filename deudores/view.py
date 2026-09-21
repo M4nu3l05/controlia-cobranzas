@@ -81,6 +81,7 @@ class DeudoresWidget(QWidget):
         self._tasks_worker: AssignedTasksWorker | None = None
         self._assignment_preview_worker: BackendAssignmentWorker | None = None
         self._assignment_apply_worker: BackendAssignmentWorker | None = None
+        self._executives_filter_worker: BackendAssignmentWorker | None = None
         self._gest_worker: CargaGestionesWorker | None = None
         self._columnas: list[str] = []
         self._etiquetas: list[str] = []
@@ -118,6 +119,7 @@ class DeudoresWidget(QWidget):
         self._ensure_period_filter_ui()
         self._toggle_descarga_gestiones_fields()
         self._aplicar_permisos_por_rol()
+        self._cargar_ejecutivas_filtro()
         self._refrescar_panel_tareas_asignadas()
 
         QTimer.singleShot(0, self._ajustar_splitter_inicial)
@@ -199,6 +201,53 @@ class DeudoresWidget(QWidget):
         empresas = obtener_empresas_asignadas_para_session(self._session)
         self._empresas_asignadas = list(empresas)
         return self._empresas_asignadas
+
+    def _cargar_ejecutivas_filtro(self) -> None:
+        combo = getattr(self.sidebar, "cmb_filtro_ejecutiva", None)
+        if combo is None or combo.isHidden() or not self._usa_backend_deudores():
+            return
+        combo.setEnabled(False)
+        combo.setToolTip("Cargando ejecutivas…")
+        worker = BackendAssignmentWorker(lambda: (list_users(self._session), ""), self)
+        self._executives_filter_worker = worker
+        worker.completed.connect(self._on_ejecutivas_filtro_loaded)
+        worker.finished.connect(
+            lambda: self._release_assignment_worker("_executives_filter_worker", worker)
+        )
+        worker.start()
+
+    def _on_ejecutivas_filtro_loaded(self, users: list[dict] | None, error: str) -> None:
+        combo = getattr(self.sidebar, "cmb_filtro_ejecutiva", None)
+        if combo is None:
+            return
+        selected_id = combo.currentData()
+        executives = sorted(
+            [
+                user for user in (users or [])
+                if str(user.get("role", "")).strip().lower() == "ejecutivo"
+                and bool(user.get("is_active", False))
+            ],
+            key=lambda user: str(user.get("username", "")).strip().casefold(),
+        )
+        name_counts: dict[str, int] = {}
+        for user in executives:
+            key = str(user.get("username", "")).strip().casefold()
+            name_counts[key] = name_counts.get(key, 0) + 1
+
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Todas", None)
+        for user in executives:
+            username = str(user.get("username", "")).strip() or "Sin nombre"
+            label = username
+            if name_counts.get(username.casefold(), 0) > 1:
+                label = f"{username} — {str(user.get('email', '')).strip()}"
+            combo.addItem(label, int(user.get("id", 0) or 0))
+        selected_index = combo.findData(selected_id)
+        combo.setCurrentIndex(selected_index if selected_index >= 0 else 0)
+        combo.setEnabled(bool(executives) and not error)
+        combo.setToolTip(error or ("" if executives else "No hay ejecutivas activas para filtrar."))
+        combo.blockSignals(False)
 
     def _cargar_inicial(self):
         if self._usa_backend_deudores():
@@ -533,6 +582,8 @@ class DeudoresWidget(QWidget):
         s.txt_search.textChanged.connect(self._on_search_changed)
         s.btn_cls.clicked.connect(lambda: s.txt_search.clear())
         s.cmb_filtro_empresa.currentIndexChanged.connect(self._on_search_changed)
+        if hasattr(s, "cmb_filtro_ejecutiva"):
+            s.cmb_filtro_ejecutiva.currentIndexChanged.connect(self._on_search_changed)
         s.cmb_col.currentIndexChanged.connect(self._on_search_changed)
         s.btn_pick_gest.clicked.connect(self._pick_gestiones)
         s.btn_descargar_plantilla_gest.clicked.connect(self._descargar_plantilla_gestiones)
@@ -948,6 +999,9 @@ class DeudoresWidget(QWidget):
         if empresa == "Todas":
             empresa = ""
         periodo = "" if self._periodo_actual() == "Acumulado" else self._periodo_actual()
+        assigned_user_id = None
+        if hasattr(s, "cmb_filtro_ejecutiva"):
+            assigned_user_id = s.cmb_filtro_ejecutiva.currentData()
         offset = target_page * self._backend_page_size
 
         self.table_panel.btn_cargar_mas.setEnabled(False)
@@ -960,6 +1014,7 @@ class DeudoresWidget(QWidget):
             q=s.txt_search.text().strip(),
             empresa=empresa,
             periodo_carga=periodo,
+            assigned_user_id=assigned_user_id,
             offset=offset,
             limit=self._backend_page_size,
             append=False,

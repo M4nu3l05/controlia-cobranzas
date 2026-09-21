@@ -563,6 +563,7 @@ def backend_list_deudores(
     empresa: str = "",
     periodo_carga: str = "",
     limit: int = 5000,
+    assigned_user_id: int | None = None,
 ) -> Tuple[list[dict], str]:
     data, err = backend_list_deudores_page(
         session,
@@ -570,6 +571,7 @@ def backend_list_deudores(
         empresa=empresa,
         periodo_carga=periodo_carga,
         limit=limit,
+        assigned_user_id=assigned_user_id,
     )
     return (data.get("items", []) if isinstance(data, dict) else []), err
 
@@ -583,20 +585,24 @@ def backend_list_deudores_page(
     limit: int = 500,
     offset: int = 0,
     include_contact: bool = False,
+    assigned_user_id: int | None = None,
 ) -> Tuple[dict, str]:
     try:
+        params = {
+            "q": q.strip(),
+            "empresa": empresa.strip(),
+            "periodo_carga": periodo_carga.strip(),
+            "limit": max(1, min(int(limit), 5000)),
+            "offset": max(0, int(offset)),
+            "include_contact": bool(include_contact),
+        }
+        if assigned_user_id is not None:
+            params["assigned_user_id"] = max(1, int(assigned_user_id))
         data = _http_request_auth(
             "GET",
             "/deudores",
             token=_require_backend_token(session),
-            params={
-                "q": q.strip(),
-                "empresa": empresa.strip(),
-                "periodo_carga": periodo_carga.strip(),
-                "limit": max(1, min(int(limit), 5000)),
-                "offset": max(0, int(offset)),
-                "include_contact": bool(include_contact),
-            },
+            params=params,
         )
         if not isinstance(data, dict):
             return {"items": [], "total": 0}, "Respuesta inválida del backend."

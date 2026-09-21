@@ -39,6 +39,7 @@ class BackendDeudoresWorker(QThread):
         q: str,
         empresa: str,
         periodo_carga: str,
+        assigned_user_id: int | None,
         offset: int,
         limit: int,
         append: bool,
@@ -51,6 +52,7 @@ class BackendDeudoresWorker(QThread):
             "q": q,
             "empresa": empresa,
             "periodo_carga": periodo_carga,
+            "assigned_user_id": assigned_user_id,
             "offset": int(offset),
             "limit": int(limit),
         }

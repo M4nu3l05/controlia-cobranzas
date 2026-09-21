@@ -206,6 +206,24 @@ class DeudoresSidebar(QWidget):
         flt_emp_row.addWidget(self.cmb_filtro_empresa, 1)
         self.card_busq.body.addLayout(flt_emp_row)
 
+        flt_exec_row = QHBoxLayout()
+        flt_exec_row.setSpacing(8)
+        self.lbl_filtro_ejecutiva = QLabel("Ejecutiva:")
+        flt_exec_row.addWidget(self.lbl_filtro_ejecutiva)
+
+        self.cmb_filtro_ejecutiva = QComboBox()
+        self.cmb_filtro_ejecutiva.addItem("Todas", None)
+        self.cmb_filtro_ejecutiva.setEnabled(False)
+        self.cmb_filtro_ejecutiva.setMinimumHeight(36)
+        flt_exec_row.addWidget(self.cmb_filtro_ejecutiva, 1)
+        self.card_busq.body.addLayout(flt_exec_row)
+
+        puede_filtrar_ejecutiva = str(getattr(session, "role", "")).strip().lower() in {
+            "admin", "supervisor"
+        }
+        self.lbl_filtro_ejecutiva.setVisible(puede_filtrar_ejecutiva)
+        self.cmb_filtro_ejecutiva.setVisible(puede_filtrar_ejecutiva)
+
         col_row = QHBoxLayout()
         col_row.setSpacing(8)
         col_row.addWidget(QLabel("Columna:"))

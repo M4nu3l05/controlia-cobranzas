@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QApplication
 from auth.auth_service import UserSession
 from deudores.view import DeudoresWidget
 import deudores.worker as deudores_worker
+import deudores.view as deudores_view
 
 
 def _item(index: int, *, name: str | None = None) -> dict:
@@ -55,6 +56,14 @@ def test_deudores_navigates_all_pages_and_searches_global_dataset(monkeypatch):
         return {"items": [_item(index) for index in range(offset, end)], "total": total}, ""
 
     monkeypatch.setattr(deudores_worker, "backend_list_deudores_page", fake_page)
+    monkeypatch.setattr(
+        deudores_view,
+        "list_users",
+        lambda _session: [
+            {"id": 10, "username": "Ejecutiva Uno", "email": "uno@example.test", "role": "ejecutivo", "is_active": True},
+            {"id": 20, "username": "Ejecutiva Dos", "email": "dos@example.test", "role": "ejecutivo", "is_active": True},
+        ],
+    )
     session = UserSession(
         user_id=1, email="admin@example.test", username="Admin", role="admin",
         is_active=True, must_change_password=False, access_token="token", auth_source="backend",
@@ -92,6 +101,17 @@ def test_deudores_navigates_all_pages_and_searches_global_dataset(monkeypatch):
     assert calls[-1]["q"] == "Objetivo fuera de página"
     assert calls[-1]["offset"] == 0
     assert widget.table.model().rowCount() == 1
+
+    assert _wait_until(app, lambda: widget.sidebar.cmb_filtro_ejecutiva.count() == 3)
+    widget.sidebar.cmb_filtro_ejecutiva.setCurrentIndex(
+        widget.sidebar.cmb_filtro_ejecutiva.findData(20)
+    )
+    assert _wait_until(
+        app,
+        lambda: widget._backend_worker is None
+        and calls[-1].get("assigned_user_id") == 20,
+    )
+    assert calls[-1]["offset"] == 0
     widget.close()
 
 
@@ -103,6 +123,7 @@ def test_supervisor_sidebar_places_search_and_filters_first(monkeypatch):
         "backend_list_deudores_page",
         lambda _session, **_params: ({"items": [], "total": 0}, ""),
     )
+    monkeypatch.setattr(deudores_view, "list_users", lambda _session: [])
     session = UserSession(
         user_id=2, email="supervisor@example.test", username="Supervisor", role="supervisor",
         is_active=True, must_change_password=False, access_token="token", auth_source="backend",
