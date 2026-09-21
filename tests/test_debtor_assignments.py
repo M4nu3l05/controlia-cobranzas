@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from fastapi import HTTPException
 
 pytest.importorskip("sqlalchemy")
 
@@ -15,6 +16,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from sqlalchemy import create_engine, func
 from sqlalchemy.orm import Session
 
+from app.api.deudores import list_deudores as list_deudores_endpoint
 from app.db.session import Base
 from app.models.debtor_assignment import (
     DebtorAssignmentAlias,
@@ -149,6 +151,33 @@ def test_assignment_preview_apply_is_case_accent_and_camel_case_insensitive(db):
     assert {item.rut_afiliado for item in visible_one.items} == {"11111111", "33333333"}
     assert [item.rut_afiliado for item in visible_two.items] == ["22222222"]
     assert dashboard_one.total_deudores == 2
+
+    filtered_endpoint = list_deudores_endpoint(
+        q="",
+        empresa="",
+        periodo_carga="",
+        limit=500,
+        offset=0,
+        include_contact=False,
+        assigned_user_id=int(executive_two.id),
+        db=db,
+        current_user=admin,
+    )
+    assert filtered_endpoint.total == 1
+    assert filtered_endpoint.items[0].rut_afiliado == "22222222"
+    with pytest.raises(HTTPException) as forbidden:
+        list_deudores_endpoint(
+            q="",
+            empresa="",
+            periodo_carga="",
+            limit=500,
+            offset=0,
+            include_contact=False,
+            assigned_user_id=int(executive_two.id),
+            db=db,
+            current_user=executive_one,
+        )
+    assert forbidden.value.status_code == 403
 
     repeated = apply_debtor_assignments_service(
         db,

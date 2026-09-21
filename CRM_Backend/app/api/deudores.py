@@ -55,12 +55,18 @@ def list_deudores(
     limit: int = Query(default=500, ge=1, le=5000),
     offset: int = Query(default=0, ge=0),
     include_contact: bool = Query(default=False),
+    assigned_user_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     empresas_permitidas: list[str] | None = None
-    assigned_user_id: int | None = None
+    assignment_filter = assigned_user_id if is_privileged_operator(current_user) else None
     if not is_privileged_operator(current_user):
+        if assigned_user_id is not None and int(assigned_user_id) != int(current_user.id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No tienes permiso para consultar los casos de otra ejecutiva.",
+            )
         if empresa and not can_operate_company(db, current_user, empresa):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -71,7 +77,7 @@ def list_deudores(
             executor=current_user,
         )
         if user_has_debtor_assignments(db, int(current_user.id)):
-            assigned_user_id = int(current_user.id)
+            assignment_filter = int(current_user.id)
     return list_deudores_service(
         db,
         q=q,
@@ -81,7 +87,7 @@ def list_deudores(
         offset=offset,
         include_contact=include_contact,
         empresas_permitidas=empresas_permitidas,
-        assigned_user_id=assigned_user_id,
+        assigned_user_id=assignment_filter,
     )
 
 
