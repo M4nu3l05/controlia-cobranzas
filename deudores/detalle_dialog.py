@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QSizePolicy, QPushButton, QGridLayout,
     QSplitter, QWidget, QComboBox, QLineEdit, QDateEdit,
     QTextEdit, QMessageBox, QFormLayout, QPlainTextEdit, QInputDialog, QScrollArea,
-    QCheckBox
+    QCheckBox, QLayout
 )
 
 from .schema_detalle import COLUMNAS_DETALLE_DEUDA, extraer_detalle_deudor
@@ -1304,7 +1304,8 @@ class _CorreoDeudorMixin:
             "RUT": ["RUT", "Rut", "rut"],
             "Nombre": ["Nombre", "Nombre_Afiliado", "nombre_afiliado"],
             "Estado del deudor": ["Estado del deudor", "Estado_deudor", "estado_deudor"],
-            "Supervisor responsable": [
+            "Asignado a": [
+                "Asignado a",
                 "Supervisor responsable",
                 "Ejecutiva responsable",
                 "Ejecutiva_responsable",
@@ -1416,6 +1417,7 @@ class _CorreoDeudorMixin:
         )
         responsable_actual = (
             self._fila_resumen.get("Ejecutiva_responsable", "")
+            or self._info_cliente.get("Asignado a", "")
             or self._info_cliente.get("Supervisor responsable", "")
             or self._info_cliente.get("Ejecutiva responsable", "")
             or self._info_cliente.get("Ejecutiva_responsable", "")
@@ -1425,7 +1427,7 @@ class _CorreoDeudorMixin:
             "RUT": self._resolver_rut_cliente(),
             "Nombre": self._fila_resumen.get("Nombre_Afiliado", ""),
             "Estado del deudor": estado_actual,
-            "Supervisor responsable": responsable_actual,
+            "Asignado a": responsable_actual,
             "Correo": self._fila_resumen.get("mail_afiliado", "") or self._fila_resumen.get("Mail Emp", ""),
             "Correo (Excel)": self._fila_resumen.get("BN", "") or self._fila_resumen.get("Mail Emp", ""),
             "Teléfono Fijo": self._fila_resumen.get("telefono_fijo_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
@@ -2249,6 +2251,9 @@ class _CorreoDeudorMixin:
 class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
     gestiones_actualizadas = pyqtSignal()
 
+    _MIN_DEUDA_SECTION_HEIGHT = 250
+    _MIN_GESTION_SECTION_HEIGHT = 360
+
     def __init__(self, df_detalle, rut: str, fila_resumen: dict | None = None, parent=None, session=None):
         super().__init__(parent)
         self.setWindowTitle("Detalle del deudor")
@@ -2305,6 +2310,25 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(12)
 
+        module_scroll = QScrollArea()
+        module_scroll.setObjectName("DetalleDeudorModuleScroll")
+        module_scroll.setWidgetResizable(True)
+        module_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        module_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        module_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        module_scroll.setStyleSheet("QScrollArea#DetalleDeudorModuleScroll { border:none; background:transparent; }")
+
+        module_content = QWidget()
+        module_content.setObjectName("DetalleDeudorModuleContent")
+        module_content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
+        content_root = QVBoxLayout(module_content)
+        content_root.setContentsMargins(0, 0, 4, 0)
+        content_root.setSpacing(12)
+        content_root.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        module_scroll.setWidget(module_content)
+        self._module_scroll = module_scroll
+        self._module_content = module_content
+
         hdr = QHBoxLayout()
         lbl_nombre = QLabel(nombre)
         self.lbl_nombre_header = lbl_nombre
@@ -2322,7 +2346,7 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
         self.lbl_exp = lbl_exp
         lbl_exp.setObjectName("MutedLabel")
         hdr.addWidget(lbl_exp)
-        root.addLayout(hdr)
+        content_root.addLayout(hdr)
 
         if self._info_cliente:
             card_cli = _Card("Datos del cliente")
@@ -2385,7 +2409,7 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
             row_kpis.addWidget(self.kpi_saldo_actual, 1)
 
             card_cli.body.addLayout(row_kpis)
-            root.addWidget(card_cli)
+            content_root.addWidget(card_cli)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setChildrenCollapsible(False)
@@ -2412,6 +2436,7 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
             self.tbl_deuda.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
             self.tbl_deuda.horizontalHeader().setStretchLastSection(True)
             self.tbl_deuda.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self.tbl_deuda.setMinimumHeight(170)
             card_deuda.body.addWidget(self.tbl_deuda, 1)
         else:
             lbl_nd = QLabel("Sin expedientes en la hoja DETALLE.")
@@ -2419,7 +2444,17 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
             lbl_nd.setAlignment(Qt.AlignmentFlag.AlignCenter)
             card_deuda.body.addWidget(lbl_nd)
 
-        splitter.addWidget(card_deuda)
+        debt_scroll = QScrollArea()
+        debt_scroll.setObjectName("DetalleDeudaSectionScroll")
+        debt_scroll.setWidgetResizable(True)
+        debt_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        debt_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        debt_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        debt_scroll.setMinimumHeight(self._MIN_DEUDA_SECTION_HEIGHT)
+        debt_scroll.setStyleSheet("QScrollArea#DetalleDeudaSectionScroll { border:none; background:transparent; }")
+        debt_scroll.setWidget(card_deuda)
+        self._debt_scroll = debt_scroll
+        splitter.addWidget(debt_scroll)
 
         card_gest = _Card("Detalle de gesti\u00f3n")
         card_gest.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -2481,6 +2516,7 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
         # Sin scroll horizontal: la tarjeta ocupa siempre el ancho completo del diálogo.
         gestion_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         gestion_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        gestion_scroll.setMinimumHeight(self._MIN_GESTION_SECTION_HEIGHT)
         gestion_scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
         gestion_scroll.setWidget(card_gest)
         self._gestion_scroll = gestion_scroll
@@ -2488,8 +2524,17 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
 
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([360, 440])
-        root.addWidget(splitter, 1)
+        splitter.setMinimumHeight(
+            self._MIN_DEUDA_SECTION_HEIGHT
+            + self._MIN_GESTION_SECTION_HEIGHT
+            + splitter.handleWidth()
+        )
+        splitter.setSizes([
+            self._MIN_DEUDA_SECTION_HEIGHT,
+            self._MIN_GESTION_SECTION_HEIGHT,
+        ])
+        content_root.addWidget(splitter, 1)
+        root.addWidget(module_scroll, 1)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
@@ -2529,12 +2574,17 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
 
     def _ajustar_layout_responsivo(self) -> None:
         if hasattr(self, "_main_splitter"):
-            total_h = max(self._main_splitter.height(), 1)
+            minimum_total = (
+                self._MIN_DEUDA_SECTION_HEIGHT
+                + self._MIN_GESTION_SECTION_HEIGHT
+                + self._main_splitter.handleWidth()
+            )
+            total_h = max(self._main_splitter.height(), minimum_total)
             debt_target = int(total_h * 0.45)
-            debt_target = max(190, min(520, debt_target))
-            management_min = 240
+            debt_target = max(self._MIN_DEUDA_SECTION_HEIGHT, min(520, debt_target))
+            management_min = self._MIN_GESTION_SECTION_HEIGHT
             if total_h - debt_target < management_min:
-                debt_target = max(160, total_h - management_min)
+                debt_target = max(self._MIN_DEUDA_SECTION_HEIGHT, total_h - management_min)
             self._main_splitter.setSizes([
                 debt_target,
                 max(total_h - debt_target, management_min),
