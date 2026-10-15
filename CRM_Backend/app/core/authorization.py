@@ -31,27 +31,35 @@ def _rut_key(value: str) -> str:
 
 
 def _has_debtor_assignments_table(db: Session) -> bool:
-    bind = db.get_bind()
-    return bool(bind is not None and inspect(bind).has_table("debtor_user_assignments"))
+    return inspect(db.connection()).has_table("debtor_user_assignments")
+
+
+def _has_table(db: Session, table_name: str) -> bool:
+    return inspect(db.connection()).has_table(table_name)
+
+
+def _table_columns(db: Session, table_name: str) -> set[str]:
+    connection = db.connection()
+    inspector = inspect(connection)
+    if not inspector.has_table(table_name):
+        return set()
+    return {str(column["name"]) for column in inspector.get_columns(table_name)}
 
 
 def is_privileged_operator(user: User) -> bool:
     return str(user.role or "").strip().lower() in {ROLE_ADMIN, ROLE_SUPERVISOR}
 
 
-def assigned_user_id_for_company(db: Session, company: str) -> int | None:
+def primary_user_id_for_company(db: Session, company: str) -> int | None:
     company_txt = _normalize_company(company)
-    if not company_txt:
+    if not company_txt or not _has_table(db, "cartera_asignaciones"):
         return None
 
-    rows = db.execute(
-        text(
-            """
-            SELECT empresa, user_id
-            FROM cartera_asignaciones
-            """
-        ),
-    ).all()
+    columns = _table_columns(db, "cartera_asignaciones")
+    primary_filter = "WHERE is_primary = TRUE" if "is_primary" in columns else ""
+    rows = db.execute(text(
+        f"SELECT empresa, user_id FROM cartera_asignaciones {primary_filter}"
+    )).all()
     company_key = _company_key(company_txt)
     for row in rows:
         if _company_key(row[0]) == company_key and row[1] is not None:
@@ -59,21 +67,29 @@ def assigned_user_id_for_company(db: Session, company: str) -> int | None:
     return None
 
 
+def assigned_user_id_for_company(db: Session, company: str) -> int | None:
+    """Alias compatible: devuelve exclusivamente al supervisor titular."""
+    return primary_user_id_for_company(db, company)
+
+
 def assigned_user_id_for_debtor(db: Session, company: str, rut: str) -> int | None:
     company_txt = _normalize_company(company)
     rut_txt = _rut_key(rut)
     if not company_txt or not rut_txt or not _has_debtor_assignments_table(db):
         return None
-    row = db.query(DebtorUserAssignment).filter(
-        DebtorUserAssignment.empresa == company_txt,
+    rows = db.query(DebtorUserAssignment).filter(
         DebtorUserAssignment.rut_afiliado == rut_txt,
-    ).first()
-    return int(row.user_id) if row is not None else None
+    ).all()
+    company_key = _company_key(company_txt)
+    for row in rows:
+        if _company_key(row.empresa) == company_key:
+            return int(row.user_id)
+    return None
 
 
 def assigned_company_name(db: Session, company: str) -> str | None:
     company_txt = _normalize_company(company)
-    if not company_txt:
+    if not company_txt or not _has_table(db, "cartera_asignaciones"):
         return None
     rows = db.execute(text("SELECT empresa FROM cartera_asignaciones")).all()
     company_key = _company_key(company_txt)
@@ -84,42 +100,110 @@ def assigned_company_name(db: Session, company: str) -> str | None:
     return None
 
 
+def executive_debtor_visibility_scope(
+    db: Session,
+    user_id: int,
+) -> tuple[set[str], dict[str, set[int]]]:
+    """Devuelve carteras completas y responsables individuales visibles.
+
+    Una cartera con al menos una asignacion individual usa siempre ese reparto.
+    La asignacion general de cartera solo actua como compatibilidad cuando la
+    cartera no tiene distribucion individual.
+    """
+    target_user_id = int(user_id)
+    distributed_names: dict[str, str] = {}
+    owner_ids_by_key: dict[str, set[int]] = {}
+
+    if _has_debtor_assignments_table(db):
+        assignment_rows = db.query(
+            DebtorUserAssignment.empresa,
+            DebtorUserAssignment.user_id,
+        ).distinct().all()
+        for empresa, owner_user_id in assignment_rows:
+            empresa_txt = _normalize_company(empresa)
+            key = _company_key(empresa_txt)
+            if not key:
+                continue
+            distributed_names.setdefault(key, empresa_txt)
+            if int(owner_user_id) == target_user_id:
+                owner_ids_by_key.setdefault(key, set()).add(target_user_id)
+
+    full_companies_by_key: dict[str, str] = {}
+    if _has_table(db, "cartera_asignaciones"):
+        portfolio_rows = db.execute(
+            text(
+                """
+                SELECT empresa
+                FROM cartera_asignaciones
+                WHERE user_id = :user_id
+                """
+            ),
+            {"user_id": target_user_id},
+        ).all()
+        for (empresa,) in portfolio_rows:
+            empresa_txt = _normalize_company(empresa)
+            key = _company_key(empresa_txt)
+            if key and key not in distributed_names:
+                full_companies_by_key.setdefault(key, empresa_txt)
+
+    replacement_columns = _table_columns(db, "cartera_temporary_replacements")
+    if replacement_columns:
+        includes_owner = "titular_user_id" in replacement_columns
+        owner_select = "titular_user_id" if includes_owner else "NULL"
+        replacement_rows = db.execute(
+            text(
+                f"""
+                SELECT empresa, {owner_select} AS titular_user_id
+                FROM cartera_temporary_replacements
+                WHERE replacement_user_id = :user_id
+                  AND is_active = TRUE
+                  AND starts_at <= CURRENT_TIMESTAMP
+                  AND ends_at >= CURRENT_TIMESTAMP
+                """
+            ),
+            {"user_id": target_user_id},
+        ).all()
+        for empresa, owner_user_id in replacement_rows:
+            empresa_txt = _normalize_company(empresa)
+            key = _company_key(empresa_txt)
+            if not key:
+                continue
+            if key not in distributed_names:
+                full_companies_by_key.setdefault(key, empresa_txt)
+            elif owner_user_id is not None:
+                owner_ids_by_key.setdefault(key, set()).add(int(owner_user_id))
+
+    owner_ids_by_company = {
+        distributed_names[key]: owner_ids
+        for key, owner_ids in owner_ids_by_key.items()
+        if key in distributed_names and owner_ids
+    }
+    return set(full_companies_by_key.values()), owner_ids_by_company
+
+
+def company_has_debtor_assignments(db: Session, company: str) -> bool:
+    company_key = _company_key(company)
+    if not company_key or not _has_debtor_assignments_table(db):
+        return False
+    return any(
+        _company_key(empresa) == company_key
+        for (empresa,) in db.query(DebtorUserAssignment.empresa).distinct().all()
+    )
+
+
 def can_operate_company(db: Session, user: User, company: str) -> bool:
     if is_privileged_operator(user):
         return True
     if str(user.role or "").strip().lower() != ROLE_EJECUTIVO:
         return False
 
-    has_individual_assignment = None
-    if _has_debtor_assignments_table(db):
-        has_individual_assignment = db.query(DebtorUserAssignment.id).filter(
-            DebtorUserAssignment.empresa == _normalize_company(company),
-            DebtorUserAssignment.user_id == int(user.id),
-        ).first()
-    if has_individual_assignment is not None:
-        return True
-
-    assigned_user_id = assigned_user_id_for_company(db, company)
-    if assigned_user_id is not None and assigned_user_id == int(user.id):
-        return True
-
-    replacement = db.execute(
-        text(
-            """
-            SELECT id
-            FROM cartera_temporary_replacements
-            WHERE LOWER(TRIM(empresa)) = LOWER(:empresa)
-              AND replacement_user_id = :user_id
-              AND is_active = TRUE
-              AND starts_at <= CURRENT_TIMESTAMP
-              AND ends_at >= CURRENT_TIMESTAMP
-            ORDER BY ends_at DESC
-            LIMIT 1
-            """
-        ),
-        {"empresa": assigned_company_name(db, company) or _normalize_company(company), "user_id": int(user.id)},
-    ).first()
-    return replacement is not None
+    full_companies, owner_ids_by_company = executive_debtor_visibility_scope(
+        db, int(user.id)
+    )
+    company_key = _company_key(company)
+    return any(_company_key(item) == company_key for item in full_companies) or any(
+        _company_key(item) == company_key for item in owner_ids_by_company
+    )
 
 
 def require_company_operation(db: Session, user: User, company: str) -> None:
@@ -137,30 +221,21 @@ def can_operate_debtor(db: Session, user: User, company: str, rut: str) -> bool:
         return True
     if str(user.role or "").strip().lower() != ROLE_EJECUTIVO:
         return False
+    full_companies, owner_ids_by_company = executive_debtor_visibility_scope(
+        db, int(user.id)
+    )
+    company_key = _company_key(company)
     owner_user_id = assigned_user_id_for_debtor(db, company, rut)
     if owner_user_id is None:
-        return can_operate_company(db, user, company)
-    if owner_user_id == int(user.id):
-        return True
-    replacement = db.execute(
-        text("""
-            SELECT id
-            FROM cartera_temporary_replacements
-            WHERE LOWER(TRIM(empresa)) = LOWER(:empresa)
-              AND titular_user_id = :owner_user_id
-              AND replacement_user_id = :user_id
-              AND is_active = TRUE
-              AND starts_at <= CURRENT_TIMESTAMP
-              AND ends_at >= CURRENT_TIMESTAMP
-            LIMIT 1
-        """),
-        {
-            "empresa": _normalize_company(company),
-            "owner_user_id": int(owner_user_id),
-            "user_id": int(user.id),
-        },
-    ).first()
-    return replacement is not None
+        if company_has_debtor_assignments(db, company):
+            return False
+        return any(_company_key(item) == company_key for item in full_companies)
+
+    allowed_owner_ids: set[int] = set()
+    for empresa, owner_ids in owner_ids_by_company.items():
+        if _company_key(empresa) == company_key:
+            allowed_owner_ids.update(owner_ids)
+    return int(owner_user_id) in allowed_owner_ids
 
 
 def require_debtor_operation(db: Session, user: User, company: str, rut: str) -> None:

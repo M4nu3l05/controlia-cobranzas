@@ -18,7 +18,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     salt: Mapped[str] = mapped_column(String(128), nullable=False)
 
-    role: Mapped[str] = mapped_column(String(30), nullable=False, default="ejecutivo")
+    role: Mapped[str] = mapped_column(String(30), nullable=False, default="supervisor")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 

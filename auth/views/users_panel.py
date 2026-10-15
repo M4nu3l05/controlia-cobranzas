@@ -11,7 +11,7 @@ from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton,
+    QLabel, QInputDialog, QLineEdit, QMessageBox, QProgressBar, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -181,7 +181,7 @@ class _CreateUserDialog(QDialog):
         """)
         for key, label in ROLES.items():
             self.cmb_role.addItem(label, key)
-        self.cmb_role.setCurrentIndex(2)
+        self.cmb_role.setCurrentIndex(self.cmb_role.findData("supervisor"))
         lay.addWidget(self.cmb_role)
 
         lay.addWidget(self._lbl("Contraseña temporal"))
@@ -307,13 +307,14 @@ class UsersPanel(QWidget):
         lay.addLayout(legend)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels(
             [
                 "Nombre",
                 "Correo",
                 "Rol",
                 "Estado",
+                "Editar nombre",
                 "Editar rol",
                 "Activar / Desactivar",
                 "Eliminar",
@@ -326,6 +327,7 @@ class UsersPanel(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -391,6 +393,18 @@ class UsersPanel(QWidget):
             s_item.setForeground(QColor("#16a34a") if u["is_active"] else QColor("#dc2626"))
             self.table.setItem(row, 3, s_item)
 
+            btn_name = QPushButton("Renombrar")
+            btn_name.setFixedHeight(30)
+            btn_name.setStyleSheet(_BTN_SEC)
+            btn_name.clicked.connect(
+                lambda _, user_id=uid, name=u["username"]: self._edit_name(user_id, name)
+            )
+            w_name = QWidget()
+            name_layout = QHBoxLayout(w_name)
+            name_layout.setContentsMargins(4, 4, 4, 4)
+            name_layout.addWidget(btn_name)
+            self.table.setCellWidget(row, 4, w_name)
+
             cmb = QComboBox()
             cmb.setFixedHeight(30)
             cmb.setStyleSheet("""
@@ -400,16 +414,18 @@ class UsersPanel(QWidget):
             """)
             for key, label in ROLES.items():
                 cmb.addItem(label, key)
-            cmb.setCurrentIndex(list(ROLES.keys()).index(u["role"]))
+            role = "supervisor" if str(u.get("role", "")).strip() == "ejecutivo" else u.get("role")
+            index = cmb.findData(role)
+            cmb.setCurrentIndex(index if index >= 0 else 0)
             if is_self:
                 cmb.setEnabled(False)
             cmb.currentIndexChanged.connect(
                 lambda _, c=cmb, i=uid: self._change_role(i, c.currentData())
             )
-            self.table.setCellWidget(row, 4, cmb)
+            self.table.setCellWidget(row, 5, cmb)
 
             if is_self:
-                self.table.setItem(row, 5, QTableWidgetItem("(tu cuenta)"))
+                self.table.setItem(row, 6, QTableWidgetItem("(tu cuenta)"))
             else:
                 lbl_btn = "Desactivar" if u["is_active"] else "Activar"
                 btn = QPushButton(lbl_btn)
@@ -420,10 +436,10 @@ class UsersPanel(QWidget):
                 bl2 = QHBoxLayout(w)
                 bl2.setContentsMargins(4, 4, 4, 4)
                 bl2.addWidget(btn)
-                self.table.setCellWidget(row, 5, w)
+                self.table.setCellWidget(row, 6, w)
 
             if is_self:
-                self.table.setItem(row, 6, QTableWidgetItem("(protegido)"))
+                self.table.setItem(row, 7, QTableWidgetItem("(protegido)"))
             else:
                 btn_del = QPushButton("Eliminar")
                 btn_del.setFixedHeight(30)
@@ -435,7 +451,7 @@ class UsersPanel(QWidget):
                 bl3 = QHBoxLayout(w_del)
                 bl3.setContentsMargins(4, 4, 4, 4)
                 bl3.addWidget(btn_del)
-                self.table.setCellWidget(row, 6, w_del)
+                self.table.setCellWidget(row, 7, w_del)
 
             if self._puede_recuperar_asistido(u):
                 btn_rec = QPushButton("Restablecer")
@@ -448,9 +464,9 @@ class UsersPanel(QWidget):
                 bl4 = QHBoxLayout(w_rec)
                 bl4.setContentsMargins(4, 4, 4, 4)
                 bl4.addWidget(btn_rec)
-                self.table.setCellWidget(row, 7, w_rec)
+                self.table.setCellWidget(row, 8, w_rec)
             else:
-                self.table.setItem(row, 7, QTableWidgetItem("No autorizado"))
+                self.table.setItem(row, 8, QTableWidgetItem("No autorizado"))
 
     def _open_create(self):
         dlg = _CreateUserDialog(self._session, self)
@@ -469,6 +485,44 @@ class UsersPanel(QWidget):
             QMessageBox.warning(self, "Error", "\n".join(errors))
             self.reload()
             return
+        message = f"El rol fue actualizado a {ROLES.get(new_role, new_role)}."
+        if new_role == ROLE_SUPERVISOR:
+            message += (
+                "\n\nEl usuario deberá cerrar sesión y volver a ingresar para que "
+                "toda la interfaz habilite las funciones de supervisión."
+            )
+        QMessageBox.information(self, "Rol actualizado", message)
+        self.reload()
+
+    def _edit_name(self, user_id: int, current_name: str) -> None:
+        new_name, accepted = QInputDialog.getText(
+            self,
+            "Editar nombre del usuario",
+            (
+                "Ingresa el nombre que se utilizará para relacionar la columna Ejecutiva.\n"
+                "El correo, la contraseña y las asignaciones no cambiarán."
+            ),
+            QLineEdit.EchoMode.Normal,
+            current_name,
+        )
+        if not accepted:
+            return
+        new_name = new_name.strip()
+        if new_name == str(current_name or "").strip():
+            return
+
+        errors = admin_update_user(self._session, user_id, username=new_name)
+        if errors:
+            QMessageBox.warning(self, "No se pudo cambiar el nombre", "\n".join(errors))
+            return
+
+        if user_id == self._session.user_id:
+            self._session.username = new_name
+        QMessageBox.information(
+            self,
+            "Nombre actualizado",
+            f"El usuario ahora se identifica como '{new_name}'.",
+        )
         self.reload()
 
     def _toggle(self, user_id: int, current_is_active: bool):

@@ -2,7 +2,7 @@
 ; Requiere tener compilado: dist\ControliaCobranzas\ControliaCobranzas.exe
 
 #define MyAppName "Controlia Cobranzas"
-#define MyAppVersion "2.4.0"
+#define MyAppVersion "2.4.5"
 #define MyAppPublisher "Controlia"
 #define MyAppExeName "ControliaCobranzas.exe"
 ; La llave doble es el escape de Inno Setup: el AppId real es {1D6E7720-...}
@@ -41,13 +41,18 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "desktopicon"; Description: "Crear acceso directo en el escritorio"; GroupDescription: "Accesos directos:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\ControliaCobranzas\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\ControliaCobranzas\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\backend_url.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\app_icon.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\legal\terminos.txt"; DestDir: "{app}\legal"; Flags: ignoreversion
 Source: "..\legal\privacidad.txt"; DestDir: "{app}\legal"; Flags: ignoreversion
 Source: "..\legal\privacidad.txt"; DestDir: "{tmp}"; Flags: dontcopy
+
+[InstallDelete]
+; Elimina el runtime anterior para que una actualización no conserve DLLs
+; obsoletas o contaminadas de una versión previa.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: files; Name: "{app}\{#MyAppExeName}"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"

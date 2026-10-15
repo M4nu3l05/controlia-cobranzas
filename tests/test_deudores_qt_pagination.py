@@ -60,8 +60,8 @@ def test_deudores_navigates_all_pages_and_searches_global_dataset(monkeypatch):
         deudores_view,
         "list_users",
         lambda _session: [
-            {"id": 10, "username": "Ejecutiva Uno", "email": "uno@example.test", "role": "ejecutivo", "is_active": True},
-            {"id": 20, "username": "Ejecutiva Dos", "email": "dos@example.test", "role": "ejecutivo", "is_active": True},
+                {"id": 10, "username": "Ejecutiva Uno", "email": "uno@example.test", "role": "supervisor", "is_active": True},
+                {"id": 20, "username": "Ejecutiva Dos", "email": "dos@example.test", "role": "supervisor", "is_active": True},
         ],
     )
     session = UserSession(

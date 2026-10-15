@@ -211,6 +211,58 @@ def _recalcular_estado_deudor(db: Session, *, empresa: str, rut: str) -> None:
     db.commit()
 
 
+def recalcular_estados_deudores_lote(
+    db: Session,
+    pares: set[tuple[str, str]],
+) -> None:
+    """Actualiza estados de varios casos sin confirmar la transacción."""
+    normalized_pairs = {
+        (_norm_text(empresa), _norm_rut(rut))
+        for empresa, rut in pares
+        if _norm_text(empresa) and _norm_rut(rut)
+    }
+    if not normalized_pairs:
+        return
+
+    ruts = sorted({rut for _empresa, rut in normalized_pairs})
+    latest: dict[tuple[str, str], DeudorGestion] = {}
+    for start in range(0, len(ruts), 400):
+        batch = ruts[start:start + 400]
+        rows = (
+            db.query(DeudorGestion)
+            .filter(
+                DeudorGestion.rut_afiliado.in_(batch),
+                DeudorGestion.assigned_to_user_id.is_(None),
+            )
+            .all()
+        )
+        for row in rows:
+            key = (_norm_text(row.empresa), _norm_rut(row.rut_afiliado))
+            if key not in normalized_pairs:
+                continue
+            current = latest.get(key)
+            if current is None or _fecha_sort_key(row.fecha_gestion, row.id) > _fecha_sort_key(
+                current.fecha_gestion,
+                current.id,
+            ):
+                latest[key] = row
+
+    states = {
+        pair: _estado_gestion_a_estado_deudor(latest[pair].estado)
+        if pair in latest
+        else ESTADO_DEUDOR_DEFAULT
+        for pair in normalized_pairs
+    }
+
+    for model in (DeudorResumen, DeudorDetalle):
+        for start in range(0, len(ruts), 400):
+            batch = ruts[start:start + 400]
+            for row in db.query(model).filter(model.rut_afiliado.in_(batch)).all():
+                key = (_norm_text(row.empresa), _norm_rut(row.rut_afiliado))
+                if key in states:
+                    row.estado_deudor = states[key]
+
+
 def list_gestiones_service(
     db: Session,
     *,

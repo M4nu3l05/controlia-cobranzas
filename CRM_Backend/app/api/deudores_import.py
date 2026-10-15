@@ -123,6 +123,7 @@ async def import_deudores(
     expected_file_sha256: str = Form(...),
     confirm_birlados: bool = Form(False),
     column_mapping_json: str = Form(""),
+    assignment_overrides_json: str = Form(""),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -154,6 +155,7 @@ async def import_deudores(
             expected_file_sha256=expected_file_sha256,
             confirm_birlados=confirm_birlados,
             column_mapping=_parse_column_mapping(column_mapping_json),
+            assignment_overrides=_parse_assignment_overrides(assignment_overrides_json),
         )
         return ImportDeudoresResponse(**result)
     except ValueError as exc:

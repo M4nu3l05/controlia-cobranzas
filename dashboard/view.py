@@ -1065,7 +1065,7 @@ class DashboardWidget(QWidget):
             now = datetime.now()
             resp = requests.get(
                 f"{_backend_base_url()}/dashboard/sessions",
-                params={"role": "ejecutivo", "year": now.year, "month": now.month},
+                params={"role": "supervisor", "year": now.year, "month": now.month},
                 headers=self._backend_headers(),
                 timeout=15,
             )
@@ -1246,7 +1246,7 @@ class DashboardWidget(QWidget):
         if self._usa_backend_dashboard():
             _, df_mes = self._backend_session_history()
         else:
-            df_mes = obtener_conexiones_mes(hoy.year, hoy.month, role="ejecutivo")
+            df_mes = obtener_conexiones_mes(hoy.year, hoy.month, role="supervisor")
         rep = preparar_reporte_excel(df_mes)
 
         if rep.empty:
@@ -1336,7 +1336,7 @@ class DashboardWidget(QWidget):
             _fmt_int(len(df_hoy)), f"{_fmt_int(unique_today)} ejecutivas activas", "Número total de sesiones iniciadas hoy."
         )
         self.pill_ejecutivas_hoy.set_data(
-            _fmt_int(unique_today), f"{_fmt_int(len(df_hoy))} sesiones hoy", "Usuarios únicos conectados hoy con rol ejecutivo."
+            _fmt_int(unique_today), f"{_fmt_int(len(df_hoy))} sesiones hoy", "Usuarios únicos conectados hoy con rol supervisor."
         )
         self.pill_conexiones_mes.set_data(
             _fmt_int(len(df_mes)), f"Mes actual: {hoy.strftime('%m/%Y')}", "Acumulado de sesiones del mes actual."
@@ -1494,7 +1494,7 @@ class DashboardWidget(QWidget):
                 self.pill_ejecutivas_hoy.set_data(
                     _fmt_int(unique_today),
                     f"{_fmt_int(len(df_hoy))} sesiones hoy",
-                    "Usuarios únicos conectados hoy con rol ejecutivo.",
+                    "Usuarios únicos conectados hoy con rol supervisor.",
                 )
                 self.pill_conexiones_mes.set_data(
                     _fmt_int(len(df_mes)),
@@ -1702,8 +1702,8 @@ class DashboardWidget(QWidget):
 
         if self._can_view_reporte_ejecutiva():
             hoy = datetime.now()
-            df_hoy = obtener_conexiones_hoy(role="ejecutivo")
-            df_mes = obtener_conexiones_mes(hoy.year, hoy.month, role="ejecutivo")
+            df_hoy = obtener_conexiones_hoy(role="supervisor")
+            df_mes = obtener_conexiones_mes(hoy.year, hoy.month, role="supervisor")
             team_stats = self._build_team_stats(df_hoy, df_mes)
             self._fill_ejecutivas_table(df_hoy)
 
@@ -1717,7 +1717,7 @@ class DashboardWidget(QWidget):
             self.pill_ejecutivas_hoy.set_data(
                 _fmt_int(unique_today),
                 f"{_fmt_int(len(df_hoy))} sesiones hoy",
-                "Usuarios únicos conectados hoy con rol ejecutivo.",
+                "Usuarios únicos conectados hoy con rol supervisor.",
             )
             self.pill_conexiones_mes.set_data(
                 _fmt_int(len(df_mes)),

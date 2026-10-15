@@ -20,6 +20,7 @@ from app.services.auth_service import (
     ROLES,
     create_user,
     get_user_by_id,
+    normalize_role,
     validate_email,
     validate_password,
     validate_username,
@@ -71,6 +72,7 @@ def admin_create_user_service(
     errors += validate_email(email)
     errors += validate_username(username)
 
+    role = normalize_role(role)
     if role not in ROLES:
         errors.append(f"Rol no valido. Opciones: {', '.join(ROLES.keys())}")
 
@@ -116,10 +118,59 @@ def admin_update_user_service(
         if username_errors:
             raise ValueError("\n".join(username_errors))
         user.username = username.strip()
+        db.flush()
+        if inspect(db.connection()).has_table("cartera_asignaciones"):
+            db.execute(
+                text("""
+                    UPDATE cartera_asignaciones
+                    SET username = :username,
+                        updated_at = CURRENT_TIMESTAMP,
+                        updated_by = :updated_by
+                    WHERE user_id = :user_id
+                """),
+                {
+                    "username": user.username,
+                    "updated_by": str(executor.username or "").strip(),
+                    "user_id": int(user.id),
+                },
+            )
+        if inspect(db.connection()).has_table("debtor_user_assignments"):
+            for table_name in ("deudores_resumen", "deudores_detalle"):
+                if not inspect(db.connection()).has_table(table_name):
+                    continue
+                db.execute(text(f"""
+                    UPDATE {table_name}
+                    SET ejecutivo_asignado = :username
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM debtor_user_assignments dua
+                        WHERE dua.user_id = :user_id
+                          AND dua.empresa = {table_name}.empresa
+                          AND dua.rut_afiliado = {table_name}.rut_afiliado
+                    )
+                """), {"username": user.username, "user_id": int(user.id)})
 
     if role is not None:
+        role = normalize_role(role)
         if role not in ROLES:
             raise ValueError(f"Rol no valido. Opciones: {', '.join(ROLES.keys())}")
+        if role != ROLE_SUPERVISOR and str(user.role or "").strip().lower() == ROLE_SUPERVISOR:
+            has_portfolios = False
+            if inspect(db.connection()).has_table("cartera_asignaciones"):
+                has_portfolios = db.execute(
+                    text("SELECT 1 FROM cartera_asignaciones WHERE user_id = :user_id LIMIT 1"),
+                    {"user_id": int(user.id)},
+                ).first() is not None
+            has_cases = False
+            if inspect(db.connection()).has_table("debtor_user_assignments"):
+                has_cases = db.execute(
+                    text("SELECT 1 FROM debtor_user_assignments WHERE user_id = :user_id LIMIT 1"),
+                    {"user_id": int(user.id)},
+                ).first() is not None
+            if has_portfolios or has_cases:
+                raise ValueError(
+                    "Reasigna primero sus carteras y casos antes de cambiar este Supervisor a Administrador."
+                )
         user.role = role
 
     if is_active is not None:
@@ -160,15 +211,17 @@ def admin_delete_user_service(
     db.commit()
 
 
-def ensure_cartera_assignments_table(db: Session) -> None:
+def ensure_cartera_assignments_table(db: Session, *, commit: bool = True) -> None:
     db.execute(text("""
         CREATE TABLE IF NOT EXISTS cartera_asignaciones (
-            empresa TEXT PRIMARY KEY,
-            user_id INTEGER NULL,
+            empresa TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            is_primary BOOLEAN NOT NULL DEFAULT FALSE,
             email TEXT,
             username TEXT,
             updated_at TEXT,
-            updated_by TEXT
+            updated_by TEXT,
+            PRIMARY KEY (empresa, user_id)
         )
     """))
     dialect = db.get_bind().dialect.name
@@ -190,6 +243,7 @@ def ensure_cartera_assignments_table(db: Session) -> None:
         }
 
     for column_name, column_type in {
+        "is_primary": "BOOLEAN NOT NULL DEFAULT FALSE",
         "email": "TEXT",
         "username": "TEXT",
         "updated_at": "TEXT",
@@ -199,7 +253,12 @@ def ensure_cartera_assignments_table(db: Session) -> None:
             db.execute(
                 text(f"ALTER TABLE cartera_asignaciones ADD COLUMN {column_name} {column_type}")
             )
-    db.commit()
+    db.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_cartera_asignacion_primary "
+        "ON cartera_asignaciones(empresa) WHERE is_primary = TRUE"
+    ))
+    if commit:
+        db.commit()
 
 
 def _ensure_can_manage_assignments(executor: User) -> None:
@@ -225,15 +284,16 @@ def list_cartera_assignments_service(
     ensure_cartera_assignments_table(db)
 
     rows = db.execute(text("""
-        SELECT empresa, user_id, email, username, updated_at, updated_by
+        SELECT empresa, user_id, is_primary, email, username, updated_at, updated_by
         FROM cartera_asignaciones
-        ORDER BY empresa
+        ORDER BY empresa, is_primary DESC, username, user_id
     """)).mappings().all()
 
     return [
         UserCarteraAssignmentItem(
             empresa=str(row.get("empresa") or "").strip(),
             user_id=int(row["user_id"]) if row.get("user_id") is not None else None,
+            is_primary=bool(row.get("is_primary")),
             email=str(row.get("email") or "").strip(),
             username=str(row.get("username") or "").strip(),
             updated_at=str(row.get("updated_at") or "").strip(),
@@ -251,37 +311,11 @@ def get_user_carteras_service(
 ) -> list[str]:
     _ensure_can_view_assignments(executor, target_user_id)
     ensure_cartera_assignments_table(db)
-
-    assignment_union = """
-            UNION
-            SELECT empresa
-            FROM debtor_user_assignments
-            WHERE user_id = :user_id
-    """ if inspect(db.get_bind()).has_table("debtor_user_assignments") else ""
     rows = db.execute(
-        text(f"""
-            SELECT empresa
-            FROM cartera_asignaciones
-            WHERE user_id = :user_id
-            {assignment_union}
-            UNION
-            SELECT empresa
-            FROM cartera_temporary_replacements
-            WHERE replacement_user_id = :user_id
-              AND is_active = TRUE
-              AND starts_at <= CURRENT_TIMESTAMP
-              AND ends_at >= CURRENT_TIMESTAMP
-            ORDER BY empresa
-        """),
+        text("SELECT empresa FROM cartera_asignaciones WHERE user_id = :user_id"),
         {"user_id": int(target_user_id)},
-    ).fetchall()
-
-    empresas: list[str] = []
-    for row in rows:
-        empresa = str(row[0] or "").strip()
-        if empresa and empresa not in empresas:
-            empresas.append(empresa)
-    return empresas
+    ).all()
+    return sorted({str(row[0] or "").strip() for row in rows if str(row[0] or "").strip()}, key=str.casefold)
 
 
 def save_cartera_assignments_service(
@@ -298,52 +332,58 @@ def save_cartera_assignments_service(
         db.commit()
         return []
 
-    seen_empresas: set[str] = set()
-
+    grouped: dict[str, list[dict]] = {}
     for raw in assignments:
         empresa = str((raw or {}).get("empresa") or "").strip()
-        if not empresa or empresa in seen_empresas:
-            continue
-        seen_empresas.add(empresa)
+        if empresa:
+            grouped.setdefault(empresa, []).append(dict(raw or {}))
 
-        user_id = (raw or {}).get("user_id")
-        if user_id in (None, "", 0, "0"):
+    prepared: dict[str, list[tuple[User, bool]]] = {}
+    for empresa, rows in grouped.items():
+        selected = [row for row in rows if row.get("user_id") not in (None, "", 0, "0")]
+        seen_user_ids: set[int] = set()
+        users: list[tuple[User, bool]] = []
+        for row in selected:
+            user_id = int(row["user_id"])
+            if user_id in seen_user_ids:
+                raise ValueError(f"El usuario está repetido en la asignación de '{empresa}'.")
+            seen_user_ids.add(user_id)
+            user = get_user_by_id(db, user_id)
+            if not user:
+                raise ValueError(f"El usuario indicado para '{empresa}' no existe.")
+            if str(user.role or "").strip().lower() != ROLE_SUPERVISOR:
+                raise ValueError(f"Solo puedes asignar carteras a usuarios con rol Supervisor. Problema en '{empresa}'.")
+            if not bool(user.is_active):
+                raise ValueError(f"No puedes asignar '{empresa}' a un usuario inactivo.")
+            users.append((user, bool(row.get("is_primary"))))
+
+        if len(users) == 1 and not users[0][1]:
+            users[0] = (users[0][0], True)
+        if users and sum(1 for _, is_primary in users if is_primary) != 1:
+            raise ValueError(f"Debes definir exactamente un supervisor titular para '{empresa}'.")
+        prepared[empresa] = users
+
+    for empresa, users in prepared.items():
+        db.execute(text("DELETE FROM cartera_asignaciones WHERE empresa = :empresa"), {"empresa": empresa})
+        for user, is_primary in users:
             db.execute(
-                text("DELETE FROM cartera_asignaciones WHERE empresa = :empresa"),
-                {"empresa": empresa},
+                text("""
+                    INSERT INTO cartera_asignaciones (
+                        empresa, user_id, is_primary, email, username, updated_at, updated_by
+                    ) VALUES (
+                        :empresa, :user_id, :is_primary, :email, :username,
+                        CURRENT_TIMESTAMP, :updated_by
+                    )
+                """),
+                {
+                    "empresa": empresa,
+                    "user_id": int(user.id),
+                    "is_primary": bool(is_primary),
+                    "email": str(user.email or "").strip(),
+                    "username": str(user.username or "").strip(),
+                    "updated_by": str(executor.username or "").strip(),
+                },
             )
-            continue
-
-        user = get_user_by_id(db, int(user_id))
-        if not user:
-            raise ValueError(f"El usuario indicado para '{empresa}' no existe.")
-        if user.role != "ejecutivo":
-            raise ValueError(f"Solo puedes asignar carteras a usuarios con rol ejecutivo. Problema en '{empresa}'.")
-        if not bool(user.is_active):
-            raise ValueError(f"No puedes asignar '{empresa}' a un usuario inactivo.")
-
-        db.execute(
-            text("""
-                INSERT INTO cartera_asignaciones (
-                    empresa, user_id, email, username, updated_at, updated_by
-                ) VALUES (
-                    :empresa, :user_id, :email, :username, CURRENT_TIMESTAMP, :updated_by
-                )
-                ON CONFLICT(empresa) DO UPDATE SET
-                    user_id = excluded.user_id,
-                    email = excluded.email,
-                    username = excluded.username,
-                    updated_at = CURRENT_TIMESTAMP,
-                    updated_by = excluded.updated_by
-            """),
-            {
-                "empresa": empresa,
-                "user_id": int(user.id),
-                "email": str(user.email or "").strip(),
-                "username": str(user.username or "").strip(),
-                "updated_by": str(executor.username or "").strip(),
-            },
-        )
 
     db.commit()
     return list_cartera_assignments_service(db, executor=executor)

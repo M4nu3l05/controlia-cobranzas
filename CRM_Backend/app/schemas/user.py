@@ -30,6 +30,7 @@ class UserUpdateRequest(BaseModel):
 class UserCarteraAssignmentItem(BaseModel):
     empresa: str
     user_id: int | None = None
+    is_primary: bool = False
     email: str = ""
     username: str = ""
     updated_at: str = ""
@@ -39,6 +40,7 @@ class UserCarteraAssignmentItem(BaseModel):
 class UserCarteraAssignmentUpdateItem(BaseModel):
     empresa: str
     user_id: int | None = None
+    is_primary: bool = False
 
 
 class UserCarteraAssignmentBulkRequest(BaseModel):

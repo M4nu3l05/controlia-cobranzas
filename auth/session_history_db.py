@@ -110,12 +110,12 @@ def _query_df(where_sql: str = "", params: tuple = ()) -> pd.DataFrame:
         return pd.read_sql(sql, con, params=params).fillna("")
 
 
-def obtener_conexiones_hoy(role: str = "ejecutivo") -> pd.DataFrame:
+def obtener_conexiones_hoy(role: str = "supervisor") -> pd.DataFrame:
     hoy = datetime.now().strftime("%Y-%m-%d")
     return _query_df("substr(login_at,1,10)=? AND role=?", (hoy, role))
 
 
-def obtener_conexiones_mes(year: int, month: int, role: str = "ejecutivo") -> pd.DataFrame:
+def obtener_conexiones_mes(year: int, month: int, role: str = "supervisor") -> pd.DataFrame:
     pref = f"{year:04d}-{month:02d}"
     return _query_df("substr(login_at,1,7)=? AND role=?", (pref, role))
 

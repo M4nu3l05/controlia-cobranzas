@@ -101,7 +101,7 @@ class UserSession:
             user_id=int(user.get("id")),
             email=str(user.get("email", "")),
             username=str(user.get("username", "")),
-            role=str(user.get("role", ROLE_EJECUTIVO)),
+            role=str(user.get("role", ROLE_SUPERVISOR)),
             is_active=bool(user.get("is_active", True)),
             must_change_password=bool(payload.get("must_change_password", user.get("must_change_password", False))),
             access_token=str(payload.get("access_token", "")) or None,
@@ -419,6 +419,7 @@ def admin_create_user(
     errors += validate_email(email)
     errors += validate_username(username)
 
+    role = ROLE_SUPERVISOR if str(role or "").strip().lower() == ROLE_EJECUTIVO else str(role or "").strip().lower()
     if role not in ROLES:
         errors.append(f"Rol no válido. Opciones: {', '.join(ROLES.keys())}")
 
@@ -500,7 +501,11 @@ def admin_update_user(
             if username is not None:
                 payload["username"] = username
             if role is not None:
-                payload["role"] = role
+                payload["role"] = (
+                    ROLE_SUPERVISOR
+                    if str(role or "").strip().lower() == ROLE_EJECUTIVO
+                    else str(role or "").strip().lower()
+                )
             if is_active is not None:
                 payload["is_active"] = bool(is_active)
 
@@ -669,6 +674,7 @@ def backend_import_deudores(
     expected_file_sha256: str,
     confirm_birlados: bool = False,
     column_mapping: dict | None = None,
+    assignment_overrides: dict[str, int] | None = None,
 ) -> Tuple[dict | None, str]:
     try:
         token = _require_backend_token(session)
@@ -682,6 +688,9 @@ def backend_import_deudores(
                     "expected_file_sha256": expected_file_sha256,
                     "confirm_birlados": "true" if confirm_birlados else "false",
                     "column_mapping_json": json.dumps(column_mapping or {}, ensure_ascii=False),
+                    "assignment_overrides_json": json.dumps(
+                        assignment_overrides or {}, ensure_ascii=False
+                    ),
                 },
                 files={
                     "file": (
@@ -851,6 +860,75 @@ def backend_list_gestiones(
         return [], str(exc)
     except requests.RequestException as exc:
         return [], _friendly_backend_error(exc)
+
+
+def backend_preview_import_gestiones(
+    session: UserSession,
+    *,
+    excel_path: str,
+) -> Tuple[dict | None, str]:
+    try:
+        token = _require_backend_token(session)
+        filename = os.path.basename(excel_path)
+        with open(excel_path, "rb") as fh:
+            data = _http_multipart_auth(
+                "/gestiones/import/preview",
+                token=token,
+                data={},
+                files={
+                    "file": (
+                        filename,
+                        fh,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+                timeout=600,
+            )
+        return data if isinstance(data, dict) else None, ""
+    except ValueError as exc:
+        return None, str(exc)
+    except requests.RequestException as exc:
+        return None, _friendly_backend_error(exc)
+    except OSError as exc:
+        return None, f"No se pudo abrir el archivo Excel: {exc}"
+
+
+def backend_import_gestiones(
+    session: UserSession,
+    *,
+    excel_path: str,
+    expected_file_sha256: str,
+    company_overrides: dict[str, str] | None = None,
+) -> Tuple[dict | None, str]:
+    try:
+        token = _require_backend_token(session)
+        filename = os.path.basename(excel_path)
+        with open(excel_path, "rb") as fh:
+            data = _http_multipart_auth(
+                "/gestiones/import",
+                token=token,
+                data={
+                    "expected_file_sha256": expected_file_sha256.strip(),
+                    "company_overrides_json": json.dumps(
+                        company_overrides or {}, ensure_ascii=False
+                    ),
+                },
+                files={
+                    "file": (
+                        filename,
+                        fh,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                },
+                timeout=600,
+            )
+        return data if isinstance(data, dict) else None, ""
+    except ValueError as exc:
+        return None, str(exc)
+    except requests.RequestException as exc:
+        return None, _friendly_backend_error(exc)
+    except OSError as exc:
+        return None, f"No se pudo abrir el archivo Excel: {exc}"
 
 
 def backend_list_all_gestiones(

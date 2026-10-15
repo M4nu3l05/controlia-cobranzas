@@ -68,7 +68,7 @@ def commission_context():
             username="Ejecutiva",
             password_hash="test",
             salt="test",
-            role="ejecutivo",
+            role="supervisor",
             is_active=True,
         )
         otra = User(
@@ -76,7 +76,7 @@ def commission_context():
             username="Otra ejecutiva",
             password_hash="test",
             salt="test",
-            role="ejecutivo",
+            role="supervisor",
             is_active=True,
         )
         db.add_all([supervisor, ejecutiva, otra])
@@ -84,15 +84,14 @@ def commission_context():
         yield db, supervisor, ejecutiva, otra
 
 
-def test_solo_supervisor_define_los_porcentajes(commission_context):
+def _summary_for(items, username: str):
+    return next(item for item in items if item.username == username)
+
+
+def test_cualquier_supervisor_define_los_porcentajes(commission_context):
     db, supervisor, ejecutiva, _otra = commission_context
 
-    with pytest.raises(AuthorizationError):
-        save_commission_rates_service(
-            db, executor=ejecutiva, rates=[{"empresa": "Cart-56", "percent": 10}]
-        )
-
-    save_commission_rates_service(db, executor=supervisor, rates=[{"empresa": "Cart-56", "percent": 10}])
+    save_commission_rates_service(db, executor=ejecutiva, rates=[{"empresa": "Cart-56", "percent": 10}])
     tasas = {item.empresa: item.percent for item in list_commission_rates_service(db, executor=ejecutiva)}
     assert tasas == {"Cart-56": 10.0}
 
@@ -112,13 +111,14 @@ def test_la_comision_acumula_por_cada_pago_registrado(commission_context):
 
     _pago(db, user=ejecutiva, empresa="Cart-56", monto=100_000)
     propia = commission_summary_service(db, executor=ejecutiva)
-    assert [item.comision_clp for item in propia] == [10_000]
+    assert _summary_for(propia, "Ejecutiva").comision_clp == 10_000
 
     _pago(db, user=ejecutiva, empresa="Cart-56", monto=1_000_000)
     propia = commission_summary_service(db, executor=ejecutiva)
-    assert [item.comision_clp for item in propia] == [110_000]
-    assert propia[0].monto_pagado_clp == 1_100_000
-    assert propia[0].pagos == 2
+    ejecutiva_summary = _summary_for(propia, "Ejecutiva")
+    assert ejecutiva_summary.comision_clp == 110_000
+    assert ejecutiva_summary.monto_pagado_clp == 1_100_000
+    assert ejecutiva_summary.pagos == 2
 
 
 def test_los_pagos_reversados_no_suman_comision(commission_context):
@@ -130,10 +130,10 @@ def test_los_pagos_reversados_no_suman_comision(commission_context):
     db.commit()
 
     propia = commission_summary_service(db, executor=ejecutiva)
-    assert [item.comision_clp for item in propia] == [0]
+    assert _summary_for(propia, "Ejecutiva").comision_clp == 0
 
 
-def test_la_ejecutiva_solo_ve_su_acumulado_y_el_supervisor_ve_todos(commission_context):
+def test_todos_los_supervisores_ven_el_acumulado_del_equipo(commission_context):
     db, supervisor, ejecutiva, otra = commission_context
     save_commission_rates_service(
         db,
@@ -144,10 +144,15 @@ def test_la_ejecutiva_solo_ve_su_acumulado_y_el_supervisor_ve_todos(commission_c
     _pago(db, user=otra, empresa="Colmena", monto=2_000_000)
 
     propia = commission_summary_service(db, executor=ejecutiva)
-    assert [(item.username, item.comision_clp) for item in propia] == [("Ejecutiva", 100_000)]
+    assert {item.username: item.comision_clp for item in propia} == {
+        "Supervisora": 0,
+        "Ejecutiva": 100_000,
+        "Otra ejecutiva": 100_000,
+    }
 
     del_supervisor = commission_summary_service(db, executor=supervisor)
     assert {item.username: item.comision_clp for item in del_supervisor} == {
+        "Supervisora": 0,
         "Ejecutiva": 100_000,
         "Otra ejecutiva": 100_000,
     }
@@ -161,18 +166,16 @@ def test_el_corte_deja_el_acumulado_en_cero_y_sigue_sumando_despues(commission_c
     reset_commissions_service(db, executor=supervisor, user_id=None, note="pago de comisiones")
 
     propia = commission_summary_service(db, executor=ejecutiva)
-    assert [item.comision_clp for item in propia] == [0]
+    assert _summary_for(propia, "Ejecutiva").comision_clp == 0
 
     _pago(db, user=ejecutiva, empresa="Cart-56", monto=300_000, minutos=10)
     propia = commission_summary_service(db, executor=ejecutiva)
-    assert [item.comision_clp for item in propia] == [30_000]
+    assert _summary_for(propia, "Ejecutiva").comision_clp == 30_000
 
 
-def test_solo_supervisor_puede_reestablecer(commission_context):
+def test_cualquier_supervisor_puede_reestablecer(commission_context):
     db, _supervisor, ejecutiva, _otra = commission_context
-
-    with pytest.raises(AuthorizationError):
-        reset_commissions_service(db, executor=ejecutiva, user_id=None)
+    reset_commissions_service(db, executor=ejecutiva, user_id=None)
 
 
 def test_pagos_sin_porcentaje_definido_no_generan_comision(commission_context):
@@ -180,5 +183,6 @@ def test_pagos_sin_porcentaje_definido_no_generan_comision(commission_context):
     _pago(db, user=ejecutiva, empresa="Consalud", monto=800_000)
 
     propia = commission_summary_service(db, executor=ejecutiva)
-    assert [item.comision_clp for item in propia] == [0]
-    assert propia[0].monto_pagado_clp == 800_000
+    ejecutiva_summary = _summary_for(propia, "Ejecutiva")
+    assert ejecutiva_summary.comision_clp == 0
+    assert ejecutiva_summary.monto_pagado_clp == 800_000

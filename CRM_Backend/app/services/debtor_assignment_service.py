@@ -18,6 +18,8 @@ from app.models.debtor_assignment import (
     DebtorUserAssignment,
 )
 from app.models.user import User
+from app.models.deudor import DeudorDetalle
+from app.core.authorization import primary_user_id_for_company
 
 
 def normalize_assignment_name(value: object) -> str:
@@ -43,7 +45,7 @@ def normalize_assignment_rut(value: object) -> str:
 
 
 def user_has_debtor_assignments(db: Session, user_id: int) -> bool:
-    if not inspect(db.get_bind()).has_table("debtor_user_assignments"):
+    if not inspect(db.connection()).has_table("debtor_user_assignments"):
         return False
     return db.query(DebtorUserAssignment.id).filter(
         DebtorUserAssignment.user_id == int(user_id)
@@ -61,7 +63,9 @@ def _read_assignment_dataframe(content: bytes) -> tuple[pd.DataFrame, str, str, 
     if not content:
         raise ValueError("El archivo recibido está vacío.")
     xls = pd.ExcelFile(BytesIO(content))
-    rut_candidates = {"rutafiliado", "rutdeudor", "rut"}
+    rut_candidates = {
+        "rutafiliado", "rutdeudor", "rut", "rutemp", "rutempleador", "rutempresa"
+    }
     owner_candidates = {
         "ejecutiva", "ejecutivo", "ejecutivaasignada", "ejecutivoasignado", "asignadaa"
     }
@@ -84,6 +88,7 @@ def _assignment_source(content: bytes) -> dict:
     label_debtors: dict[str, set[str]] = defaultdict(set)
     labels_by_rut: dict[str, set[str]] = defaultdict(set)
     raw_label_by_rut: dict[tuple[str, str], str] = {}
+    blank_debtors: set[str] = set()
     blank_assignments = 0
     valid_rows = 0
 
@@ -96,6 +101,7 @@ def _assignment_source(content: bytes) -> dict:
         normalized_label = normalize_assignment_name(raw_label)
         if not normalized_label:
             blank_assignments += 1
+            blank_debtors.add(rut)
             continue
         label_rows[normalized_label] += 1
         label_display.setdefault(normalized_label, raw_label)
@@ -113,14 +119,15 @@ def _assignment_source(content: bytes) -> dict:
         "label_debtors": label_debtors,
         "labels_by_rut": labels_by_rut,
         "raw_label_by_rut": raw_label_by_rut,
+        "blank_debtors": blank_debtors,
         "conflicts": conflicts,
     }
 
 
-def _active_executives(db: Session) -> tuple[dict[int, User], dict[str, list[User]]]:
+def _active_supervisors(db: Session) -> tuple[dict[int, User], dict[str, list[User]]]:
     users = (
         db.query(User)
-        .filter(User.role == "ejecutivo", User.is_active.is_(True))
+        .filter(User.role == "supervisor", User.is_active.is_(True))
         .order_by(User.id.asc())
         .all()
     )
@@ -138,15 +145,15 @@ def _resolve_labels(
     source: dict,
     overrides: dict[str, int] | None = None,
 ) -> tuple[dict[str, User], list[dict]]:
-    users_by_id, users_by_name = _active_executives(db)
+    users_by_id, users_by_name = _active_supervisors(db)
     alias_rows = db.query(DebtorAssignmentAlias).filter(
         DebtorAssignmentAlias.empresa == empresa
     ).all()
     aliases = {row.normalized_label: int(row.user_id) for row in alias_rows}
     normalized_overrides = {
-        normalize_assignment_name(label): int(user_id)
+        normalize_assignment_name(label): int(user_id or 0)
         for label, user_id in (overrides or {}).items()
-        if normalize_assignment_name(label) and int(user_id or 0) > 0
+        if normalize_assignment_name(label)
     }
 
     resolved: dict[str, User] = {}
@@ -157,8 +164,11 @@ def _resolve_labels(
         override_id = normalized_overrides.get(normalized_label)
         alias_id = aliases.get(normalized_label)
         if override_id is not None:
-            user = users_by_id.get(override_id)
-            status = "matched_override" if user else "invalid_user"
+            if override_id <= 0:
+                status = "invalid_user"
+            else:
+                user = users_by_id.get(override_id)
+                status = "matched_override" if user else "invalid_user"
         elif alias_id is not None:
             user = users_by_id.get(alias_id)
             status = "matched_alias" if user else "inactive_alias"
@@ -193,13 +203,24 @@ def preview_debtor_assignments_service(
     empresa_txt = _clean_text(empresa)
     source = _assignment_source(content)
     _, matches = _resolve_labels(db, empresa=empresa_txt, source=source)
-    source_ruts = set(source["labels_by_rut"])
+    source_ruts = set(source["labels_by_rut"]) | set(source["blank_debtors"])
     existing_ruts = {
         normalize_assignment_rut(rut)
         for (rut,) in db.query(DeudorResumen.rut_afiliado).filter(
             DeudorResumen.empresa == empresa_txt
         ).all()
     }
+    primary_user_id = primary_user_id_for_company(db, empresa_txt)
+    primary_user = db.query(User).filter(User.id == primary_user_id).first() if primary_user_id else None
+    if primary_user is not None and (
+        str(primary_user.role or "").strip().lower() != "supervisor"
+        or not bool(primary_user.is_active)
+    ):
+        primary_user = None
+    if source["blank_debtors"] and primary_user is None:
+        raise ValueError(
+            f"La cartera '{empresa_txt}' tiene filas con Ejecutiva vacía y no posee un Supervisor titular activo."
+        )
     return {
         "empresa": empresa_txt,
         "source_file": os.path.basename(source_file),
@@ -210,6 +231,8 @@ def preview_debtor_assignments_service(
         "existing_debtors": len(source_ruts & existing_ruts),
         "missing_debtors": len(source_ruts - existing_ruts),
         "blank_assignments": int(source["blank_assignments"]),
+        "blank_default_user_id": int(primary_user.id) if primary_user is not None else None,
+        "blank_default_username": str(primary_user.username or "") if primary_user is not None else "",
         "conflicting_debtors": len(source["conflicts"]),
         "unresolved_labels": sum(1 for item in matches if item["user_id"] is None),
         "matches": matches,
@@ -233,10 +256,6 @@ def apply_debtor_assignments_service(
         raise ValueError("El archivo cambió después de la vista previa. Debes revisarlo nuevamente.")
 
     source = _assignment_source(content)
-    if source["blank_assignments"]:
-        raise ValueError(
-            f"Hay {source['blank_assignments']} registros con Ejecutiva vacía. Corrige el archivo antes de continuar."
-        )
     if source["conflicts"]:
         raise ValueError(
             f"Hay {len(source['conflicts'])} RUT con más de una ejecutiva. La distribución no fue aplicada."
@@ -245,13 +264,26 @@ def apply_debtor_assignments_service(
     resolved, matches = _resolve_labels(
         db, empresa=empresa_txt, source=source, overrides=overrides
     )
+    if any(item["status"] == "invalid_user" for item in matches):
+        raise ValueError(
+            "La relación manual contiene un usuario inexistente, inactivo o sin rol Supervisor."
+        )
     unresolved = [item for item in matches if item["user_id"] is None]
     if unresolved:
+        labels = ", ".join(str(item["source_label"] or "") for item in unresolved[:5])
         raise ValueError(
-            "Existen nombres de ejecutiva sin relacionar o ambiguos. "
-            "Selecciona el usuario correspondiente en la vista previa."
+            "Todos los nombres de la columna Ejecutiva deben relacionarse con un Supervisor activo. "
+            f"Pendientes: {labels}."
         )
 
+    blank_user = None
+    if source["blank_debtors"]:
+        primary_user_id = primary_user_id_for_company(db, empresa_txt)
+        blank_user = db.query(User).filter(User.id == primary_user_id).first() if primary_user_id else None
+        if blank_user is None or str(blank_user.role or "").strip().lower() != "supervisor" or not bool(blank_user.is_active):
+            raise ValueError(
+                f"La cartera '{empresa_txt}' tiene filas con Ejecutiva vacía y no posee un Supervisor titular activo."
+            )
     existing_ruts = {
         normalize_assignment_rut(rut)
         for (rut,) in db.query(DeudorResumen.rut_afiliado).filter(
@@ -264,12 +296,16 @@ def apply_debtor_assignments_service(
     current = {normalize_assignment_rut(row.rut_afiliado): row for row in current_rows}
 
     assigned = reassigned = unchanged = missing = 0
-    for rut, labels in source["labels_by_rut"].items():
+    source_ruts = set(source["labels_by_rut"]) | set(source["blank_debtors"])
+    for rut in source_ruts:
         if rut not in existing_ruts:
             missing += 1
             continue
-        normalized_label = next(iter(labels))
-        user = resolved[normalized_label]
+        labels = source["labels_by_rut"].get(rut, set())
+        normalized_label = next(iter(labels)) if labels else ""
+        user = resolved.get(normalized_label) if normalized_label else blank_user
+        if user is None:
+            raise ValueError(f"No fue posible determinar la Ejecutiva responsable del RUT {rut}.")
         raw_label = source["raw_label_by_rut"].get((rut, normalized_label), "")
         row = current.get(rut)
         previous_user_id = int(row.user_id) if row is not None else None
@@ -293,6 +329,14 @@ def apply_debtor_assignments_service(
         row.normalized_label = normalized_label
         row.source_file = os.path.basename(source_file)
         row.source_hash = actual_hash
+        db.query(DeudorResumen).filter(
+            DeudorResumen.empresa == empresa_txt,
+            DeudorResumen.rut_afiliado == rut,
+        ).update({"ejecutivo_asignado": str(user.username or "").strip()}, synchronize_session=False)
+        db.query(DeudorDetalle).filter(
+            DeudorDetalle.empresa == empresa_txt,
+            DeudorDetalle.rut_afiliado == rut,
+        ).update({"ejecutivo_asignado": str(user.username or "").strip()}, synchronize_session=False)
         if previous_user_id != int(user.id):
             db.add(DebtorAssignmentAudit(
                 empresa=empresa_txt,
@@ -337,10 +381,11 @@ def apply_debtor_assignments_service(
     return {
         "empresa": empresa_txt,
         "source_file": os.path.basename(source_file),
-        "processed_debtors": len(source["labels_by_rut"]),
+        "processed_debtors": len(source_ruts),
         "assigned_debtors": assigned,
         "reassigned_debtors": reassigned,
         "unchanged_debtors": unchanged,
+        "unassigned_debtors": 0,
         "missing_debtors": missing,
         "aliases_saved": alias_count,
     }

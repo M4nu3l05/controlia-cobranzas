@@ -8,7 +8,7 @@ from datetime import datetime
 import pandas as pd
 
 from PyQt6.QtCore import QDateTime, QThread, QTimer, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel
 from PyQt6.QtWidgets import (
     QComboBox,
     QDateTimeEdit,
@@ -47,9 +47,116 @@ from auth.auth_service import (
 )
 from comisiones.service import guardar_tasas as guardar_tasas_comision, obtener_tasas as obtener_tasas_comision
 from core.paths import get_data_dir
+from core.db_migrations import Migration, apply_migrations
 from core.excel_export import write_excel_report
 from deudores.database import EMPRESAS, limpiar_empresa, limpiar_todas, eliminar_deudor_individual
 from deudores.gestiones_db import limpiar_gestiones, limpiar_gestiones_por_ruts
+
+
+def _m1_create_assignment_teams(con: sqlite3.Connection) -> None:
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS cartera_asignaciones (
+            empresa TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            is_primary INTEGER NOT NULL DEFAULT 0,
+            email TEXT,
+            username TEXT,
+            updated_at TEXT,
+            updated_by TEXT,
+            PRIMARY KEY (empresa, user_id)
+        )
+    """)
+
+
+def _m2_migrate_assignment_teams(con: sqlite3.Connection) -> None:
+    columns = con.execute("PRAGMA table_info(cartera_asignaciones)").fetchall()
+    names = {str(row[1]) for row in columns}
+    primary = {str(row[1]) for row in columns if int(row[5] or 0) > 0}
+    if "is_primary" in names and primary == {"empresa", "user_id"}:
+        return
+    con.execute("ALTER TABLE cartera_asignaciones RENAME TO cartera_asignaciones_legacy_v2")
+    _m1_create_assignment_teams(con)
+    con.execute("""
+        INSERT INTO cartera_asignaciones(
+            empresa, user_id, is_primary, email, username, updated_at, updated_by
+        )
+        SELECT empresa, user_id, 1, email, username, updated_at, updated_by
+        FROM cartera_asignaciones_legacy_v2
+        WHERE user_id IS NOT NULL
+    """)
+    con.execute("DROP TABLE cartera_asignaciones_legacy_v2")
+
+
+_ASSIGNMENT_MIGRATIONS = [
+    Migration(1, "Create portfolio assignment teams", _m1_create_assignment_teams),
+    Migration(2, "Migrate portfolio assignments to teams", _m2_migrate_assignment_teams),
+]
+
+
+class _CheckableUserCombo(QComboBox):
+    selectionChanged = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setEditable(True)
+        self.lineEdit().setReadOnly(True)
+        self.setModel(QStandardItemModel(self))
+        self.view().pressed.connect(self._toggle_item)
+        self._update_summary()
+
+    def set_users(self, users: list[dict]) -> None:
+        model = self.model()
+        model.clear()
+        for user in users:
+            item = QStandardItem(f"{user.get('username', '')} · {user.get('email', '')}")
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setData(Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+            item.setData(dict(user), Qt.ItemDataRole.UserRole)
+            model.appendRow(item)
+        self._update_summary()
+
+    def selected_users(self) -> list[dict]:
+        selected: list[dict] = []
+        model = self.model()
+        for row in range(model.rowCount()):
+            item = model.item(row)
+            if item.checkState() == Qt.CheckState.Checked:
+                data = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(data, dict):
+                    selected.append(dict(data))
+        return selected
+
+    def set_selected_ids(self, user_ids: set[int]) -> None:
+        model = self.model()
+        for row in range(model.rowCount()):
+            item = model.item(row)
+            data = item.data(Qt.ItemDataRole.UserRole) or {}
+            checked = int(data.get("id", 0) or 0) in user_ids
+            item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        self._update_summary()
+        self.selectionChanged.emit()
+
+    def _toggle_item(self, index) -> None:
+        item = self.model().itemFromIndex(index)
+        if item is None:
+            return
+        item.setCheckState(
+            Qt.CheckState.Unchecked
+            if item.checkState() == Qt.CheckState.Checked
+            else Qt.CheckState.Checked
+        )
+        self._update_summary()
+        self.selectionChanged.emit()
+
+    def _update_summary(self) -> None:
+        names = [str(user.get("username", "")).strip() for user in self.selected_users()]
+        if not names:
+            text = "— Sin asignación —"
+        elif len(names) <= 2:
+            text = ", ".join(names)
+        else:
+            text = f"{len(names)} supervisores seleccionados"
+        self.lineEdit().setText(text)
 
 
 class _AdminInitialLoadWorker(QThread):
@@ -83,7 +190,8 @@ class AdminCarterasWidget(QWidget):
         self._users_cache: list[dict] = []
         self._initial_worker: _AdminInitialLoadWorker | None = None
 
-        self._combos_asignacion: dict[str, QComboBox] = {}
+        self._combos_asignacion: dict[str, _CheckableUserCombo] = {}
+        self._combos_titular: dict[str, QComboBox] = {}
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -167,19 +275,7 @@ class AdminCarterasWidget(QWidget):
 
     def _con(self) -> sqlite3.Connection:
         con = sqlite3.connect(self._db_path())
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS cartera_asignaciones (
-                empresa TEXT PRIMARY KEY,
-                user_id INTEGER,
-                email TEXT,
-                username TEXT,
-                updated_at TEXT,
-                updated_by TEXT
-            )
-            """
-        )
-        con.commit()
+        apply_migrations(con, _ASSIGNMENT_MIGRATIONS)
         return con
 
     def _limpiar_asignaciones(self) -> None:
@@ -187,58 +283,56 @@ class AdminCarterasWidget(QWidget):
             con.execute("DELETE FROM cartera_asignaciones")
             con.commit()
 
-    def _guardar_asignacion(self, empresa: str, user_data: dict | None) -> None:
+    def _guardar_asignaciones_empresa(
+        self,
+        empresa: str,
+        users: list[dict],
+        primary_user_id: int | None,
+    ) -> None:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         updated_by = getattr(self._session, "username", "Sistema")
 
         with self._con() as con:
-            if user_data is None:
-                con.execute(
-                    "DELETE FROM cartera_asignaciones WHERE empresa = ?",
-                    (empresa,),
-                )
-            else:
+            con.execute("DELETE FROM cartera_asignaciones WHERE empresa = ?", (empresa,))
+            for user_data in users:
                 con.execute(
                     """
                     INSERT INTO cartera_asignaciones (
-                        empresa, user_id, email, username, updated_at, updated_by
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(empresa) DO UPDATE SET
-                        user_id=excluded.user_id,
-                        email=excluded.email,
-                        username=excluded.username,
-                        updated_at=excluded.updated_at,
-                        updated_by=excluded.updated_by
+                        empresa, user_id, is_primary, email, username, updated_at, updated_by
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         empresa,
                         int(user_data["id"]),
-                        str(user_data["email"]),
-                        str(user_data["username"]),
+                        1 if int(user_data["id"]) == int(primary_user_id or 0) else 0,
+                        str(user_data.get("email", "")),
+                        str(user_data.get("username", "")),
                         now,
                         updated_by,
                     ),
                 )
             con.commit()
 
-    def _obtener_asignaciones(self) -> dict[str, dict]:
+    def _obtener_asignaciones(self) -> dict[str, list[dict]]:
         with self._con() as con:
             rows = con.execute(
                 """
-                SELECT empresa, user_id, email, username, updated_at, updated_by
+                SELECT empresa, user_id, is_primary, email, username, updated_at, updated_by
                 FROM cartera_asignaciones
+                ORDER BY empresa, is_primary DESC, username
                 """
             ).fetchall()
 
-        salida: dict[str, dict] = {}
-        for empresa, user_id, email, username, updated_at, updated_by in rows:
-            salida[str(empresa)] = {
+        salida: dict[str, list[dict]] = {}
+        for empresa, user_id, is_primary, email, username, updated_at, updated_by in rows:
+            salida.setdefault(str(empresa), []).append({
                 "user_id": user_id,
+                "is_primary": bool(is_primary),
                 "email": email,
                 "username": username,
                 "updated_at": updated_at,
                 "updated_by": updated_by,
-            }
+            })
         return salida
 
     # ============================================================
@@ -441,7 +535,7 @@ class AdminCarterasWidget(QWidget):
         self.cmb_reemplazo_empresa.addItems(EMPRESAS)
         self.cmb_reemplazo_usuario = QComboBox()
         self._replacement_users: list[dict] = []
-        for user in self._obtener_ejecutivos_activos():
+        for user in self._obtener_supervisores_activos():
             self._replacement_users.append(user)
             self.cmb_reemplazo_usuario.addItem(
                 f"{user.get('username', '')} ({user.get('email', '')})",
@@ -613,24 +707,34 @@ class AdminCarterasWidget(QWidget):
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(10)
 
-        ejecutivos = self._obtener_ejecutivos_activos()
+        supervisores = self._obtener_supervisores_activos()
 
-        for row, empresa in enumerate(EMPRESAS):
+        grid.addWidget(QLabel("Isapre"), 0, 0)
+        grid.addWidget(QLabel("Supervisores asignados"), 0, 1)
+        grid.addWidget(QLabel("Titular"), 0, 2)
+
+        for row, empresa in enumerate(EMPRESAS, start=1):
             lbl = QLabel(empresa)
             lbl.setStyleSheet("color:#0f172a; font-weight:700;")
 
-            combo = QComboBox()
+            combo = _CheckableUserCombo()
             combo.setMinimumHeight(36)
             combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            combo.addItem("— Sin asignación —", None)
-            for user in ejecutivos:
-                display = f"{user['username']} · {user['email']}"
-                combo.addItem(display, user)
+            combo.set_users(supervisores)
+
+            primary_combo = QComboBox()
+            primary_combo.setMinimumHeight(36)
+            primary_combo.addItem("— Sin titular —", None)
+            combo.selectionChanged.connect(
+                lambda emp=empresa: self._sync_primary_combo(emp)
+            )
 
             self._combos_asignacion[empresa] = combo
+            self._combos_titular[empresa] = primary_combo
 
             grid.addWidget(lbl, row, 0)
             grid.addWidget(combo, row, 1)
+            grid.addWidget(primary_combo, row, 2)
 
         lay.addLayout(grid)
 
@@ -645,15 +749,34 @@ class AdminCarterasWidget(QWidget):
         row_btn.addWidget(self.btn_guardar_asignaciones)
         lay.addLayout(row_btn)
 
-    def _obtener_ejecutivos_activos(self) -> list[dict]:
+    def _obtener_supervisores_activos(self) -> list[dict]:
         users = list(self._users_cache)
 
         salida = []
         for u in users:
-            if str(u.get("role", "")).strip() == "ejecutivo" and bool(u.get("is_active", 0)):
+            if str(u.get("role", "")).strip().lower() == "supervisor" and bool(u.get("is_active", 0)):
                 salida.append(u)
         salida.sort(key=lambda x: str(x.get("username", "")).lower())
         return salida
+
+    def _sync_primary_combo(self, empresa: str, preferred_user_id: int | None = None) -> None:
+        assignment_combo = self._combos_asignacion[empresa]
+        primary_combo = self._combos_titular[empresa]
+        current_id = preferred_user_id if preferred_user_id is not None else primary_combo.currentData()
+        selected = assignment_combo.selected_users()
+        primary_combo.blockSignals(True)
+        primary_combo.clear()
+        primary_combo.addItem("— Sin titular —", None)
+        for user in selected:
+            primary_combo.addItem(
+                f"{user.get('username', '')} · {user.get('email', '')}",
+                int(user.get("id", 0) or 0),
+            )
+        target = primary_combo.findData(current_id)
+        if target < 0 and len(selected) == 1:
+            target = 1
+        primary_combo.setCurrentIndex(max(0, target))
+        primary_combo.blockSignals(False)
 
     def _start_initial_load(self) -> None:
         backend = bool(self._session and getattr(self._session, "auth_source", "") == "backend")
@@ -674,19 +797,17 @@ class AdminCarterasWidget(QWidget):
 
     def _populate_user_selectors(self, users: list[dict]) -> None:
         self._users_cache = [dict(user) for user in users]
-        ejecutivos = self._obtener_ejecutivos_activos()
-        for combo in self._combos_asignacion.values():
+        supervisores = self._obtener_supervisores_activos()
+        for empresa, combo in self._combos_asignacion.items():
             combo.blockSignals(True)
-            combo.clear()
-            combo.addItem("— Sin asignación —", None)
-            for user in ejecutivos:
-                combo.addItem(f"{user['username']} · {user['email']}", user)
+            combo.set_users(supervisores)
             combo.blockSignals(False)
+            self._sync_primary_combo(empresa)
 
-        self._replacement_users = list(ejecutivos)
+        self._replacement_users = list(supervisores)
         self.cmb_reemplazo_usuario.blockSignals(True)
         self.cmb_reemplazo_usuario.clear()
-        for user in ejecutivos:
+        for user in supervisores:
             self.cmb_reemplazo_usuario.addItem(
                 f"{user.get('username', '')} ({user.get('email', '')})",
                 int(user.get("id", 0) or 0),
@@ -699,24 +820,29 @@ class AdminCarterasWidget(QWidget):
             self._append_log(f"Error al cargar asignaciones desde backend: {err}")
             rows = []
         if isinstance(rows, dict):
-            asignaciones = rows
-        else:
             asignaciones = {
-                str(row.get("empresa", "")).strip(): row
-                for row in (rows or [])
-                if str(row.get("empresa", "")).strip()
+                empresa: value if isinstance(value, list) else [value]
+                for empresa, value in rows.items()
             }
+        else:
+            asignaciones: dict[str, list[dict]] = {}
+            for row in rows or []:
+                empresa = str(row.get("empresa", "")).strip()
+                if empresa:
+                    asignaciones.setdefault(empresa, []).append(row)
         for empresa, combo in self._combos_asignacion.items():
-            data = asignaciones.get(empresa)
-            user_id = data.get("user_id") if data else None
-            target = 0
-            if user_id:
-                for index in range(combo.count()):
-                    item = combo.itemData(index)
-                    if isinstance(item, dict) and int(item.get("id", 0) or 0) == int(user_id):
-                        target = index
-                        break
-            combo.setCurrentIndex(target)
+            data = asignaciones.get(empresa, [])
+            selected_ids = {
+                int(item.get("user_id", 0) or 0)
+                for item in data
+                if int(item.get("user_id", 0) or 0) > 0
+            }
+            primary_id = next(
+                (int(item.get("user_id")) for item in data if item.get("is_primary") and item.get("user_id")),
+                None,
+            )
+            combo.set_selected_ids(selected_ids)
+            self._sync_primary_combo(empresa, primary_id)
 
     def _apply_rate_values(self, value) -> None:
         tasas, err = value if isinstance(value, tuple) else (value, "")
@@ -782,40 +908,9 @@ class AdminCarterasWidget(QWidget):
     def _cargar_asignaciones(self):
         if self._session and getattr(self._session, "auth_source", "") == "backend":
             asignaciones_rows, err = backend_list_cartera_asignaciones(self._session)
-            if err:
-                self._append_log(f"Error al cargar asignaciones desde backend: {err}")
-                asignaciones = {}
-            else:
-                asignaciones = {}
-                for row in asignaciones_rows:
-                    empresa = str(row.get("empresa", "")).strip()
-                    if empresa:
-                        asignaciones[empresa] = {
-                            "user_id": row.get("user_id"),
-                            "email": row.get("email", ""),
-                            "username": row.get("username", ""),
-                            "updated_at": row.get("updated_at", ""),
-                            "updated_by": row.get("updated_by", ""),
-                        }
+            self._apply_assignment_values((asignaciones_rows, err))
         else:
-            asignaciones = self._obtener_asignaciones()
-
-        for empresa, combo in self._combos_asignacion.items():
-            data = asignaciones.get(empresa)
-            if not data:
-                combo.setCurrentIndex(0)
-                continue
-
-            user_id = data.get("user_id")
-            found = False
-            for i in range(combo.count()):
-                item_data = combo.itemData(i)
-                if isinstance(item_data, dict) and int(item_data.get("id", 0)) == int(user_id):
-                    combo.setCurrentIndex(i)
-                    found = True
-                    break
-            if not found:
-                combo.setCurrentIndex(0)
+            self._apply_assignment_values(self._obtener_asignaciones())
 
         self._cargar_comisiones()
 
@@ -1068,19 +1163,34 @@ class AdminCarterasWidget(QWidget):
 
     def _accion_guardar_asignaciones(self):
         cambios = 0
-
-        if self._session and getattr(self._session, "auth_source", "") == "backend":
-            assignments: list[dict] = []
-            for empresa, combo in self._combos_asignacion.items():
-                user_data = combo.currentData()
-                assignments.append(
+        assignments: list[dict] = []
+        values_by_company: dict[str, tuple[list[dict], int | None]] = {}
+        for empresa, combo in self._combos_asignacion.items():
+            selected = combo.selected_users()
+            primary_id = self._combos_titular[empresa].currentData()
+            selected_ids = {int(user.get("id", 0) or 0) for user in selected}
+            if selected and int(primary_id or 0) not in selected_ids:
+                QMessageBox.warning(
+                    self,
+                    "Falta supervisor titular",
+                    f"Selecciona un supervisor titular para {empresa}.",
+                )
+                return
+            values_by_company[empresa] = (selected, int(primary_id) if primary_id else None)
+            if not selected:
+                assignments.append({"empresa": empresa, "user_id": None, "is_primary": False})
+            else:
+                assignments.extend(
                     {
                         "empresa": empresa,
-                        "user_id": int(user_data["id"]) if isinstance(user_data, dict) and user_data.get("id") else None,
+                        "user_id": int(user["id"]),
+                        "is_primary": int(user["id"]) == int(primary_id),
                     }
+                    for user in selected
                 )
-                cambios += 1
+            cambios += 1
 
+        if self._session and getattr(self._session, "auth_source", "") == "backend":
             _, err = backend_save_cartera_asignaciones(self._session, assignments=assignments)
             if err:
                 self._append_log(f"Error al guardar asignaciones backend: {err}")
@@ -1089,13 +1199,11 @@ class AdminCarterasWidget(QWidget):
 
             # Mantiene espejo local para consultas de UI en modo escritorio.
             self._limpiar_asignaciones()
-            for empresa, combo in self._combos_asignacion.items():
-                self._guardar_asignacion(empresa, combo.currentData())
+            for empresa, (selected, primary_id) in values_by_company.items():
+                self._guardar_asignaciones_empresa(empresa, selected, primary_id)
         else:
-            for empresa, combo in self._combos_asignacion.items():
-                user_data = combo.currentData()
-                self._guardar_asignacion(empresa, user_data)
-                cambios += 1
+            for empresa, (selected, primary_id) in values_by_company.items():
+                self._guardar_asignaciones_empresa(empresa, selected, primary_id)
 
         tasas = {empresa: float(spin.value()) for empresa, spin in self._spins_comision.items()}
         err_comision = guardar_tasas_comision(self._session, tasas)

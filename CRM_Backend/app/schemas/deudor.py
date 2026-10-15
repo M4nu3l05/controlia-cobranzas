@@ -25,6 +25,9 @@ class DeudorListItem(BaseModel):
     telefono_fijo_afiliado: str = ""
     telefono_movil_afiliado: str = ""
     direccion_deudor: str = ""
+    assigned_user_id: int | None = None
+    assigned_username: str = ""
+    assigned_user_email: str = ""
 
 
 class DeudorListResponse(BaseModel):
@@ -95,6 +98,9 @@ class DeudorDetalleItem(BaseModel):
 class DeudorDetalleResponse(BaseModel):
     rut: str
     empresa: str = ""
+    assigned_user_id: int | None = None
+    assigned_username: str = ""
+    assigned_user_email: str = ""
     resumen: DeudorListItem | None = None
     detalle: list[DeudorDetalleItem] = Field(default_factory=list)
 
@@ -111,6 +117,7 @@ class ImportDeudoresResponse(BaseModel):
     detalle_birlados: int = 0
     import_batch_id: int | None = None
     asignaciones_aplicadas: int = 0
+    deudores_sin_asignar: int = 0
 
 
 class BirladoPreviewItem(BaseModel):
@@ -155,6 +162,8 @@ class DebtorAssignmentPreviewResponse(BaseModel):
     existing_debtors: int
     missing_debtors: int
     blank_assignments: int
+    blank_default_user_id: int | None = None
+    blank_default_username: str = ""
     conflicting_debtors: int
     unresolved_labels: int
     matches: list[DebtorAssignmentMatchItem] = Field(default_factory=list)
@@ -167,6 +176,7 @@ class DebtorAssignmentApplyResponse(BaseModel):
     assigned_debtors: int
     reassigned_debtors: int
     unchanged_debtors: int
+    unassigned_debtors: int = 0
     missing_debtors: int
     aliases_saved: int
 

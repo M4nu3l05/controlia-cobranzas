@@ -5,7 +5,7 @@ import hashlib
 import uuid
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import and_, case, inspect, or_, func, select
+from sqlalchemy import and_, case, false, inspect, or_, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -17,6 +17,7 @@ from app.models.user import User
 from app.core.authorization import (
     assigned_user_id_for_company,
     assigned_user_id_for_debtor,
+    executive_debtor_visibility_scope,
     require_supervisor,
 )
 from app.core.text_utils import fix_mojibake_text
@@ -74,7 +75,39 @@ def _rut_db_expr(column):
 
 
 def _has_debtor_assignments_table(db: Session) -> bool:
-    return inspect(db.get_bind()).has_table("debtor_user_assignments")
+    return inspect(db.connection()).has_table("debtor_user_assignments")
+
+
+def _apply_executive_visibility_scope(query, db: Session, user_id: int):
+    full_companies, owner_ids_by_company = executive_debtor_visibility_scope(
+        db, int(user_id)
+    )
+    clauses = []
+    if full_companies:
+        clauses.append(
+            func.lower(func.trim(DeudorResumen.empresa)).in_(
+                [company.strip().lower() for company in full_companies]
+            )
+        )
+
+    for company, owner_ids in owner_ids_by_company.items():
+        assignment_exists = select(DebtorUserAssignment.id).where(
+            and_(
+                func.lower(func.trim(DebtorUserAssignment.empresa))
+                == func.lower(func.trim(DeudorResumen.empresa)),
+                _rut_db_expr(DebtorUserAssignment.rut_afiliado)
+                == _rut_db_expr(DeudorResumen.rut_afiliado),
+                DebtorUserAssignment.user_id.in_(sorted(owner_ids)),
+            )
+        ).exists()
+        clauses.append(
+            and_(
+                func.lower(func.trim(DeudorResumen.empresa)) == company.strip().lower(),
+                assignment_exists,
+            )
+        )
+
+    return query.filter(or_(*clauses) if clauses else false())
 
 
 def _saldo_pendiente_detalle(row: DeudorDetalle) -> float:
@@ -177,8 +210,13 @@ def delete_deudor_individual_service(
     return bool(deleted_detalle or deleted_resumen or deleted_gestiones or deleted_assignments)
 
 
-def _to_resumen_item(row: DeudorResumen, contact: dict | None = None) -> DeudorListItem:
+def _to_resumen_item(
+    row: DeudorResumen,
+    contact: dict | None = None,
+    assignment: dict | None = None,
+) -> DeudorListItem:
     contact = contact or {}
+    assignment = assignment or {}
     return DeudorListItem(
         empresa=row.empresa,
         rut_afiliado=row.rut_afiliado,
@@ -199,7 +237,46 @@ def _to_resumen_item(row: DeudorResumen, contact: dict | None = None) -> DeudorL
         telefono_fijo_afiliado=_norm_text(contact.get("telefono_fijo_afiliado", "")),
         telefono_movil_afiliado=_norm_text(contact.get("telefono_movil_afiliado", "")),
         direccion_deudor=_norm_text(contact.get("direccion_deudor", "")),
+        assigned_user_id=assignment.get("user_id"),
+        assigned_username=_norm_text(assignment.get("username", getattr(row, "ejecutivo_asignado", ""))),
+        assigned_user_email=_norm_text(assignment.get("email", "")),
     )
+
+
+def _responsables_para_resumen(
+    db: Session,
+    rows: list[DeudorResumen],
+) -> dict[tuple[str, str], dict]:
+    if not rows or not _has_debtor_assignments_table(db):
+        return {}
+
+    por_empresa: dict[str, set[str]] = {}
+    for row in rows:
+        empresa = _norm_text(row.empresa)
+        rut = _norm_rut(row.rut_afiliado)
+        if empresa and rut:
+            por_empresa.setdefault(empresa, set()).add(rut)
+
+    responsables: dict[tuple[str, str], dict] = {}
+    for empresa, ruts in por_empresa.items():
+        for inicio in range(0, len(ruts), 400):
+            lote = sorted(ruts)[inicio:inicio + 400]
+            assignment_rows = (
+                db.query(DebtorUserAssignment, User)
+                .join(User, User.id == DebtorUserAssignment.user_id)
+                .filter(
+                    DebtorUserAssignment.empresa == empresa,
+                    DebtorUserAssignment.rut_afiliado.in_(lote),
+                )
+                .all()
+            )
+            for assignment, user in assignment_rows:
+                responsables[(empresa, _norm_rut(assignment.rut_afiliado))] = {
+                    "user_id": int(user.id),
+                    "username": str(user.username or "").strip(),
+                    "email": str(user.email or "").strip(),
+                }
+    return responsables
 
 
 def _contactos_para_resumen(
@@ -306,11 +383,16 @@ def list_destinatarios_service(
     limit: int = 5000,
     empresas_permitidas: list[str] | None = None,
     assigned_user_id: int | None = None,
+    executive_user_id: int | None = None,
 ) -> list[DestinatarioItem]:
     empresa_txt = _norm_text(empresa)
     periodo_txt = _norm_text(periodo_carga)
 
     resumen_q = db.query(DeudorResumen)
+    if executive_user_id is not None:
+        resumen_q = _apply_executive_visibility_scope(
+            resumen_q, db, int(executive_user_id)
+        )
     if assigned_user_id is not None:
         resumen_q = resumen_q.join(
             DebtorUserAssignment,
@@ -395,8 +477,12 @@ def list_deudores_service(
     include_contact: bool = False,
     empresas_permitidas: list[str] | None = None,
     assigned_user_id: int | None = None,
+    executive_user_id: int | None = None,
 ) -> DeudorListResponse:
     query = db.query(DeudorResumen)
+
+    if executive_user_id is not None:
+        query = _apply_executive_visibility_scope(query, db, int(executive_user_id))
 
     if assigned_user_id is not None:
         query = query.join(
@@ -450,10 +536,12 @@ def list_deudores_service(
     )
 
     contactos = _contactos_para_resumen(db, rows) if include_contact else {}
+    responsables = _responsables_para_resumen(db, rows)
     items = [
         _to_resumen_item(
             row,
             contactos.get((_norm_text(row.empresa), _norm_rut(row.rut_afiliado))),
+            responsables.get((_norm_text(row.empresa), _norm_rut(row.rut_afiliado))),
         )
         for row in rows
     ]
@@ -509,11 +597,36 @@ def get_deudor_detalle_service(
     empresa_resp = empresa_txt or (
         resumen_row.empresa if resumen_row else detalle_rows[0].empresa
     )
+    assignment_map = _responsables_para_resumen(
+        db,
+        [resumen_row] if resumen_row else [],
+    )
+    assignment = assignment_map.get((empresa_resp, rut_norm), {})
+    if not assignment and _has_debtor_assignments_table(db):
+        assignment_row = (
+            db.query(DebtorUserAssignment, User)
+            .join(User, User.id == DebtorUserAssignment.user_id)
+            .filter(
+                DebtorUserAssignment.empresa == empresa_resp,
+                DebtorUserAssignment.rut_afiliado == rut_norm,
+            )
+            .first()
+        )
+        if assignment_row:
+            assignment_link, assignment_user = assignment_row
+            assignment = {
+                "user_id": int(assignment_user.id),
+                "username": str(assignment_user.username or "").strip(),
+                "email": str(assignment_user.email or "").strip(),
+            }
 
     return DeudorDetalleResponse(
         rut=rut_norm,
         empresa=empresa_resp,
-        resumen=_to_resumen_item(resumen_row) if resumen_row else None,
+        assigned_user_id=assignment.get("user_id"),
+        assigned_username=_norm_text(assignment.get("username", "")),
+        assigned_user_email=_norm_text(assignment.get("email", "")),
+        resumen=_to_resumen_item(resumen_row, assignment=assignment) if resumen_row else None,
         detalle=[_to_detalle_item(row) for row in detalle_rows],
     )
 
@@ -901,10 +1014,16 @@ def get_dashboard_summary_service(
     empresas: list[str] | None = None,
     periodo_carga: str = "",
     assigned_user_id: int | None = None,
+    executive_user_id: int | None = None,
 ) -> DashboardSummaryResponse:
     empresas = [str(e).strip() for e in (empresas or []) if str(e).strip()]
 
     resumen_base_query = db.query(DeudorResumen)
+
+    if executive_user_id is not None:
+        resumen_base_query = _apply_executive_visibility_scope(
+            resumen_base_query, db, int(executive_user_id)
+        )
 
     if assigned_user_id is not None:
         resumen_base_query = resumen_base_query.join(

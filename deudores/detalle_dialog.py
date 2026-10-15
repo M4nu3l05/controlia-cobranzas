@@ -268,6 +268,13 @@ def _backend_detalle_response_to_local(payload: dict) -> tuple[pd.DataFrame, dic
         "Dv": str(resumen_raw.get("dv", "")).strip(),
         "_RUT_COMPLETO": str(resumen_raw.get("rut_completo", "")).strip(),
         "Nombre_Afiliado": str(resumen_raw.get("nombre_afiliado", "")).strip(),
+        "Ejecutiva_responsable": str(
+            payload.get("assigned_username") or resumen_raw.get("assigned_username") or ""
+        ).strip(),
+        "_assigned_user_id": payload.get("assigned_user_id", resumen_raw.get("assigned_user_id")),
+        "_assigned_user_email": str(
+            payload.get("assigned_user_email") or resumen_raw.get("assigned_user_email") or ""
+        ).strip(),
         "Estado_deudor": str(resumen_raw.get("estado_deudor", "")).strip() or "Sin Gestión",
         "BN": str(resumen_raw.get("bn", "")).strip(),
         "Nro_Expediente": str(resumen_raw.get("nro_expediente", "")).strip(),
@@ -332,6 +339,12 @@ class _KpiCard(QFrame):
 
 
 class _DeudaModel(QStandardItemModel):
+    ENCABEZADOS_VISIBLES = {
+        "N° Expediente": "Folio cuenta",
+        "No Licencia": "Folio cuenta",
+        "No de Licencia": "Folio cuenta",
+    }
+
     COLS_MONTO = {
         "Copago ($)",
         "Total Pagos ($)",
@@ -355,11 +368,12 @@ class _DeudaModel(QStandardItemModel):
 
     def __init__(self, filas: list, parent=None):
         super().__init__(parent)
-        encabezados = [etq for etq, _ in COLUMNAS_DETALLE_DEUDA]
+        claves_columnas = [etq for etq, _ in COLUMNAS_DETALLE_DEUDA]
+        encabezados = [self.ENCABEZADOS_VISIBLES.get(etq, etq) for etq in claves_columnas]
         self.setHorizontalHeaderLabels(encabezados)
         for fila in filas:
             items = []
-            for etq in encabezados:
+            for etq in claves_columnas:
                 val = fila.get(etq, "")
 
                 if etq in self.COLS_MONTO:
@@ -1289,6 +1303,13 @@ class _CorreoDeudorMixin:
         claves = {
             "RUT": ["RUT", "Rut", "rut"],
             "Nombre": ["Nombre", "Nombre_Afiliado", "nombre_afiliado"],
+            "Estado del deudor": ["Estado del deudor", "Estado_deudor", "estado_deudor"],
+            "Supervisor responsable": [
+                "Supervisor responsable",
+                "Ejecutiva responsable",
+                "Ejecutiva_responsable",
+                "assigned_username",
+            ],
             "Correo": ["Correo", "mail_afiliado", "Mail Emp"],
             "Correo (Excel)": ["Correo (Excel)", "BN"],
             "Teléfono Fijo": ["Teléfono Fijo", "Tel?fono Fijo", "telefono_fijo_afiliado", "Telefono Empleador"],
@@ -1387,9 +1408,24 @@ class _CorreoDeudorMixin:
         self._filas_deuda = [fila]
 
     def _aplicar_fallbacks_info_cliente(self) -> None:
+        estado_actual = (
+            self._fila_resumen.get("Estado_deudor", "")
+            or self._info_cliente.get("Estado del deudor", "")
+            or self._info_cliente.get("Estado_deudor", "")
+            or "Sin Gestión"
+        )
+        responsable_actual = (
+            self._fila_resumen.get("Ejecutiva_responsable", "")
+            or self._info_cliente.get("Supervisor responsable", "")
+            or self._info_cliente.get("Ejecutiva responsable", "")
+            or self._info_cliente.get("Ejecutiva_responsable", "")
+            or "Sin responsable"
+        )
         fallbacks = {
             "RUT": self._resolver_rut_cliente(),
             "Nombre": self._fila_resumen.get("Nombre_Afiliado", ""),
+            "Estado del deudor": estado_actual,
+            "Supervisor responsable": responsable_actual,
             "Correo": self._fila_resumen.get("mail_afiliado", "") or self._fila_resumen.get("Mail Emp", ""),
             "Correo (Excel)": self._fila_resumen.get("BN", "") or self._fila_resumen.get("Mail Emp", ""),
             "Teléfono Fijo": self._fila_resumen.get("telefono_fijo_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
@@ -2605,7 +2641,7 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
             self._filas_deuda = filas_deuda or []
             self._alinear_detalle_con_resumen_backend()
             self._sincronizar_resumen_financiero_desde_detalle()
-            self._normalizar_campos_info_cliente()
+            self._aplicar_fallbacks_info_cliente()
 
             self._refrescar_labels_cliente()
             self._actualizar_tabla_detalle()
@@ -2640,20 +2676,7 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
         self._info_cliente = info_cliente or self._info_cliente
         self._filas_deuda = filas_deuda or []
 
-        fallbacks = {
-            "RUT": self._resolver_rut_cliente(),
-            "Nombre": self._fila_resumen.get("Nombre_Afiliado", ""),
-            "Correo": self._fila_resumen.get("mail_afiliado", "") or self._fila_resumen.get("Mail Emp", ""),
-            "Correo (Excel)": self._fila_resumen.get("BN", "") or self._fila_resumen.get("Mail Emp", ""),
-            "Teléfono Fijo": self._fila_resumen.get("telefono_fijo_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
-            "Teléfono Móvil": self._fila_resumen.get("telefono_movil_afiliado", "") or self._fila_resumen.get("Telefono Empleador", ""),
-        }
-        for k, v in fallbacks.items():
-            actual = str(self._info_cliente.get(k, "")).strip()
-            if actual in ("", "â€”", "nan", "None", "N"):
-                limpio = str(v).strip()
-                self._info_cliente[k] = limpio if limpio not in ("", "nan", "None", "N") else "â€”"
-        self._normalizar_campos_info_cliente()
+        self._aplicar_fallbacks_info_cliente()
 
         self._normalizar_fila_resumen_backend()
         self._alinear_detalle_con_resumen_backend()

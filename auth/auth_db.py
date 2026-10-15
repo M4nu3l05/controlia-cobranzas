@@ -3,7 +3,7 @@
 #
 #  Base de datos de autenticacion — PBKDF2-HMAC-SHA256
 #  Tablas : users, reset_tokens
-#  Roles  : admin | supervisor | ejecutivo
+#  Roles  : admin | supervisor
 # ================================================================
 
 from __future__ import annotations
@@ -30,7 +30,6 @@ _RESET_EXPIRY = 15
 ROLES = {
     "admin":      "Administrador",
     "supervisor": "Supervisor",
-    "ejecutivo":  "Ejecutivo",
 }
 ROLE_ADMIN      = "admin"
 ROLE_SUPERVISOR = "supervisor"
@@ -52,7 +51,7 @@ class UserSession:
             user_id=row["id"],
             email=row["email"],
             username=row["username"],
-            role=row.get("role", ROLE_EJECUTIVO),
+            role=row.get("role", ROLE_SUPERVISOR),
             is_active=bool(row["is_active"]),
             must_change_password=bool(row.get("must_change_password", 0)),
         )
@@ -83,7 +82,7 @@ def _m1_create_users(con: sqlite3.Connection) -> None:
             username             TEXT    NOT NULL,
             password_hash        TEXT    NOT NULL,
             salt                 TEXT    NOT NULL,
-            role                 TEXT    NOT NULL DEFAULT 'ejecutivo',
+            role                 TEXT    NOT NULL DEFAULT 'supervisor',
             is_active            INTEGER NOT NULL DEFAULT 1,
             must_change_password INTEGER NOT NULL DEFAULT 0,
             created_at           TEXT    NOT NULL,
@@ -109,7 +108,7 @@ def _m2_create_reset_tokens(con: sqlite3.Connection) -> None:
 
 def _m3_add_role_and_mcp(con: sqlite3.Connection) -> None:
     for col, defn in [
-        ("role",                 "TEXT NOT NULL DEFAULT 'ejecutivo'"),
+        ("role",                 "TEXT NOT NULL DEFAULT 'supervisor'"),
         ("must_change_password", "INTEGER NOT NULL DEFAULT 0"),
     ]:
         try:
@@ -118,10 +117,15 @@ def _m3_add_role_and_mcp(con: sqlite3.Connection) -> None:
             pass
 
 
+def _m4_promote_executives(con: sqlite3.Connection) -> None:
+    con.execute("UPDATE users SET role='supervisor' WHERE LOWER(TRIM(role))='ejecutivo'")
+
+
 MIGRATIONS = [
     Migration(1, "Create users table",          _m1_create_users),
     Migration(2, "Create reset_tokens table",   _m2_create_reset_tokens),
     Migration(3, "Add role and must_change_pw", _m3_add_role_and_mcp),
+    Migration(4, "Promote executive users to supervisor", _m4_promote_executives),
 ]
 
 
@@ -155,9 +159,10 @@ def create_user(
     email: str,
     username: str,
     password: str,
-    role: str = ROLE_EJECUTIVO,
+    role: str = ROLE_SUPERVISOR,
     must_change_password: bool = False,
 ) -> dict:
+    role = ROLE_SUPERVISOR if str(role or "").strip().lower() == ROLE_EJECUTIVO else str(role or "").strip().lower()
     if role not in ROLES:
         raise ValueError(f"Rol no valido: '{role}'. Usa: {', '.join(ROLES)}")
     email_norm = email.strip().lower()
@@ -223,6 +228,7 @@ def update_user(user_id: int, username: str = None,
         fields.append("username=?")
         vals.append(username.strip())
     if role is not None:
+        role = ROLE_SUPERVISOR if str(role or "").strip().lower() == ROLE_EJECUTIVO else str(role or "").strip().lower()
         if role not in ROLES:
             raise ValueError(f"Rol no valido: '{role}'")
         fields.append("role=?")

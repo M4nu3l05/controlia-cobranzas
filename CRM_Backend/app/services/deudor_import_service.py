@@ -1137,6 +1137,7 @@ def import_deudores_excel_service(
     expected_file_sha256: str,
     confirm_birlados: bool,
     column_mapping: dict | None = None,
+    assignment_overrides: dict[str, int] | None = None,
 ) -> dict:
     empresa_txt = str(empresa or "").strip()
     if empresa_txt not in EMPRESAS_VALIDAS:
@@ -1306,20 +1307,16 @@ def import_deudores_excel_service(
         resumen_insertados = len(resumen_objs)
     db.flush()
 
-    assignment_result = None
-    try:
-        assignment_result = apply_debtor_assignments_service(
-            db,
-            empresa=empresa_txt,
-            content=content,
-            source_file=source_file,
-            executor=executor,
-            expected_file_sha256=actual_hash,
-            commit=False,
-        )
-    except ValueError as exc:
-        if "No se encontraron en una misma hoja" not in str(exc):
-            raise
+    assignment_result = apply_debtor_assignments_service(
+        db,
+        empresa=empresa_txt,
+        content=content,
+        source_file=source_file,
+        executor=executor,
+        expected_file_sha256=actual_hash,
+        overrides=assignment_overrides,
+        commit=False,
+    )
     db.commit()
 
     return {
@@ -1336,5 +1333,8 @@ def import_deudores_excel_service(
         "asignaciones_aplicadas": int(
             (assignment_result or {}).get("assigned_debtors", 0)
             + (assignment_result or {}).get("reassigned_debtors", 0)
+        ),
+        "deudores_sin_asignar": int(
+            (assignment_result or {}).get("unassigned_debtors", 0)
         ),
     }

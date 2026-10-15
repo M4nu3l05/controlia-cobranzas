@@ -12,9 +12,6 @@ from app.schemas.deudor import DashboardSummaryResponse
 from app.schemas.session_history import DashboardSessionsResponse
 from app.services.deudor_service import get_dashboard_summary_service
 from app.services.session_history_service import list_sessions_month, list_sessions_today
-from app.services.user_service import get_current_user_carteras_service
-from app.services.debtor_assignment_service import user_has_debtor_assignments
-
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
 
@@ -34,25 +31,21 @@ def dashboard_summary(
     current_user: User = Depends(get_current_user),
 ):
     empresas_list = [e.strip() for e in empresas.split(",") if e.strip()]
-    assigned_user_id = None
+    executive_user_id = None
     if getattr(current_user, "role", "") == "ejecutivo":
-        empresas_list = get_current_user_carteras_service(
-            db=db,
-            executor=current_user,
-        )
-        if user_has_debtor_assignments(db, int(current_user.id)):
-            assigned_user_id = int(current_user.id)
+        empresas_list = []
+        executive_user_id = int(current_user.id)
     return get_dashboard_summary_service(
         db,
         empresas=empresas_list,
         periodo_carga=periodo_carga,
-        assigned_user_id=assigned_user_id,
+        executive_user_id=executive_user_id,
     )
 
 
 @router.get("/sessions", response_model=DashboardSessionsResponse)
 def dashboard_sessions(
-    role: str = Query(default="ejecutivo"),
+    role: str = Query(default="supervisor"),
     year: int | None = Query(default=None),
     month: int | None = Query(default=None),
     db: Session = Depends(get_db),

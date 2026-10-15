@@ -28,7 +28,12 @@ from app.services.deudor_import_service import (
 
 def _excel_cart56() -> bytes:
     df = pd.DataFrame([
-        {"RUT Emp": "12.345.678-5", "No Licencia": "LIC-1", "Mto Pagar": "10000"},
+        {
+            "RUT Emp": "12.345.678-5",
+            "No Licencia": "LIC-1",
+            "Mto Pagar": "10000",
+            "Ejecutiva": "supervisor_prueba",
+        },
     ])
     output = BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:

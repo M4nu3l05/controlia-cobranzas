@@ -55,7 +55,7 @@ def close_session(
 def list_sessions_today(
     db: Session,
     *,
-    role: str = "ejecutivo",
+    role: str = "supervisor",
 ) -> list[UserSessionHistory]:
     today = date.today()
     return (
@@ -76,7 +76,7 @@ def list_sessions_month(
     *,
     year: int,
     month: int,
-    role: str = "ejecutivo",
+    role: str = "supervisor",
 ) -> list[UserSessionHistory]:
     return (
         db.query(UserSessionHistory)

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 import app.db.base  # noqa: F401 - registra todos los modelos en Base.metadata
@@ -238,6 +238,79 @@ def _migration_9_debtor_user_assignments(db: Session) -> None:
     DebtorAssignmentAudit.__table__.create(bind=bind, checkfirst=True)
 
 
+def _migration_10_supervisor_portfolio_teams(db: Session) -> None:
+    bind = db.get_bind()
+    inspector = inspect(db.connection()) if bind is not None else None
+    if inspector is not None and inspector.has_table("users"):
+        db.execute(text(
+            "UPDATE users SET role = 'supervisor' WHERE LOWER(TRIM(role)) = 'ejecutivo'"
+        ))
+
+    if inspector is None or not inspector.has_table("cartera_asignaciones"):
+        ensure_cartera_assignments_table(db, commit=False)
+    else:
+        columns = {str(column["name"]) for column in inspector.get_columns("cartera_asignaciones")}
+        pk_constraint = inspector.get_pk_constraint("cartera_asignaciones") or {}
+        pk_columns = set(pk_constraint.get("constrained_columns") or [])
+        is_new_schema = "is_primary" in columns and pk_columns == {"empresa", "user_id"}
+        if not is_new_schema:
+            db.execute(text("ALTER TABLE cartera_asignaciones RENAME TO cartera_asignaciones_legacy_v10"))
+            # PostgreSQL conserva el nombre del indice/constraint al renombrar
+            # la tabla. Hay que liberarlo antes de crear la nueva PK, cuyo
+            # nombre automatico vuelve a ser cartera_asignaciones_pkey.
+            pk_name = str(pk_constraint.get("name") or "").strip()
+            if db.get_bind().dialect.name != "sqlite" and pk_name:
+                quoted_pk = db.get_bind().dialect.identifier_preparer.quote(pk_name)
+                db.execute(text(
+                    "ALTER TABLE cartera_asignaciones_legacy_v10 "
+                    f"DROP CONSTRAINT {quoted_pk}"
+                ))
+            ensure_cartera_assignments_table(db, commit=False)
+            db.execute(text("""
+                INSERT INTO cartera_asignaciones (
+                    empresa, user_id, is_primary, email, username, updated_at, updated_by
+                )
+                SELECT empresa, user_id, TRUE, email, username, updated_at, updated_by
+                FROM cartera_asignaciones_legacy_v10
+                WHERE user_id IS NOT NULL
+            """))
+            db.execute(text("DROP TABLE cartera_asignaciones_legacy_v10"))
+        else:
+            ensure_cartera_assignments_table(db, commit=False)
+
+    db.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_cartera_asignacion_primary "
+        "ON cartera_asignaciones(empresa) WHERE is_primary = TRUE"
+    ))
+
+    # Las relaciones por ID son la fuente de verdad. Al migrar, actualizamos los
+    # campos heredados para que reportes y pantallas antiguas muestren el nombre
+    # canónico del supervisor responsable desde el primer arranque.
+    refreshed_inspector = inspect(db.connection()) if bind is not None else None
+    available_tables = set(refreshed_inspector.get_table_names()) if refreshed_inspector else set()
+    if {"debtor_user_assignments", "users"}.issubset(available_tables):
+        for table_name in ("deudores_resumen", "deudores_detalle"):
+            if table_name not in available_tables:
+                continue
+            db.execute(text(f"""
+                UPDATE {table_name}
+                SET ejecutivo_asignado = (
+                    SELECT users.username
+                    FROM debtor_user_assignments
+                    JOIN users ON users.id = debtor_user_assignments.user_id
+                    WHERE debtor_user_assignments.empresa = {table_name}.empresa
+                      AND debtor_user_assignments.rut_afiliado = {table_name}.rut_afiliado
+                    LIMIT 1
+                )
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM debtor_user_assignments
+                    WHERE debtor_user_assignments.empresa = {table_name}.empresa
+                      AND debtor_user_assignments.rut_afiliado = {table_name}.rut_afiliado
+                )
+            """))
+
+
 MIGRATIONS = (
     BackendMigration(1, "Registrar y completar el esquema CRM heredado", _migration_1_legacy_schema),
     BackendMigration(2, "Auditoría, notificaciones, derivaciones y reemplazos", _migration_2_operations),
@@ -248,6 +321,7 @@ MIGRATIONS = (
     BackendMigration(7, "Comisiones por cartera y cortes de pago", _migration_7_commissions),
     BackendMigration(8, "Fechas normalizadas e indices para dashboard", _migration_8_dashboard_indexes),
     BackendMigration(9, "Asignacion individual de deudores a ejecutivas", _migration_9_debtor_user_assignments),
+    BackendMigration(10, "Supervisores responsables y equipos de cartera", _migration_10_supervisor_portfolio_teams),
 )
 
 

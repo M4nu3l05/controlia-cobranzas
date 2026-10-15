@@ -16,7 +16,7 @@ Guía corta para reconstruir `ControliaCobranzas_Setup_<version>.exe` después d
 1. **Subir la versión** en `installer\ControliaCobranzas.iss`:
 
    ```
-   #define MyAppVersion "2.4.0"
+   #define MyAppVersion "2.4.5"
    ```
 
    El `AppId` **no se toca**: es el que hace que el setup actualice la instalación
@@ -29,10 +29,14 @@ Guía corta para reconstruir `ControliaCobranzas_Setup_<version>.exe` después d
    ```
 
    Ese script hace todo en orden:
-   - activa `.venv` e instala `requirements.txt` + `pyinstaller`;
+   - usa `.venv` e instala `requirements.txt` + `requirements-build.txt`;
+   - limpia el `PATH` de herramientas externas que puedan contaminar el bundle;
    - borra `build\` y `dist\` y compila con `pyinstaller ControliaCobranzas.spec --noconfirm --clean`;
    - compila `installer\ControliaCobranzas.iss` con Inno Setup;
    - deja el instalador en `installer\output\` y copia una copia al Escritorio.
+
+   La compilación se detiene automáticamente si detecta DLLs de sistema ajenas
+   o si el ejecutable no logra cargar PyQt6/QtWidgets.
 
 3. **Verificar** antes de repartirlo:
 

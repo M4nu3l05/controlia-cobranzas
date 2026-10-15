@@ -1327,7 +1327,7 @@ class DashboardWidget(QWidget):
                 legacy._session = self._session
                 return legacy._backend_session_history()
             now = datetime.now()
-            return obtener_conexiones_hoy(role="ejecutivo"), obtener_conexiones_mes(now.year, now.month, role="ejecutivo")
+            return obtener_conexiones_hoy(role="supervisor"), obtener_conexiones_mes(now.year, now.month, role="supervisor")
         except Exception:
             return None
 

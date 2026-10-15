@@ -63,11 +63,17 @@ def obtener_asignacion_por_empresa_local(empresa: str) -> dict:
         with sqlite3.connect(path) as con:
             if not _table_exists(con, 'cartera_asignaciones'):
                 return {}
+            columns = {
+                str(row[1]) for row in con.execute("PRAGMA table_info(cartera_asignaciones)").fetchall()
+            }
+            order_clause = "ORDER BY is_primary DESC, user_id" if "is_primary" in columns else "ORDER BY user_id"
             row = con.execute(
-                """
+                f"""
                 SELECT empresa, user_id, email, username, updated_at, updated_by
                 FROM cartera_asignaciones
                 WHERE empresa = ?
+                {order_clause}
+                LIMIT 1
                 """,
                 (emp,),
             ).fetchone()

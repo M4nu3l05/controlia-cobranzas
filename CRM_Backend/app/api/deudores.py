@@ -33,9 +33,6 @@ from app.services.deudor_service import (
 )
 from app.schemas.deudor import DestinatarioItem
 from app.schemas.auth import MessageResponse
-from app.services.user_service import get_current_user_carteras_service
-from app.services.debtor_assignment_service import user_has_debtor_assignments
-
 router = APIRouter(prefix="/deudores", tags=["deudores"])
 
 
@@ -59,8 +56,8 @@ def list_deudores(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    empresas_permitidas: list[str] | None = None
     assignment_filter = assigned_user_id if is_privileged_operator(current_user) else None
+    executive_user_id: int | None = None
     if not is_privileged_operator(current_user):
         if assigned_user_id is not None and int(assigned_user_id) != int(current_user.id):
             raise HTTPException(
@@ -72,12 +69,7 @@ def list_deudores(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="No tienes permiso para consultar esta cartera.",
             )
-        empresas_permitidas = get_current_user_carteras_service(
-            db=db,
-            executor=current_user,
-        )
-        if user_has_debtor_assignments(db, int(current_user.id)):
-            assignment_filter = int(current_user.id)
+        executive_user_id = int(current_user.id)
     return list_deudores_service(
         db,
         q=q,
@@ -86,8 +78,8 @@ def list_deudores(
         limit=limit,
         offset=offset,
         include_contact=include_contact,
-        empresas_permitidas=empresas_permitidas,
         assigned_user_id=assignment_filter,
+        executive_user_id=executive_user_id,
     )
 
 
@@ -101,28 +93,21 @@ def list_destinatarios(
 ):
     # Consultar la ficha de un deudor de otra cartera esta permitido, pero
     # extraer el padron masivo de correos queda acotado a las carteras propias.
-    empresas_permitidas: list[str] | None = None
-    assigned_user_id: int | None = None
+    executive_user_id: int | None = None
     if not is_privileged_operator(current_user):
         if empresa and not can_operate_company(db, current_user, empresa):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="No tienes permiso para descargar los destinatarios de esta cartera.",
             )
-        empresas_permitidas = get_current_user_carteras_service(
-            db=db,
-            executor=current_user,
-        )
-        if user_has_debtor_assignments(db, int(current_user.id)):
-            assigned_user_id = int(current_user.id)
+        executive_user_id = int(current_user.id)
 
     return list_destinatarios_service(
         db,
         empresa=empresa,
         periodo_carga=periodo_carga,
         limit=limit,
-        empresas_permitidas=empresas_permitidas,
-        assigned_user_id=assigned_user_id,
+        executive_user_id=executive_user_id,
     )
 
 

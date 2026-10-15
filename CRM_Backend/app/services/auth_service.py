@@ -17,7 +17,6 @@ from app.services.session_history_service import register_session_login
 ROLES = {
     "admin": "Administrador",
     "supervisor": "Supervisor",
-    "ejecutivo": "Ejecutivo",
 }
 
 ROLE_ADMIN = "admin"
@@ -30,6 +29,11 @@ _RESET_EXPIRY_MINUTES = 15
 
 def role_label(role: str) -> str:
     return ROLES.get(role, role.capitalize())
+
+
+def normalize_role(role: str) -> str:
+    normalized = str(role or "").strip().lower()
+    return ROLE_SUPERVISOR if normalized == ROLE_EJECUTIVO else normalized
 
 
 def validate_email(email: str) -> list[str]:
@@ -93,9 +97,10 @@ def create_user(
     email: str,
     username: str,
     password: str,
-    role: str = ROLE_EJECUTIVO,
+    role: str = ROLE_SUPERVISOR,
     must_change_password: bool = False,
 ) -> User:
+    role = normalize_role(role)
     if role not in ROLES:
         raise ValueError(f"Rol no valido: {role}")
 

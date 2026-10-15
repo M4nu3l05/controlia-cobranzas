@@ -196,7 +196,7 @@ def commission_summary_service(db: Session, *, executor: User) -> list[Commissio
     if is_privileged_operator(executor):
         user_ids = [
             int(row.id)
-            for row in db.query(User).filter(User.role == "ejecutivo", User.is_active.is_(True)).all()
+            for row in db.query(User).filter(User.role == "supervisor", User.is_active.is_(True)).all()
         ]
     else:
         user_ids = [int(executor.id)]
@@ -216,7 +216,7 @@ def reset_commissions_service(
 
     objetivos = [int(user_id)] if user_id is not None else [
         int(row.id)
-        for row in db.query(User).filter(User.role == "ejecutivo", User.is_active.is_(True)).all()
+        for row in db.query(User).filter(User.role == "supervisor", User.is_active.is_(True)).all()
     ]
     # El corte se guarda con el acumulado alcanzado para dejar trazabilidad del pago.
     previos = {item.user_id: item for item in build_commission_summary(db, user_ids=objetivos)}

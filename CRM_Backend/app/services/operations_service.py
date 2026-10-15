@@ -132,8 +132,8 @@ def create_replacement_service(
         raise ValueError("La reemplazante debe ser distinta de la ejecutiva titular.")
 
     replacement = db.query(User).filter(User.id == int(payload.replacement_user_id)).first()
-    if not replacement or replacement.role != "ejecutivo" or not bool(replacement.is_active):
-        raise ValueError("La reemplazante debe ser una ejecutiva activa.")
+    if not replacement or replacement.role != "supervisor" or not bool(replacement.is_active):
+        raise ValueError("La reemplazante debe ser una supervisora activa.")
 
     overlap = db.query(CarteraTemporaryReplacement).filter(
         CarteraTemporaryReplacement.empresa == payload.empresa.strip(),

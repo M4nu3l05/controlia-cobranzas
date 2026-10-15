@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import datetime
+import logging
 import re
 import unicodedata
 from time import sleep
@@ -27,9 +28,10 @@ from deudores.database import (
 )
 from admin_carteras.service import obtener_empresas_asignadas_para_session, session_tiene_restriccion_por_cartera
 from auth.auth_service import (
-    backend_create_gestion,
     backend_get_deudor_detalle,
+    backend_import_gestiones,
     backend_import_deudores,
+    backend_preview_import_gestiones,
     backend_preview_import_deudores,
     backend_apply_debtor_assignments,
     backend_preview_debtor_assignments,
@@ -40,11 +42,11 @@ from auth.auth_service import (
     list_users,
 )
 from .detalle_dialog import DetalleDeudorDialog
+from .gestiones_import_dialog import GestionCompanyResolutionDialog
 from .import_mapping_dialog import ImportColumnMappingDialog, apply_column_mapping
 from .gestiones_db import (
     ESTADO_DEUDOR_DEFAULT,
     TABLA,
-    leer_gestiones_excel,
     obtener_estados_deudor_por_rut,
     insertar_gestion_manual,
 )
@@ -59,6 +61,9 @@ from .worker import (
     CargaDeudoresParams,
     CargaDeudoresWorker,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class DeudoresWidget(QWidget):
@@ -82,7 +87,8 @@ class DeudoresWidget(QWidget):
         self._assignment_preview_worker: BackendAssignmentWorker | None = None
         self._assignment_apply_worker: BackendAssignmentWorker | None = None
         self._executives_filter_worker: BackendAssignmentWorker | None = None
-        self._gest_worker: CargaGestionesWorker | None = None
+        self._gest_worker = None
+        self._gest_import_path = ""
         self._columnas: list[str] = []
         self._etiquetas: list[str] = []
         self._sort_column: str | None = None
@@ -224,7 +230,7 @@ class DeudoresWidget(QWidget):
         executives = sorted(
             [
                 user for user in (users or [])
-                if str(user.get("role", "")).strip().lower() == "ejecutivo"
+                if str(user.get("role", "")).strip().lower() == "supervisor"
                 and bool(user.get("is_active", False))
             ],
             key=lambda user: str(user.get("username", "")).strip().casefold(),
@@ -808,6 +814,9 @@ class DeudoresWidget(QWidget):
                 "Dv": str(item.get("dv", "")).strip(),
                 "_RUT_COMPLETO": str(item.get("rut_completo", "")).strip(),
                 "Nombre_Afiliado": str(item.get("nombre_afiliado", "")).strip(),
+                "Ejecutiva_responsable": str(item.get("assigned_username", "")).strip(),
+                "_assigned_user_id": item.get("assigned_user_id"),
+                "_assigned_user_email": str(item.get("assigned_user_email", "")).strip(),
                 "Estado_deudor": str(item.get("estado_deudor", "")).strip() or ESTADO_DEUDOR_DEFAULT,
                 "BN": str(item.get("bn", "")).strip(),
                 "Nro_Expediente": str(item.get("nro_expediente", "")).strip(),
@@ -877,6 +886,13 @@ class DeudoresWidget(QWidget):
             "Dv": str(resumen_raw.get("dv", "")).strip(),
             "_RUT_COMPLETO": str(resumen_raw.get("rut_completo", "")).strip(),
             "Nombre_Afiliado": str(resumen_raw.get("nombre_afiliado", "")).strip(),
+            "Ejecutiva_responsable": str(
+                payload.get("assigned_username") or resumen_raw.get("assigned_username") or ""
+            ).strip(),
+            "_assigned_user_id": payload.get("assigned_user_id", resumen_raw.get("assigned_user_id")),
+            "_assigned_user_email": str(
+                payload.get("assigned_user_email") or resumen_raw.get("assigned_user_email") or ""
+            ).strip(),
             "Estado_deudor": str(resumen_raw.get("estado_deudor", "")).strip() or ESTADO_DEUDOR_DEFAULT,
             "BN": str(resumen_raw.get("bn", "")).strip(),
             "Nro_Expediente": str(resumen_raw.get("nro_expediente", "")).strip(),
@@ -1284,6 +1300,7 @@ class DeudoresWidget(QWidget):
                 {
                     "Rut_Afiliado": "12345678",
                     "Dv": "9",
+                    "Empresa": "",
                     "Nombre_Afiliado": "Juan Perez",
                     "telefono_movil_afiliado": "912345678",
                     "Estado": "Contactado",
@@ -1296,6 +1313,7 @@ class DeudoresWidget(QWidget):
                 {
                     "Rut_Afiliado": "12345678",
                     "Dv": "9",
+                    "Empresa": "",
                     "Nombre_Afiliado": "Juan Perez",
                     "mail_afiliado": "juan.perez@email.com",
                     "Estado": "Contactado",
@@ -1308,6 +1326,7 @@ class DeudoresWidget(QWidget):
                 {
                     "Rut_Afiliado": "12345678",
                     "Dv": "9",
+                    "Empresa": "",
                     "Nombre_Afiliado": "Juan Perez",
                     "direccion_afiliado": "Av. Ejemplo 123",
                     "comuna_afiliado": "Santiago",
@@ -1566,7 +1585,7 @@ class DeudoresWidget(QWidget):
             if preview is not None and not error:
                 preview["_active_executives"] = [
                     user for user in list_users(self._session)
-                    if str(user.get("role", "")).strip() == "ejecutivo"
+                    if str(user.get("role", "")).strip().lower() == "supervisor"
                     and bool(user.get("is_active"))
                 ]
             return preview, error
@@ -1591,6 +1610,51 @@ class DeudoresWidget(QWidget):
             setattr(self, attribute, None)
         worker.deleteLater()
 
+    def _solicitar_relaciones_ejecutivas(self, preview: dict) -> tuple[dict[str, int], bool]:
+        """Resuelve nombres desconocidos y permite dejarlos pendientes de creación."""
+        unresolved = [item for item in preview.get("matches", []) if not item.get("user_id")]
+        if not unresolved:
+            return {}, True
+
+        executives = list(preview.get("_active_executives", []))
+        user_options = [
+            f"{str(user.get('username', '')).strip()} — {str(user.get('email', '')).strip()}"
+            for user in executives
+        ]
+        if not executives:
+            QMessageBox.warning(
+                self,
+                "Sin supervisores disponibles",
+                "No existen supervisores activos para relacionar los nombres del archivo.",
+            )
+            return {}, False
+        options = list(user_options)
+        overrides: dict[str, int] = {}
+
+        for item in unresolved:
+            selected, accepted = QInputDialog.getItem(
+                self,
+                "Relacionar ejecutiva",
+                (
+                    f"Nombre encontrado: {item.get('source_label', '')}\n"
+                    f"Deudores asociados: {int(item.get('debtor_count', 0) or 0):,}\n\n"
+                    "Selecciona un usuario activo. Si todavía no existe, deja los casos "
+                    "sin asignar para que el administrador cree el usuario."
+                ),
+                options,
+                0,
+                False,
+            )
+            if not accepted:
+                return {}, False
+
+            normalized_label = str(item.get("normalized_label", ""))
+            selected_user = executives[user_options.index(selected)]
+            overrides[normalized_label] = int(selected_user.get("id", 0) or 0)
+            item["_selected_username"] = str(selected_user.get("username", "")).strip()
+
+        return overrides, True
+
     def _on_assignment_preview_ready(
         self,
         *,
@@ -1606,54 +1670,34 @@ class DeudoresWidget(QWidget):
             QMessageBox.critical(self, "No se pudo revisar la distribución", error or "Respuesta inválida del servidor.")
             return
 
-        blank = int(preview.get("blank_assignments", 0) or 0)
         conflicts = int(preview.get("conflicting_debtors", 0) or 0)
-        if blank or conflicts:
+        if conflicts:
             self.sidebar.progress.setVisible(False)
             QMessageBox.critical(
                 self,
                 "Distribución con errores",
-                f"Asignaciones vacías: {blank:,}\nRUT con más de una ejecutiva: {conflicts:,}\n\n"
+                f"RUT con más de una ejecutiva: {conflicts:,}\n\n"
                 "Corrige el archivo antes de aplicar la distribución.",
             )
             return
 
-        overrides: dict[str, int] = {}
-        unresolved = [item for item in preview.get("matches", []) if not item.get("user_id")]
-        if unresolved:
-            executives = list(preview.get("_active_executives", []))
-            options = [
-                f"{str(user.get('username', '')).strip()} — {str(user.get('email', '')).strip()}"
-                for user in executives
-            ]
-            if not options:
-                self.sidebar.progress.setVisible(False)
-                QMessageBox.critical(self, "Sin ejecutivas", "No hay usuarios activos con rol Ejecutiva para resolver la distribución.")
-                return
-            for item in unresolved:
-                selected, accepted = QInputDialog.getItem(
-                    self,
-                    "Relacionar ejecutiva",
-                    (
-                        f"Nombre encontrado: {item.get('source_label', '')}\n"
-                        f"Deudores asociados: {int(item.get('debtor_count', 0) or 0):,}\n\n"
-                        "Selecciona el usuario correspondiente:"
-                    ),
-                    options,
-                    0,
-                    False,
-                )
-                if not accepted:
-                    self.sidebar.progress.setVisible(False)
-                    return
-                selected_user = executives[options.index(selected)]
-                overrides[str(item.get("normalized_label", ""))] = int(selected_user.get("id", 0) or 0)
+        overrides, accepted = self._solicitar_relaciones_ejecutivas(preview)
+        if not accepted:
+            self.sidebar.progress.setVisible(False)
+            return
 
         match_lines = [
-            f"• {item.get('source_label', '')}: {item.get('username', '') or 'selección manual'} "
+            f"• {item.get('source_label', '')}: "
+            f"{item.get('username', '') or item.get('_selected_username', '') or 'Sin asignar'} "
             f"({int(item.get('debtor_count', 0) or 0):,} deudores)"
             for item in preview.get("matches", [])
         ]
+        blank = int(preview.get("blank_assignments", 0) or 0)
+        if blank:
+            match_lines.append(
+                f"• Ejecutiva vacía: {blank:,} filas se asignarán a "
+                f"{preview.get('blank_default_username', 'la supervisora titular')}"
+            )
         confirmation = QMessageBox.question(
             self,
             "Confirmar distribución",
@@ -1708,6 +1752,7 @@ class DeudoresWidget(QWidget):
                 f"Nuevas asignaciones: {int(result.get('assigned_debtors', 0) or 0):,}\n"
                 f"Reasignaciones: {int(result.get('reassigned_debtors', 0) or 0):,}\n"
                 f"Sin cambios: {int(result.get('unchanged_debtors', 0) or 0):,}\n"
+                f"Sin asignar: {int(result.get('unassigned_debtors', 0) or 0):,}\n"
                 f"RUT no encontrados: {int(result.get('missing_debtors', 0) or 0):,}"
             ),
         )
@@ -1775,6 +1820,46 @@ class DeudoresWidget(QWidget):
                 )
                 return
 
+            assignment_preview, assignment_error = backend_preview_debtor_assignments(
+                self._session,
+                empresa=empresa,
+                excel_path=path,
+            )
+            assignment_overrides: dict[str, int] = {}
+            if assignment_error or not assignment_preview:
+                self._set_loading(False)
+                self.sidebar.progress.setVisible(False)
+                QMessageBox.critical(
+                    self,
+                    "No se pudo revisar la columna Ejecutiva responsable",
+                    assignment_error or "El servidor no devolvió la distribución de responsables.",
+                )
+                return
+
+            conflicts = int(assignment_preview.get("conflicting_debtors", 0) or 0)
+            if conflicts:
+                self._set_loading(False)
+                self.sidebar.progress.setVisible(False)
+                QMessageBox.critical(
+                    self,
+                    "Distribución con errores",
+                    f"Hay {conflicts:,} RUT con más de una ejecutiva responsable en el archivo. "
+                    "Corrige esas filas antes de cargar la base.",
+                )
+                return
+            assignment_preview["_active_executives"] = [
+                user for user in list_users(self._session)
+                if str(user.get("role", "")).strip().lower() == "supervisor"
+                and bool(user.get("is_active"))
+            ]
+            assignment_overrides, accepted = self._solicitar_relaciones_ejecutivas(
+                assignment_preview
+            )
+            if not accepted:
+                self._set_loading(False)
+                self.sidebar.progress.setVisible(False)
+                return
+
             birlados = list(preview.get("birlados", []) or [])
             while True:
                 dialog = QMessageBox(self)
@@ -1786,6 +1871,13 @@ class DeudoresWidget(QWidget):
                     f"Nuevos estimados: {int(preview.get('nuevos_estimados', 0) or 0):,}\n"
                     f"Ya existentes: {int(preview.get('existentes_estimados', 0) or 0):,}\n"
                     f"Obligaciones que cambiarán a Birlado: {len(birlados):,}"
+                    + (
+                        f"\nNombres de ejecutiva detectados: "
+                        f"{len(assignment_preview.get('matches', [])):,}"
+                        f"\nFilas con ejecutiva vacía: "
+                        f"{int(assignment_preview.get('blank_assignments', 0) or 0):,}"
+                        if assignment_preview else ""
+                    )
                 )
                 dialog.setInformativeText(
                     "Revisa el detalle antes de confirmar. La aplicación no conserva una copia del Excel original."
@@ -1850,6 +1942,7 @@ class DeudoresWidget(QWidget):
                 expected_file_sha256=str(preview.get("file_sha256", "")),
                 confirm_birlados=True,
                 column_mapping=column_mapping,
+                assignment_overrides=assignment_overrides,
             )
             if err:
                 # Reintento corto para absorber latencias/transientes de red/backend.
@@ -1862,6 +1955,7 @@ class DeudoresWidget(QWidget):
                     expected_file_sha256=str(preview.get("file_sha256", "")),
                     confirm_birlados=True,
                     column_mapping=column_mapping,
+                    assignment_overrides=assignment_overrides,
                 )
                 if not err_retry:
                     err = ""
@@ -1946,7 +2040,9 @@ class DeudoresWidget(QWidget):
                     f"Registros actualizados: {detalle_actualizados:,}\n"
                     f"Registros omitidos por ya existir: {detalle_omitidos:,}\n"
                     f"Registros cambiados a Birlado: {int(resultado.get('detalle_birlados', 0) or 0):,}\n"
-                    f"Resumen recalculado: {int(resultado.get('resumen_insertados', 0) or 0):,}"
+                    f"Resumen recalculado: {int(resultado.get('resumen_insertados', 0) or 0):,}\n"
+                    f"Asignaciones aplicadas: {int(resultado.get('asignaciones_aplicadas', 0) or 0):,}\n"
+                    f"Deudores sin asignar: {int(resultado.get('deudores_sin_asignar', 0) or 0):,}"
                 ),
             )
             # Refrescos extra para cargas consecutivas (evita requerir segundo clic).
@@ -2268,37 +2364,21 @@ class DeudoresWidget(QWidget):
 
         QTimer.singleShot(0, self._ajustar_splitter_inicial)
 
-    def _cargar_gestiones(self):
-        path = self.sidebar.txt_gest_excel.text().strip()
-        if not path:
-            QMessageBox.information(
-                self,
-                "Selecciona un archivo primero",
-                "  Debes seleccionar un archivo Excel de gestiones antes de cargarlo.\n\n"
-                "Pulsa el botn Seleccionar para elegir el archivo.\n\n"
-                "El archivo debe contener hojas llamadas 'SMS', 'Email' y/o 'Carta'.",
-            )
-            return
-        if not os.path.isfile(path):
-            QMessageBox.warning(self, "Archivo no vlido", "Selecciona un archivo Excel vlido de gestiones.")
-            return
-        s = self.sidebar
-        s.btn_cargar_gest.setEnabled(False)
-        s.progress_gest.setVisible(True)
-        s.progress_gest.setValue(0)
-        s.btn_cargar_gest.setToolTip("Cargando gestiones")
-        self._gest_worker = CargaGestionesWorker(CargaGestionesParams(excel_path=path))
-        self._gest_worker.progress.connect(self._on_gest_progress)
-        self._gest_worker.finished_ok.connect(self._on_gest_loaded)
-        self._gest_worker.failed.connect(self._on_gest_error)
-        self._gest_worker.start()
-
     def _on_gest_progress(self, pct: int, msg: str):
+        self.sidebar.progress_gest.setRange(0, 100)
         self.sidebar.progress_gest.setValue(pct)
         self.sidebar.btn_cargar_gest.setToolTip(msg)
 
     def _on_gest_loaded(self, insertados: int, omitidos: int, errores: list):
+        try:
+            self._finalizar_gestiones_local(insertados, omitidos, errores)
+        except Exception as exc:
+            logger.error("Fallo finalizando importación local de gestiones (%s)", type(exc).__name__)
+            self._on_gest_error("Las gestiones fueron procesadas, pero no se pudo actualizar la vista.")
+
+    def _finalizar_gestiones_local(self, insertados: int, omitidos: int, errores: list):
         s = self.sidebar
+        s.progress_gest.setRange(0, 100)
         s.progress_gest.setVisible(False)
         s.btn_cargar_gest.setEnabled(True)
 
@@ -2328,24 +2408,10 @@ class DeudoresWidget(QWidget):
         else:
             s.btn_cargar_gest.setToolTip(f"  {insertados:,} gestiones cargadas correctamente.")
 
-        if self._usa_backend_deudores():
-            texto = self.sidebar.txt_search.text()
-            empresa = self.sidebar.cmb_filtro_empresa.currentText()
-            col_idx = self.sidebar.cmb_col.currentIndex()
-            periodo = self._periodo_actual()
-            self._cargar_desde_backend()
-            self._restaurar_filtros_ui(
-                texto=texto,
-                empresa=empresa,
-                col_idx=col_idx,
-                periodo=periodo,
-            )
-            self.datos_actualizados.emit()
-        else:
-            df_all = cargar_todas()
-            if not df_all.empty:
-                self._mostrar_dataframe(df_all)
-            self.datos_actualizados.emit()
+        df_all = cargar_todas()
+        if not df_all.empty:
+            self._mostrar_dataframe(df_all)
+        self.datos_actualizados.emit()
 
         QMessageBox.information(
             self,
@@ -2359,8 +2425,10 @@ class DeudoresWidget(QWidget):
 
     def _on_gest_error(self, err: str):
         s = self.sidebar
+        s.progress_gest.setRange(0, 100)
         s.progress_gest.setVisible(False)
         s.btn_cargar_gest.setEnabled(True)
+        s.btn_pick_gest.setEnabled(True)
         s.btn_cargar_gest.setToolTip("Error al cargar gestiones ")
         QMessageBox.critical(self, "Error al cargar base de gestiones", err)
 
@@ -2390,8 +2458,6 @@ class DeudoresWidget(QWidget):
 
         self._mostrar_dataframe(self._df)
 
-    # Redefinicion para soportar carga de gestiones contra backend.
-    # Se deja la version local (worker + sqlite) para sesiones sin backend.
     def _cargar_gestiones(self):
         path = self.sidebar.txt_gest_excel.text().strip()
         if not path:
@@ -2408,7 +2474,7 @@ class DeudoresWidget(QWidget):
             return
 
         if self._usa_backend_deudores():
-            self._cargar_gestiones_backend(path)
+            self._iniciar_vista_previa_gestiones(path)
             return
 
         s = self.sidebar
@@ -2420,124 +2486,111 @@ class DeudoresWidget(QWidget):
         self._gest_worker.progress.connect(self._on_gest_progress)
         self._gest_worker.finished_ok.connect(self._on_gest_loaded)
         self._gest_worker.failed.connect(self._on_gest_error)
+        worker = self._gest_worker
+        worker.finished.connect(lambda: self._liberar_gestiones_worker(worker))
         self._gest_worker.start()
 
-    def _norm_rut_simple(self, rut: str) -> str:
-        return str(rut or "").strip().replace(".", "").replace("-", "").lstrip("0")
-
-    def _cargar_gestiones_backend(self, path: str) -> None:
+    def _set_gestiones_loading(self, loading: bool, message: str = "") -> None:
         s = self.sidebar
-        s.btn_cargar_gest.setEnabled(False)
-        s.progress_gest.setVisible(True)
-        s.progress_gest.setValue(5)
-        s.btn_cargar_gest.setToolTip("Leyendo archivo de gestiones...")
-        QApplication.processEvents()
+        s.btn_cargar_gest.setEnabled(not loading)
+        s.btn_pick_gest.setEnabled(not loading)
+        s.progress_gest.setVisible(loading)
+        if loading:
+            s.progress_gest.setRange(0, 0)
+        else:
+            s.progress_gest.setRange(0, 100)
+            s.progress_gest.setValue(0)
+        if message:
+            s.btn_cargar_gest.setToolTip(message)
 
+    def _liberar_gestiones_worker(self, worker) -> None:
+        if self._gest_worker is worker:
+            self._gest_worker = None
+        worker.deleteLater()
+
+    def _iniciar_vista_previa_gestiones(self, path: str) -> None:
+        self._set_gestiones_loading(True, "Analizando archivo y posibles carteras...")
+        self._gest_import_path = path
+        worker = BackendAssignmentWorker(
+            lambda: backend_preview_import_gestiones(self._session, excel_path=path),
+            self,
+        )
+        self._gest_worker = worker
+        worker.completed.connect(self._on_gestiones_preview)
+        worker.finished.connect(lambda: self._liberar_gestiones_worker(worker))
+        worker.start()
+
+    def _on_gestiones_preview(self, payload: dict | None, error: str) -> None:
         try:
-            registros, errores = leer_gestiones_excel(path)
-        except Exception as exc:
-            self._on_gest_error(str(exc))
-            return
+            if error or not isinstance(payload, dict):
+                logger.error("Vista previa de gestiones rechazada por el backend")
+                self._on_gest_error(error or "El backend no devolvió una vista previa válida.")
+                return
 
-        if not registros and errores:
-            s.progress_gest.setVisible(False)
-            s.btn_cargar_gest.setEnabled(True)
-            detalle = "\n".join(f"  - {e}" for e in errores)
-            QMessageBox.warning(
+            overrides: dict[str, str] = {}
+            ambiguous = payload.get("ambiguous_debtors", []) or []
+            if ambiguous:
+                dialog = GestionCompanyResolutionDialog(ambiguous, self)
+                if dialog.exec() != QDialog.DialogCode.Accepted:
+                    self._set_gestiones_loading(False, "Carga cancelada antes de modificar datos.")
+                    return
+                overrides = dialog.company_overrides()
+
+            path = str(getattr(self, "_gest_import_path", "") or "").strip()
+            expected_hash = str(payload.get("file_sha256", "")).strip()
+            if not path or not expected_hash:
+                self._on_gest_error("No fue posible conservar la referencia de la vista previa.")
+                return
+
+            self._set_gestiones_loading(True, "Importando gestiones en una sola transacción...")
+            worker = BackendAssignmentWorker(
+                lambda: backend_import_gestiones(
+                    self._session,
+                    excel_path=path,
+                    expected_file_sha256=expected_hash,
+                    company_overrides=overrides,
+                ),
                 self,
-                "Gestiones no cargadas",
-                f"No se encontraron datos para cargar.\n\nDetalles:\n{detalle}",
             )
-            return
+            self._gest_worker = worker
+            worker.completed.connect(self._on_gestiones_backend_loaded)
+            worker.finished.connect(lambda: self._liberar_gestiones_worker(worker))
+            worker.start()
+        except Exception as exc:
+            logger.error("Fallo preparando importación de gestiones (%s)", type(exc).__name__)
+            self._on_gest_error("No se pudo preparar la importación de gestiones.")
 
-        s.progress_gest.setValue(20)
-        s.btn_cargar_gest.setToolTip("Consultando deudores del backend...")
-        QApplication.processEvents()
+    def _on_gestiones_backend_loaded(self, payload: dict | None, error: str) -> None:
+        try:
+            if error or not isinstance(payload, dict):
+                logger.error("Importación de gestiones rechazada por el backend")
+                self._on_gest_error(error or "El backend no devolvió un resultado válido.")
+                return
 
-        deudores_backend, err_deudores = backend_list_deudores(self._session, limit=50000)
-        if err_deudores:
-            self._on_gest_error(err_deudores)
-            return
+            inserted = int(payload.get("insertados", 0) or 0)
+            duplicates = int(payload.get("omitidos_duplicados", 0) or 0)
+            missing = int(payload.get("omitidos_sin_deudor", 0) or 0)
+            updated = int(payload.get("deudores_actualizados", 0) or 0)
+            warnings = [str(item) for item in (payload.get("advertencias", []) or []) if str(item).strip()]
 
-        mapa_deudor_por_rut: dict[str, dict] = {}
-        for d in deudores_backend or []:
-            rut_key = self._norm_rut_simple(d.get("rut_afiliado", ""))
-            if rut_key and rut_key not in mapa_deudor_por_rut:
-                mapa_deudor_por_rut[rut_key] = d
+            self._set_gestiones_loading(False, f"{inserted:,} gestiones cargadas correctamente.")
+            self.sidebar.txt_gest_excel.clear()
+            self._cargar_desde_backend(reset=False, page=self._backend_page_index)
+            self.datos_actualizados.emit()
 
-        existentes, err_gestiones = backend_list_all_gestiones(self._session)
-        if err_gestiones:
-            self._on_gest_error(err_gestiones)
-            return
-
-        claves_existentes: set[tuple[str, str, str, str, str, str]] = set()
-        for g in existentes or []:
-            claves_existentes.add(
-                (
-                    self._norm_rut_simple(g.get("rut_afiliado", "")),
-                    str(g.get("tipo_gestion", "")).strip(),
-                    str(g.get("estado", "")).strip(),
-                    str(g.get("observacion", "")).strip(),
-                    str(g.get("origen", "")).strip(),
-                    str(g.get("fecha_gestion", "")).strip(),
-                )
+            warning_text = ""
+            if warnings:
+                warning_text = "\n\nAdvertencias:\n" + "\n".join(f"  - {item}" for item in warnings)
+            QMessageBox.information(
+                self,
+                "Gestiones cargadas",
+                "Carga completada:\n\n"
+                f"  Nuevas: {inserted:,}\n"
+                f"  Duplicadas omitidas: {duplicates:,}\n"
+                f"  Sin deudor asociado: {missing:,}\n"
+                f"  Deudores actualizados: {updated:,}"
+                f"{warning_text}",
             )
-
-        total = len(registros)
-        insertados = 0
-        omitidos = 0
-        errores_backend: list[str] = list(errores)
-
-        for idx, row in enumerate(registros, start=1):
-            rut_raw = str(row.get("rut", "")).strip()
-            rut_key = self._norm_rut_simple(rut_raw)
-            if not rut_key:
-                continue
-
-            deudor = mapa_deudor_por_rut.get(rut_key)
-            if not deudor:
-                omitidos += 1
-                continue
-
-            clave = (
-                rut_key,
-                str(row.get("tipo_gestion", "")).strip(),
-                str(row.get("estado", "")).strip(),
-                str(row.get("observacion", "")).strip(),
-                str(row.get("origen", "")).strip(),
-                str(row.get("fecha_gestion", "")).strip(),
-            )
-            if clave in claves_existentes:
-                omitidos += 1
-                continue
-
-            empresa = str(deudor.get("empresa", "")).strip()
-            nombre = str(row.get("nombre_afiliado", "")).strip() or str(deudor.get("nombre_afiliado", "")).strip()
-
-            _, err_crear = backend_create_gestion(
-                self._session,
-                rut=rut_raw,
-                empresa=empresa,
-                nombre_afiliado=nombre,
-                tipo_gestion=str(row.get("tipo_gestion", "")).strip(),
-                estado=str(row.get("estado", "")).strip(),
-                fecha_gestion=str(row.get("fecha_gestion", "")).strip(),
-                observacion=str(row.get("observacion", "")).strip(),
-                origen=str(row.get("origen", "")).strip() or "excel",
-            )
-            if err_crear:
-                errores_backend.append(f"RUT {rut_raw}: {err_crear}")
-                continue
-
-            claves_existentes.add(clave)
-            insertados += 1
-
-            if idx % 25 == 0 or idx == total:
-                pct = 20 + int((idx / max(total, 1)) * 75)
-                s.progress_gest.setValue(min(pct, 95))
-                s.btn_cargar_gest.setToolTip(f"Cargando gestiones... {idx}/{total}")
-                QApplication.processEvents()
-
-        s.progress_gest.setValue(100)
-        QApplication.processEvents()
-        self._on_gest_loaded(insertados, omitidos, errores_backend)
+        except Exception as exc:
+            logger.error("Fallo finalizando importación de gestiones (%s)", type(exc).__name__)
+            self._on_gest_error("Las gestiones fueron procesadas, pero no se pudo actualizar la vista.")

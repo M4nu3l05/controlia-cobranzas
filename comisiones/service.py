@@ -242,7 +242,7 @@ def _ejecutivas_activas_locales() -> list[dict]:
         return [
             usuario
             for usuario in get_all_users()
-            if str(usuario.get("role", "")).strip() == "ejecutivo" and bool(usuario.get("is_active", 0))
+            if str(usuario.get("role", "")).strip() == "supervisor" and bool(usuario.get("is_active", 0))
         ]
     except Exception:
         return []

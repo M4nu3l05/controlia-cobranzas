@@ -40,12 +40,14 @@ def operation_context():
             text(
                 """
                 CREATE TABLE cartera_asignaciones (
-                    empresa TEXT PRIMARY KEY,
-                    user_id INTEGER NULL,
+                    empresa TEXT NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    is_primary BOOLEAN NOT NULL DEFAULT 0,
                     email TEXT,
                     username TEXT,
                     updated_at TEXT,
-                    updated_by TEXT
+                    updated_by TEXT,
+                    PRIMARY KEY (empresa, user_id)
                 )
                 """
             )
@@ -54,8 +56,8 @@ def operation_context():
         for email, username, role in (
             ("admin@test.cl", "Admin", "admin"),
             ("supervisor@test.cl", "Super", "supervisor"),
-            ("titular@test.cl", "Titular", "ejecutivo"),
-            ("otra@test.cl", "Otra", "ejecutivo"),
+            ("titular@test.cl", "Titular", "supervisor"),
+            ("otra@test.cl", "Otra", "supervisor"),
         ):
             user = User(
                 email=email,
@@ -73,8 +75,8 @@ def operation_context():
         db.execute(
             text(
                 """
-                INSERT INTO cartera_asignaciones(empresa, user_id, email, username)
-                VALUES ('Cart-56', :user_id, :email, :username)
+                INSERT INTO cartera_asignaciones(empresa, user_id, is_primary, email, username)
+                VALUES ('Cart-56', :user_id, 1, :email, :username)
                 """
             ),
             {"user_id": titular.id, "email": titular.email, "username": titular.username},

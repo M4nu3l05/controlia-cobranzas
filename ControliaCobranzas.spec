@@ -30,6 +30,23 @@ a = Analysis(
     excludes=["pytest", "unittest", "tkinter"],
     noarchive=False,
 )
+
+# PyInstaller resuelve DLLs usando también el PATH del proceso de compilación.
+# Herramientas externas (por ejemplo Poppler) pueden aportar copias privadas de
+# ICU/UCRT que no pertenecen a la aplicación. Si esas copias quedan junto al
+# ejecutable, Windows las carga antes que las del sistema y Qt falla con error
+# 127 ("no se encontró el procedimiento especificado"). Los API sets, UCRT e
+# ICU de esta compilación de Qt son componentes del sistema operativo.
+system_dll_names = {"ucrtbase.dll", "icuuc.dll"}
+system_dll_prefixes = ("api-ms-win-", "ext-ms-win-", "icudt")
+
+
+def is_external_system_dll(binary):
+    bundled_name = Path(binary[0]).name.lower()
+    return bundled_name in system_dll_names or bundled_name.startswith(system_dll_prefixes)
+
+
+a.binaries = [binary for binary in a.binaries if not is_external_system_dll(binary)]
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -41,7 +58,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -56,7 +73,7 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     name="ControliaCobranzas",
 )

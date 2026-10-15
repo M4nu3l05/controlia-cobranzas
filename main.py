@@ -33,6 +33,12 @@ from legal import enforce_legal_acceptance, ensure_legal_documents_available
 
 
 def main() -> int:
+    if "--smoke-test" in sys.argv:
+        # Valida que el bundle pueda cargar Qt y crear la aplicación sin abrir
+        # login ni tocar datos reales. build.bat usa este modo antes de publicar.
+        QApplication.instance() or QApplication([])
+        return 0
+
     ensure_runtime_dirs()
     configure_logging()
     ensure_legal_documents_available()
