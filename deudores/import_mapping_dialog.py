@@ -219,7 +219,7 @@ _CRUZ_BLANCA = ImportSheet(
         ImportSection(
             "Detalle de deuda",
             (
-                ImportField("ID_Deuda", "No Licencia", False, ("id deuda", "expediente", "numero expediente")),
+                ImportField("ID_Deuda", "Folio cuenta", False, ("id deuda", "expediente", "numero expediente")),
                 ImportField("__nombre_afil__", "Nombre Afil", derived="Usa el nombre asociado en 'Datos del cliente'."),
                 ImportField("__rut_afil__", "RUT Afil", derived="Usa el RUT asociado en 'Datos del cliente'."),
                 ImportField("Fecha_Prestacion", "Fecha_Prestacion", False, ("fecha prestacion",)),
@@ -284,7 +284,7 @@ _COLMENA = ImportSheet(
         ImportSection(
             "Detalle de deuda",
             (
-                ImportField("ID_Deuda", "No Licencia", False, ("id deuda", "expediente", "numero expediente")),
+                ImportField("ID_Deuda", "Folio cuenta", False, ("id deuda", "expediente", "numero expediente")),
                 ImportField("__nombre_afil__", "Nombre Afil", derived="Usa el nombre asociado en 'Datos del cliente'."),
                 ImportField("__rut_afil__", "RUT Afil", derived="Usa el RUT asociado en 'Datos del cliente'."),
                 ImportField("__fecha_prestacion__", "Fecha_Prestacion", derived="Usa la fecha de emisión de la carga."),

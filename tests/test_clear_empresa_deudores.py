@@ -203,3 +203,48 @@ def test_clear_company_worker_keeps_qt_responsive(monkeypatch):
     assert widget._clear_empresa_worker is None
     assert widget.btn_limpiar_empresa.isEnabled()
     widget.close()
+
+
+def test_reimport_after_clear_keeps_details_referenced_by_payments():
+    from app.services.deudor_import_service import _reparar_estado_inconsistente_empresa
+
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    event.listen(engine, "connect", lambda connection, _record: connection.execute("PRAGMA foreign_keys=ON"))
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as db:
+        user = _user()
+        paid_detail = _detalle("Colmena", "1", "EXP-PAGO")
+        orphan_detail = _detalle("Colmena", "2", "EXP-SUELTO")
+        db.add_all([user, paid_detail, orphan_detail])
+        db.flush()
+        transaction = PaymentTransaction(
+            public_id="00000000-0000-4000-8000-000000000002",
+            idempotency_key="payment-test-2",
+            empresa="Colmena",
+            rut_afiliado="1",
+            payment_type="Pago",
+            amount_clp=10,
+            effective_date=date(2026, 10, 16),
+            registered_by_user_id=user.id,
+            registered_by_username=user.username,
+        )
+        db.add(transaction)
+        db.flush()
+        db.add(PaymentAllocation(
+            transaction_id=transaction.id,
+            deudor_detalle_id=paid_detail.id,
+            expediente=paid_detail.nro_expediente,
+            amount_clp=10,
+            balance_before_clp=100,
+            balance_after_clp=90,
+        ))
+        db.commit()
+        paid_detail_id = int(paid_detail.id)
+        orphan_detail_id = int(orphan_detail.id)
+
+        # Sin resumen (base eliminada): la reparación no debe violar la FK de pagos.
+        _reparar_estado_inconsistente_empresa(db, "Colmena")
+
+        assert db.get(DeudorDetalle, paid_detail_id) is not None
+        assert db.get(DeudorDetalle, orphan_detail_id) is None

@@ -9,11 +9,12 @@ from collections import Counter
 from datetime import datetime
 
 import pandas as pd
-from sqlalchemy import String, func
+from sqlalchemy import String, func, inspect, select
 from sqlalchemy.orm import Session
 
 from app.models.deudor import DeudorDetalle, DeudorResumen
 from app.models.operations import DebtorBirladoTransition, DebtorImportBatch
+from app.models.payment import PaymentAllocation
 from app.models.user import User
 from app.core.text_utils import fix_mojibake_text
 from app.services.debtor_assignment_service import apply_debtor_assignments_service
@@ -640,7 +641,15 @@ def _reparar_estado_inconsistente_empresa(db: Session, empresa: str) -> None:
     if resumen_count > 0:
         return
 
-    db.query(DeudorDetalle).filter(DeudorDetalle.empresa == empresa_txt).delete(synchronize_session=False)
+    # Al eliminar una base, los detalles con pagos (y sus transiciones) se conservan
+    # archivados por integridad del libro de pagos; borrarlos viola sus claves foráneas.
+    tables = set(inspect(db.connection()).get_table_names())
+    query = db.query(DeudorDetalle).filter(DeudorDetalle.empresa == empresa_txt)
+    if "payment_allocations" in tables:
+        query = query.filter(~DeudorDetalle.id.in_(select(PaymentAllocation.deudor_detalle_id)))
+    if "debtor_birlado_transitions" in tables:
+        query = query.filter(~DeudorDetalle.id.in_(select(DebtorBirladoTransition.detalle_id)))
+    query.delete(synchronize_session=False)
     db.commit()
 
 
@@ -1237,7 +1246,7 @@ def import_deudores_excel_service(
 
         if not bool(existente.is_active):
             existente.is_active = True
-            if _clean_text(existente.estado_deudor).lower() == "birlado":
+            if _clean_text(existente.estado_deudor).lower() in {"birlado", "base eliminada"}:
                 existente.estado_deudor = nuevo.estado_deudor or "Sin Gestión"
 
         existente.dv = nuevo.dv or existente.dv
