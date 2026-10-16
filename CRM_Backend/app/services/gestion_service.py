@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, text
+from sqlalchemy import case, func, inspect, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.deudor import DeudorDetalle, DeudorResumen
 from app.models.gestion import DeudorGestion
-from app.models.operations import DerivationTracking
+from app.models.operations import DerivationTracking, UserNotification
 from app.models.user import User
 from app.schemas.gestion import GestionCreateRequest, GestionItem
 from app.core.authorization import (
@@ -51,7 +52,10 @@ def _norm_text(value: str) -> str:
 
 
 def _norm_rut(value: str) -> str:
-    return _norm_text(value).replace(".", "").replace("-", "").lstrip("0")
+    text_value = _norm_text(value).replace(".", "")
+    if "-" in text_value:
+        text_value = text_value.split("-", 1)[0]
+    return text_value.replace("-", "").lstrip("0")
 
 
 def _estado_gestion_a_estado_deudor(estado_gestion: str) -> str:
@@ -356,6 +360,49 @@ def create_gestion_service(
         require_debtor_operation(db, executor, empresa_txt, rut_norm)
         assigned_to_user_id = None
 
+    operation_id = _norm_text(payload.client_operation_id)
+    expected_operation = (
+        empresa_txt,
+        rut_norm,
+        _norm_text(payload.nombre_afiliado),
+        _norm_text(payload.tipo_gestion),
+        estado_txt,
+        _norm_text(payload.fecha_gestion),
+        _norm_text(payload.observacion),
+        _norm_text(payload.origen) or "manual",
+        assigned_to_user_id,
+    )
+
+    def existing_result(existing: DeudorGestion) -> GestionItem:
+        actual = (
+            _norm_text(existing.empresa),
+            _norm_rut(existing.rut_afiliado),
+            _norm_text(existing.nombre_afiliado),
+            _norm_text(existing.tipo_gestion),
+            _norm_text(existing.estado),
+            _norm_text(existing.fecha_gestion),
+            _norm_text(existing.observacion),
+            _norm_text(existing.origen) or "manual",
+            existing.assigned_to_user_id,
+        )
+        if actual != expected_operation:
+            raise ValueError("El identificador de la operación ya fue utilizado con datos diferentes.")
+        tracking = (
+            db.query(DerivationTracking)
+            .filter(DerivationTracking.gestion_id == int(existing.id))
+            .first()
+        )
+        return _to_item(existing, tracking)
+
+    if operation_id:
+        existing = (
+            db.query(DeudorGestion)
+            .filter(DeudorGestion.client_operation_id == operation_id)
+            .first()
+        )
+        if existing is not None:
+            return existing_result(existing)
+
     row = DeudorGestion(
         empresa=empresa_txt,
         rut_afiliado=rut_norm,
@@ -367,9 +414,23 @@ def create_gestion_service(
         observacion=_norm_text(payload.observacion),
         origen=_norm_text(payload.origen) or "manual",
         assigned_to_user_id=assigned_to_user_id,
+        client_operation_id=operation_id or None,
     )
     db.add(row)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        if not operation_id:
+            raise
+        concurrent = (
+            db.query(DeudorGestion)
+            .filter(DeudorGestion.client_operation_id == operation_id)
+            .first()
+        )
+        if concurrent is None:
+            raise
+        return existing_result(concurrent)
 
     tracking = None
     if derivation and assigned_to_user_id is not None:
@@ -458,22 +519,43 @@ def delete_gestion_service(db: Session, *, gestion_id: int, executor: User) -> N
 
 
 def clear_all_gestiones_service(db: Session) -> bool:
-    deleted = db.query(DeudorGestion).delete(synchronize_session=False)
+    """Elimina la base completa sin materializar miles de filas en Python.
 
-    # Al limpiar gestiones, el estado deudor debe volver a estado base.
-    # Si no tiene saldo, se mantiene "Cliente Sin deuda"; en otro caso, "Sin Gestión".
-    resumen_rows = db.query(DeudorResumen).all()
-    for row in resumen_rows:
-        saldo = float(getattr(row, "saldo_actual", 0) or 0)
-        row.estado_deudor = "Cliente Sin deuda" if saldo <= 0 else ESTADO_DEUDOR_DEFAULT
+    La operación se mantiene en una sola transacción: primero retira las
+    referencias dependientes, luego borra las gestiones y finalmente restaura
+    el estado derivado de los deudores mediante UPDATEs masivos.
+    """
+    try:
+        tables = set(inspect(db.connection()).get_table_names())
+        if "derivation_tracking" in tables:
+            db.query(DerivationTracking).delete(synchronize_session=False)
+        if "user_notifications" in tables:
+            db.query(UserNotification).filter(
+                UserNotification.related_entity_type == "gestion"
+            ).delete(synchronize_session=False)
 
-    detalle_rows = db.query(DeudorDetalle).all()
-    for row in detalle_rows:
-        saldo = float(getattr(row, "saldo_actual", 0) or 0)
-        row.estado_deudor = "Cliente Sin deuda" if saldo <= 0 else ESTADO_DEUDOR_DEFAULT
-
-    db.commit()
-    return bool(deleted)
+        deleted = db.query(DeudorGestion).delete(synchronize_session=False)
+        base_state = case(
+            (func.coalesce(DeudorResumen.saldo_actual, 0) <= 0, "Cliente Sin deuda"),
+            else_=ESTADO_DEUDOR_DEFAULT,
+        )
+        db.query(DeudorResumen).update(
+            {DeudorResumen.estado_deudor: base_state},
+            synchronize_session=False,
+        )
+        detail_state = case(
+            (func.coalesce(DeudorDetalle.saldo_actual, 0) <= 0, "Cliente Sin deuda"),
+            else_=ESTADO_DEUDOR_DEFAULT,
+        )
+        db.query(DeudorDetalle).update(
+            {DeudorDetalle.estado_deudor: detail_state},
+            synchronize_session=False,
+        )
+        db.commit()
+        return bool(deleted)
+    except Exception:
+        db.rollback()
+        raise
 
 
 def ensure_gestiones_optional_columns(db: Session) -> None:

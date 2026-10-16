@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 
 
 def _usar_entorno_virtual_del_proyecto() -> None:
@@ -32,6 +33,21 @@ from core.runtime import resource_path
 from legal import enforce_legal_acceptance, ensure_legal_documents_available
 
 
+def _install_exception_logging() -> None:
+    logger = logging.getLogger("controlia.unhandled")
+
+    def _handle(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        logger.critical(
+            "Excepción no controlada en la aplicación",
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+
+    sys.excepthook = _handle
+
+
 def main() -> int:
     if "--smoke-test" in sys.argv:
         # Valida que el bundle pueda cargar Qt y crear la aplicación sin abrir
@@ -41,6 +57,7 @@ def main() -> int:
 
     ensure_runtime_dirs()
     configure_logging()
+    _install_exception_logging()
     ensure_legal_documents_available()
 
     app = QApplication(sys.argv)

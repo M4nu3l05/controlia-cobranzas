@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 import uuid
 from datetime import date, datetime, timedelta
 
@@ -59,6 +60,24 @@ def _norm_expediente(value: str) -> str:
     return txt.lower()
 
 
+def _parse_search_amount(value: str) -> float | None:
+    """Acepta montos simples y formatos chilenos sin convertir textos en filtros numéricos."""
+    text = _norm_text(value).replace("$", "").replace(" ", "")
+    if not text or not re.fullmatch(r"[-+]?\d[\d.,]*", text):
+        return None
+    if "." in text and "," in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        decimal = len(text.rsplit(",", 1)[-1])
+        text = text.replace(",", "." if decimal <= 2 else "")
+    elif "." in text and len(text.rsplit(".", 1)[-1]) == 3:
+        text = text.replace(".", "")
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
 def _rut_db_expr(column):
     return func.ltrim(
         func.replace(
@@ -76,6 +95,11 @@ def _rut_db_expr(column):
 
 def _has_debtor_assignments_table(db: Session) -> bool:
     return inspect(db.connection()).has_table("debtor_user_assignments")
+
+
+def _can_search_debtor_assignments(db: Session) -> bool:
+    inspector = inspect(db.connection())
+    return inspector.has_table("debtor_user_assignments") and inspector.has_table("users")
 
 
 def _apply_executive_visibility_scope(query, db: Session, user_id: int):
@@ -511,17 +535,56 @@ def list_deudores_service(
     if q_txt:
         rut_q = _norm_rut(q_txt)
         like_q = f"%{q_txt}%"
-        query = query.filter(
-            or_(
-                DeudorResumen.nombre_afiliado.ilike(like_q),
-                DeudorResumen.rut_completo.ilike(like_q),
-                _rut_db_expr(DeudorResumen.rut_afiliado) == rut_q,
-                DeudorResumen.bn.ilike(like_q),
-                DeudorResumen.estado_deudor.ilike(like_q),
-                DeudorResumen.periodo_carga.ilike(like_q),
-                DeudorResumen.source_file.ilike(like_q),
+        search_clauses = [
+            DeudorResumen.empresa.ilike(like_q),
+            DeudorResumen.nombre_afiliado.ilike(like_q),
+            DeudorResumen.rut_completo.ilike(like_q),
+            DeudorResumen.rut_afiliado.ilike(like_q),
+            DeudorResumen.dv.ilike(like_q),
+            DeudorResumen.ejecutivo_asignado.ilike(like_q),
+            DeudorResumen.bn.ilike(like_q),
+            DeudorResumen.estado_deudor.ilike(like_q),
+            DeudorResumen.nro_expediente.ilike(like_q),
+            DeudorResumen.max_emision_ok.ilike(like_q),
+            DeudorResumen.min_emision_ok.ilike(like_q),
+            DeudorResumen.periodo_carga.ilike(like_q),
+            DeudorResumen.source_file.ilike(like_q),
+        ]
+        if rut_q:
+            search_clauses.append(_rut_db_expr(DeudorResumen.rut_afiliado) == rut_q)
+
+        amount = _parse_search_amount(q_txt)
+        if amount is not None:
+            search_clauses.extend(
+                [
+                    func.abs(DeudorResumen.copago - amount) < 0.005,
+                    func.abs(DeudorResumen.total_pagos - amount) < 0.005,
+                    func.abs(DeudorResumen.saldo_actual - amount) < 0.005,
+                ]
             )
-        )
+
+        if _can_search_debtor_assignments(db):
+            assignment_match = (
+                select(DebtorUserAssignment.id)
+                .join(User, User.id == DebtorUserAssignment.user_id)
+                .where(
+                    and_(
+                        func.lower(func.trim(DebtorUserAssignment.empresa))
+                        == func.lower(func.trim(DeudorResumen.empresa)),
+                        _rut_db_expr(DebtorUserAssignment.rut_afiliado)
+                        == _rut_db_expr(DeudorResumen.rut_afiliado),
+                        or_(
+                            User.username.ilike(like_q),
+                            User.email.ilike(like_q),
+                            DebtorUserAssignment.source_label.ilike(like_q),
+                        ),
+                    )
+                )
+                .exists()
+            )
+            search_clauses.append(assignment_match)
+
+        query = query.filter(or_(*search_clauses))
 
     total = int(query.order_by(None).count())
     rows = (

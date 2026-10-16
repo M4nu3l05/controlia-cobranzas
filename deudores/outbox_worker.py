@@ -49,6 +49,7 @@ class OutboxSyncWorker(QThread):
                     observacion=pendiente.observacion,
                     origen=pendiente.origen,
                     assigned_to_user_id=pendiente.assigned_to_user_id,
+                    client_operation_id=pendiente.client_operation_id,
                 )
             except Exception:
                 logger.exception("Fallo inesperado al sincronizar gestion %s", pendiente.id)

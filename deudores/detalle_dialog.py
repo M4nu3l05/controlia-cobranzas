@@ -32,6 +32,7 @@ from .gestiones_db import (
     TIPOS_GESTION,
     ESTADOS_GESTION,
 )
+from .gestiones_worker import GuardarGestionParams, GuardarGestionWorker, RefrescarGestionWorker
 from .database import (
     actualizar_cliente_por_rut,
     cargar_detalle_empresa,
@@ -56,13 +57,11 @@ from auth.auth_service import (
     backend_get_deudor_detalle,
     backend_list_gestiones,
     backend_create_gestion,
-    backend_create_gestion_con_estado,
     backend_delete_gestion,
     backend_register_pago,
     backend_update_deudor_cliente,
     backend_list_cartera_asignaciones,
 )
-from .outbox import encolar_gestion
 from admin_carteras.service import (
     obtener_empresas_asignadas_para_session,
     obtener_asignacion_por_empresa_local,
@@ -404,6 +403,10 @@ class AgregarGestionDialog(QDialog):
         self._nombre = nombre
         self._session = session
         self._empresa = str(empresa or "").strip()
+        self._operation_id = str(uuid.uuid4())
+        self._save_worker: GuardarGestionWorker | None = None
+        self._save_result: dict | None = None
+        self._save_error = ""
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 16, 20, 16)
@@ -441,73 +444,102 @@ class AgregarGestionDialog(QDialog):
         self.txt_obs.setMaximumHeight(80)
         form.addRow("Observación:", self.txt_obs)
 
+        self.lbl_estado_guardado = QLabel("")
+        self.lbl_estado_guardado.setObjectName("MutedLabel")
+        self.lbl_estado_guardado.setVisible(False)
+        lay.addWidget(self.lbl_estado_guardado)
+
         lay.addLayout(form)
         lay.addStretch(1)
 
         btns = QHBoxLayout()
         btns.addStretch(1)
-        btn_cancel = QPushButton("Cancelar")
-        btn_cancel.clicked.connect(self.reject)
-        btn_ok = QPushButton("  Guardar")
-        btn_ok.setObjectName("PrimaryButton")
-        btn_ok.clicked.connect(self._guardar)
-        btns.addWidget(btn_cancel)
-        btns.addWidget(btn_ok)
+        self.btn_cancel = QPushButton("Cancelar")
+        self.btn_cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("  Guardar")
+        self.btn_ok.setObjectName("PrimaryButton")
+        self.btn_ok.clicked.connect(self._guardar)
+        btns.addWidget(self.btn_cancel)
+        btns.addWidget(self.btn_ok)
         lay.addLayout(btns)
 
     def _guardar(self):
-        try:
-            if self._session and getattr(self._session, "auth_source", "") == "backend":
-                _, err, sin_conexion = backend_create_gestion_con_estado(
-                    self._session,
-                    rut=self._rut,
-                    empresa=self._empresa,
-                    nombre_afiliado=self._nombre,
-                    tipo_gestion=self.cmb_tipo.currentText(),
-                    estado=self.cmb_estado.currentText(),
-                    fecha_gestion=self.dte_fecha.date().toString("dd/MM/yyyy"),
-                    observacion=self.txt_obs.toPlainText().strip(),
-                    origen="manual",
-                )
-                if err and sin_conexion:
-                    # Sin red: la gestion queda en cola local y se sube sola al
-                    # recuperar conexion. Nunca se descarta el trabajo hecho.
-                    encolar_gestion(
-                        user_id=int(getattr(self._session, "user_id", 0) or 0),
-                        rut=self._rut,
-                        empresa=self._empresa,
-                        nombre_afiliado=self._nombre,
-                        tipo_gestion=self.cmb_tipo.currentText(),
-                        estado=self.cmb_estado.currentText(),
-                        fecha_gestion=self.dte_fecha.date().toString("dd/MM/yyyy"),
-                        observacion=self.txt_obs.toPlainText().strip(),
-                        origen="manual",
-                    )
-                    QMessageBox.information(
-                        self,
-                        "Gestión guardada sin conexión",
-                        "No hay conexión con el servidor, así que la gestión quedó "
-                        "guardada en este equipo.\n\n"
-                        "Se enviará automáticamente cuando vuelva la conexión. "
-                        "No la registres de nuevo.",
-                    )
-                    self.accept()
-                    return
-                if err:
-                    raise ValueError(err)
-            else:
-                insertar_gestion_manual(
-                    rut=self._rut,
-                    nombre=self._nombre,
-                    tipo_gestion=self.cmb_tipo.currentText(),
-                    estado=self.cmb_estado.currentText(),
-                    fecha=self.dte_fecha.date().toString("dd/MM/yyyy"),
-                    observacion=self.txt_obs.toPlainText().strip(),
-                )
-            QMessageBox.information(self, "Guardado", " Gestión registrada correctamente.")
-            self.accept()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo guardar: {e}")
+        if self._save_worker is not None:
+            return
+        self._save_result = None
+        self._save_error = ""
+        self._set_saving(True)
+        worker = GuardarGestionWorker(
+            GuardarGestionParams(
+                session=self._session,
+                rut=self._rut,
+                empresa=self._empresa,
+                nombre=self._nombre,
+                tipo_gestion=self.cmb_tipo.currentText(),
+                estado=self.cmb_estado.currentText(),
+                fecha=self.dte_fecha.date().toString("dd/MM/yyyy"),
+                observacion=self.txt_obs.toPlainText().strip(),
+                client_operation_id=self._operation_id,
+            ),
+            parent=self,
+        )
+        self._save_worker = worker
+        worker.saved.connect(self._on_save_result)
+        worker.failed.connect(self._on_save_failed)
+        worker.finished.connect(self._on_save_finished)
+        worker.start()
+
+    def _set_saving(self, saving: bool) -> None:
+        for widget in (self.cmb_tipo, self.cmb_estado, self.dte_fecha, self.txt_obs, self.btn_cancel):
+            widget.setEnabled(not saving)
+        self.btn_ok.setEnabled(not saving)
+        self.btn_ok.setText("Guardando…" if saving else "  Guardar")
+        self.lbl_estado_guardado.setText("Guardando la gestión de forma segura…" if saving else "")
+        self.lbl_estado_guardado.setVisible(saving)
+
+    def _on_save_result(self, result: dict) -> None:
+        self._save_result = dict(result or {})
+
+    def _on_save_failed(self, error: str) -> None:
+        self._save_error = str(error or "Error desconocido.")
+
+    def _on_save_finished(self) -> None:
+        worker = self._save_worker
+        self._save_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self._set_saving(False)
+        if self._save_error:
+            QMessageBox.critical(self, "Error", f"No se pudo guardar: {self._save_error}")
+            return
+        if self._save_result is None:
+            QMessageBox.critical(self, "Error", "No se recibió confirmación del guardado.")
+            return
+        if bool(self._save_result.get("queued")):
+            QMessageBox.information(
+                self,
+                "Gestión guardada sin conexión",
+                "La gestión quedó guardada en este equipo y se enviará automáticamente "
+                "cuando vuelva la conexión. No la registres de nuevo.",
+            )
+        else:
+            QMessageBox.information(self, "Guardado", "Gestión registrada correctamente.")
+        self.accept()
+
+    def reject(self) -> None:
+        if self._save_worker is not None:
+            self.lbl_estado_guardado.setText("Espera a que termine el guardado antes de cerrar.")
+            self.lbl_estado_guardado.setVisible(True)
+            return
+        super().reject()
+
+    def closeEvent(self, event) -> None:
+        if self._save_worker is not None:
+            event.ignore()
+            self.lbl_estado_guardado.setText("Espera a que termine el guardado antes de cerrar.")
+            self.lbl_estado_guardado.setVisible(True)
+            return
+        super().closeEvent(event)
 
 
 class _RegistrarPagoDialog(QDialog):
@@ -924,30 +956,7 @@ class _GestionWidget(QWidget):
 
         if self._session and getattr(self._session, "auth_source", "") == "backend":
             rows, err = backend_list_gestiones(self._session, rut=self._rut, empresa=self._empresa)
-            if err:
-                self.lbl_total.setText("Error al cargar gestiones")
-                return
-            if not rows:
-                self.lbl_total.setText("Sin gestiones registradas")
-                return
-
-            for ri, row in enumerate(rows):
-                self.tbl.insertRow(ri)
-                tipo = str(row.get("tipo_gestion", ""))
-                color = QColor(TIPO_COLORES.get(tipo, "#f8fafc"))
-                self._ids[ri] = (str(row.get("id", "")), str(row.get("origen", "")))
-                for ci, val in enumerate([
-                    tipo,
-                    _estado_legible(row.get("estado", "")),
-                    str(row.get("fecha_gestion", "")),
-                    str(row.get("observacion", "")),
-                ]):
-                    item = QTableWidgetItem(_fix_mojibake_text(val))
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                    item.setBackground(color)
-                    self.tbl.setItem(ri, ci, item)
-            n = len(rows)
-            self.lbl_total.setText(f"{n} gestión{'es' if n != 1 else ''}")
+            self.mostrar_backend(rows, err)
             return
 
         df = obtener_gestiones_rut(self._rut)
@@ -970,6 +979,33 @@ class _GestionWidget(QWidget):
                 item.setBackground(color)
                 self.tbl.setItem(ri, ci, item)
         n = len(df)
+        self.lbl_total.setText(f"{n} gestión{'es' if n != 1 else ''}")
+
+    def mostrar_backend(self, rows: list[dict], error: str = "") -> None:
+        self.tbl.setRowCount(0)
+        self._ids = {}
+        if error:
+            self.lbl_total.setText("Error al cargar gestiones")
+            return
+        if not rows:
+            self.lbl_total.setText("Sin gestiones registradas")
+            return
+        for ri, row in enumerate(rows):
+            self.tbl.insertRow(ri)
+            tipo = str(row.get("tipo_gestion", ""))
+            color = QColor(TIPO_COLORES.get(tipo, "#f8fafc"))
+            self._ids[ri] = (str(row.get("id", "")), str(row.get("origen", "")))
+            for ci, val in enumerate((
+                tipo,
+                _estado_legible(row.get("estado", "")),
+                str(row.get("fecha_gestion", "")),
+                str(row.get("observacion", "")),
+            )):
+                item = QTableWidgetItem(_fix_mojibake_text(val))
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                item.setBackground(color)
+                self.tbl.setItem(ri, ci, item)
+        n = len(rows)
         self.lbl_total.setText(f"{n} gestión{'es' if n != 1 else ''}")
 
     def _on_sel(self):
@@ -2292,6 +2328,8 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
         self.kpi_saldo_actual: _KpiCard | None = None
         self.btn_asignar_tarea: QPushButton | None = None
         self._can_operate_current_cartera = True
+        self._gestion_refresh_worker: RefrescarGestionWorker | None = None
+        self._gestion_refresh_pending = False
 
         info_cliente, filas_deuda = extraer_detalle_deudor(df_detalle, rut)
         self._info_cliente = info_cliente or {}
@@ -2592,8 +2630,7 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
 
 
     def _on_gestiones_actualizadas(self):
-        self._recargar_desde_bd()
-        self.gestiones_actualizadas.emit()
+        self._refrescar_gestiones_con_reintentos()
 
     def _emitir_actualizacion_gestiones(self) -> None:
         self._recargar_desde_bd()
@@ -2602,9 +2639,39 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
         self.gestiones_actualizadas.emit()
 
     def _refrescar_gestiones_con_reintentos(self) -> None:
-        self._emitir_actualizacion_gestiones()
-        for delay_ms in (300, 900, 1800):
-            QTimer.singleShot(delay_ms, self._emitir_actualizacion_gestiones)
+        if not self._usa_backend_deudores():
+            self._emitir_actualizacion_gestiones()
+            return
+        if self._gestion_refresh_worker is not None and self._gestion_refresh_worker.isRunning():
+            self._gestion_refresh_pending = True
+            return
+        worker = RefrescarGestionWorker(
+            self._session,
+            rut=self._rut,
+            empresa=self._obtener_empresa_actual(),
+            parent=self,
+        )
+        self._gestion_refresh_worker = worker
+        worker.completed.connect(self._on_gestion_refresh_completed)
+        worker.finished.connect(self._on_gestion_refresh_finished)
+        worker.start()
+
+    def _on_gestion_refresh_completed(self, payload: dict, rows: list, error: str) -> None:
+        if error:
+            return
+        self._aplicar_detalle_backend(payload or {})
+        if self._gestion_widget is not None:
+            self._gestion_widget.mostrar_backend(rows or [])
+        self.gestiones_actualizadas.emit()
+
+    def _on_gestion_refresh_finished(self) -> None:
+        worker = self._gestion_refresh_worker
+        self._gestion_refresh_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        if self._gestion_refresh_pending:
+            self._gestion_refresh_pending = False
+            self._refrescar_gestiones_con_reintentos()
 
     def _ejecutivas_destino_por_empresa(self, empresa: str) -> list[dict]:
         asignacion = self._obtener_asignacion_empresa(empresa)
@@ -2681,22 +2748,7 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
             if err:
                 return
 
-            df_det, fila_res = _backend_detalle_response_to_local(payload or {})
-            self._df_detalle_completo = df_det
-            self._fila_resumen.update(fila_res)
-            self._normalizar_fila_resumen_backend()
-
-            info_cliente, filas_deuda = extraer_detalle_deudor(df_det, self._rut)
-            self._info_cliente = info_cliente or self._info_cliente
-            self._filas_deuda = filas_deuda or []
-            self._alinear_detalle_con_resumen_backend()
-            self._sincronizar_resumen_financiero_desde_detalle()
-            self._aplicar_fallbacks_info_cliente()
-
-            self._refrescar_labels_cliente()
-            self._actualizar_tabla_detalle()
-            self._actualizar_kpis_financieros()
-            self._actualizar_permisos_cartera()
+            self._aplicar_detalle_backend(payload or {})
             return
 
         empresa = self._obtener_empresa_actual()
@@ -2731,6 +2783,22 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
         self._normalizar_fila_resumen_backend()
         self._alinear_detalle_con_resumen_backend()
         self._sincronizar_resumen_financiero_desde_detalle()
+        self._refrescar_labels_cliente()
+        self._actualizar_tabla_detalle()
+        self._actualizar_kpis_financieros()
+        self._actualizar_permisos_cartera()
+
+    def _aplicar_detalle_backend(self, payload: dict) -> None:
+        df_det, fila_res = _backend_detalle_response_to_local(payload or {})
+        self._df_detalle_completo = df_det
+        self._fila_resumen.update(fila_res)
+        self._normalizar_fila_resumen_backend()
+        info_cliente, filas_deuda = extraer_detalle_deudor(df_det, self._rut)
+        self._info_cliente = info_cliente or self._info_cliente
+        self._filas_deuda = filas_deuda or []
+        self._alinear_detalle_con_resumen_backend()
+        self._sincronizar_resumen_financiero_desde_detalle()
+        self._aplicar_fallbacks_info_cliente()
         self._refrescar_labels_cliente()
         self._actualizar_tabla_detalle()
         self._actualizar_kpis_financieros()

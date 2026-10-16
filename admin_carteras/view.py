@@ -36,6 +36,7 @@ from auth.auth_service import (
     list_users,
     backend_clear_all_deudores,
     backend_clear_all_gestiones,
+    backend_clear_all_gestiones_con_estado,
     backend_clear_empresa_deudores,
     backend_delete_deudor_individual,
     backend_list_cartera_asignaciones,
@@ -51,6 +52,7 @@ from core.db_migrations import Migration, apply_migrations
 from core.excel_export import write_excel_report
 from deudores.database import EMPRESAS, limpiar_empresa, limpiar_todas, eliminar_deudor_individual
 from deudores.gestiones_db import limpiar_gestiones, limpiar_gestiones_por_ruts
+from .data_operations import CarteraDataOperationsPanel
 
 
 def _m1_create_assignment_teams(con: sqlite3.Connection) -> None:
@@ -179,6 +181,21 @@ class _AdminInitialLoadWorker(QThread):
         self.completed.emit(results)
 
 
+class _AdminActionWorker(QThread):
+    completed = pyqtSignal(object, str)
+
+    def __init__(self, operation, parent=None):
+        super().__init__(parent)
+        self._operation = operation
+
+    def run(self) -> None:
+        try:
+            result, error = self._operation()
+        except Exception as exc:
+            result, error = None, str(exc)
+        self.completed.emit(result, str(error or ""))
+
+
 class AdminCarterasWidget(QWidget):
     datos_actualizados = pyqtSignal()
     bd_limpiada = pyqtSignal(list)
@@ -189,6 +206,7 @@ class AdminCarterasWidget(QWidget):
         self._cards_stacked = False
         self._users_cache: list[dict] = []
         self._initial_worker: _AdminInitialLoadWorker | None = None
+        self._clear_gestiones_worker: _AdminActionWorker | None = None
 
         self._combos_asignacion: dict[str, _CheckableUserCombo] = {}
         self._combos_titular: dict[str, QComboBox] = {}
@@ -212,6 +230,11 @@ class AdminCarterasWidget(QWidget):
 
         header = self._build_header()
         body.addWidget(header)
+
+        self.data_operations = CarteraDataOperationsPanel(session=session, parent=self)
+        self.data_operations.datos_actualizados.connect(self.datos_actualizados.emit)
+        self.data_operations.operation_state_changed.connect(self._on_data_operation_state)
+        body.addWidget(self.data_operations)
 
         self.top_grid = QGridLayout()
         self.top_grid.setHorizontalSpacing(14)
@@ -265,6 +288,10 @@ class AdminCarterasWidget(QWidget):
 
         self._append_log("Módulo listo. Cargando datos administrativos…")
         QTimer.singleShot(0, self._start_initial_load)
+
+    def _on_data_operation_state(self, busy: bool, message: str) -> None:
+        if message:
+            self._append_log(message if busy else f"Finalizado: {message}")
 
     # ============================================================
     # DB local de asignaciones
@@ -1103,27 +1130,58 @@ class AdminCarterasWidget(QWidget):
         QMessageBox.information(self, "Proceso completado", "✅ Se ejecutó la limpieza total de cargas.")
 
     def _accion_limpiar_gestiones(self):
+        if self._clear_gestiones_worker is not None:
+            return
         if not self._confirmar(
             "Confirmar limpieza de gestiones",
             "Se eliminarán todas las gestiones registradas en el sistema.\n\n¿Deseas continuar?",
         ):
             return
 
-        if self._session and getattr(self._session, "auth_source", "") == "backend":
-            msg = backend_clear_all_gestiones(self._session)
-            ok = bool(msg)
-            if not ok:
-                QMessageBox.warning(self, "Sin cambios", "No se pudieron eliminar las gestiones en el backend.")
-                return
-            self._limpiar_gestiones_locales()
-        else:
-            ok = self._limpiar_gestiones_locales()
-        if ok:
-            self._append_log("Gestiones eliminadas correctamente.")
-            self.datos_actualizados.emit()
-            QMessageBox.information(self, "Proceso completado", "✅ Gestiones eliminadas correctamente.")
-        else:
-            QMessageBox.warning(self, "Sin cambios", "No se pudieron eliminar las gestiones.")
+        uses_backend = bool(
+            self._session and getattr(self._session, "auth_source", "") == "backend"
+        )
+
+        def operation():
+            message = ""
+            if uses_backend:
+                message, error = backend_clear_all_gestiones_con_estado(self._session)
+                if error:
+                    return None, error
+            local_ok = self._limpiar_gestiones_locales()
+            if not local_ok:
+                return None, "No se pudo limpiar la copia local de gestiones."
+            return {"message": message}, ""
+
+        self.btn_limpiar_gestiones.setEnabled(False)
+        self.btn_limpiar_gestiones.setText("Eliminando gestiones…")
+        self._append_log("Eliminación completa de gestiones iniciada…")
+        worker = _AdminActionWorker(operation, self)
+        self._clear_gestiones_worker = worker
+        worker.completed.connect(self._on_limpiar_gestiones_completed)
+        worker.finished.connect(lambda: self._release_clear_gestiones_worker(worker))
+        worker.start()
+
+    def _release_clear_gestiones_worker(self, worker: _AdminActionWorker) -> None:
+        if self._clear_gestiones_worker is worker:
+            self._clear_gestiones_worker = None
+        worker.deleteLater()
+
+    def _on_limpiar_gestiones_completed(self, result: object, error: str) -> None:
+        self.btn_limpiar_gestiones.setEnabled(True)
+        self.btn_limpiar_gestiones.setText("Limpiar gestiones")
+        if error:
+            self._append_log(f"No se pudieron eliminar las gestiones: {error}")
+            QMessageBox.warning(self, "No se completó la eliminación", error)
+            return
+        self._append_log("Gestiones eliminadas correctamente.")
+        self.datos_actualizados.emit()
+        message = str((result or {}).get("message", "")).strip() if isinstance(result, dict) else ""
+        QMessageBox.information(
+            self,
+            "Proceso completado",
+            message or "✅ Gestiones eliminadas correctamente.",
+        )
 
     def _accion_reiniciar_datos_prueba(self):
         if not self._confirmar(

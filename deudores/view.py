@@ -122,10 +122,7 @@ class DeudoresWidget(QWidget):
         self._search_timer.timeout.connect(self._apply_filter)
 
         self._connect_ui()
-        self._ensure_period_filter_ui()
-        self._toggle_descarga_gestiones_fields()
         self._aplicar_permisos_por_rol()
-        self._cargar_ejecutivas_filtro()
         self._refrescar_panel_tareas_asignadas()
 
         QTimer.singleShot(0, self._ajustar_splitter_inicial)
@@ -582,20 +579,8 @@ class DeudoresWidget(QWidget):
 
     def _connect_ui(self) -> None:
         s = self.sidebar
-        s.btn_pick.clicked.connect(self._pick_excel)
-        s.btn_cargar.clicked.connect(self._cargar_base)
-        s.btn_actualizar_distribucion.clicked.connect(self._actualizar_distribucion_desde_excel)
         s.txt_search.textChanged.connect(self._on_search_changed)
         s.btn_cls.clicked.connect(lambda: s.txt_search.clear())
-        s.cmb_filtro_empresa.currentIndexChanged.connect(self._on_search_changed)
-        if hasattr(s, "cmb_filtro_ejecutiva"):
-            s.cmb_filtro_ejecutiva.currentIndexChanged.connect(self._on_search_changed)
-        s.cmb_col.currentIndexChanged.connect(self._on_search_changed)
-        s.btn_pick_gest.clicked.connect(self._pick_gestiones)
-        s.btn_descargar_plantilla_gest.clicked.connect(self._descargar_plantilla_gestiones)
-        s.btn_cargar_gest.clicked.connect(self._cargar_gestiones)
-        s.chk_descarga_completa.toggled.connect(self._toggle_descarga_gestiones_fields)
-        s.btn_descargar_gestiones.clicked.connect(self._descargar_base_gestiones)
         if hasattr(s, "btn_refrescar_tareas"):
             s.btn_refrescar_tareas.clicked.connect(self._refrescar_panel_tareas_asignadas)
         if hasattr(s, "btn_marcar_tareas"):
@@ -1011,13 +996,6 @@ class DeudoresWidget(QWidget):
             return False
 
         s = self.sidebar
-        empresa = s.cmb_filtro_empresa.currentText().strip()
-        if empresa == "Todas":
-            empresa = ""
-        periodo = "" if self._periodo_actual() == "Acumulado" else self._periodo_actual()
-        assigned_user_id = None
-        if hasattr(s, "cmb_filtro_ejecutiva"):
-            assigned_user_id = s.cmb_filtro_ejecutiva.currentData()
         offset = target_page * self._backend_page_size
 
         self.table_panel.btn_cargar_mas.setEnabled(False)
@@ -1028,9 +1006,9 @@ class DeudoresWidget(QWidget):
             self._session,
             generation=self._backend_generation,
             q=s.txt_search.text().strip(),
-            empresa=empresa,
-            periodo_carga=periodo,
-            assigned_user_id=assigned_user_id,
+            empresa="",
+            periodo_carga="",
+            assigned_user_id=None,
             offset=offset,
             limit=self._backend_page_size,
             append=False,
@@ -2233,11 +2211,7 @@ class DeudoresWidget(QWidget):
 
         s = self.sidebar
         texto = s.txt_search.text().strip()
-        empresa_sel = s.cmb_filtro_empresa.currentText()
-        col_idx = s.cmb_col.currentIndex()
-        periodo_sel = self._periodo_actual()
-
-        df_base = self._filtrar_por_periodo(self._df)
+        df_base = self._df
         df_display = self._formatear_columnas_monetarias(df_base.copy())
 
         model = DeudoresTableModel(df_display, self._columnas, self._etiquetas)
@@ -2248,9 +2222,8 @@ class DeudoresWidget(QWidget):
         if COLUMNA_EMPRESA in self._columnas:
             proxy.empresa_col_idx = self._columnas.index(COLUMNA_EMPRESA)
 
-        proxy.empresa_filtro = "" if empresa_sel == "Todas" else empresa_sel
-
-        proxy.setFilterKeyColumn(-1 if col_idx == 0 else col_idx - 1)
+        proxy.empresa_filtro = ""
+        proxy.setFilterKeyColumn(-1)
         proxy.setFilterFixedString(texto)
         self.table.setModel(proxy)
         proxy.invalidateFilter()
@@ -2259,7 +2232,7 @@ class DeudoresWidget(QWidget):
         visible = proxy.rowCount()
         total = proxy.sourceModel().rowCount() if proxy.sourceModel() else 0
         s.lbl_resultados.setText(
-            f"{visible:,} resultados de {total:,}" if (texto or empresa_sel != "Todas" or periodo_sel != "Acumulado") else f"Mostrando {total:,} registros"
+            f"{visible:,} resultados de {total:,}" if texto else f"Mostrando {total:,} registros"
         )
 
     def _on_double_click(self, index):
@@ -2304,7 +2277,6 @@ class DeudoresWidget(QWidget):
             )
             dlg.gestiones_actualizadas.connect(lambda: self._refrescar_estado_deudor_en_tabla(getattr(dlg, "_rut", rut)))
             dlg.exec()
-            self._refrescar_estado_deudor_en_tabla(getattr(dlg, "_rut", rut))
             self._splitter.setSizes(self._splitter.sizes())
             return
 
@@ -2319,7 +2291,6 @@ class DeudoresWidget(QWidget):
         dlg = DetalleDeudorDialog(cargar_detalle_todas(), rut, fila_resumen=fila_resumen, parent=self, session=self._session)
         dlg.gestiones_actualizadas.connect(lambda: self._refrescar_estado_deudor_en_tabla(getattr(dlg, "_rut", rut)))
         dlg.exec()
-        self._refrescar_estado_deudor_en_tabla(getattr(dlg, "_rut", rut))
         self._splitter.setSizes(self._splitter.sizes())
 
     def _set_loading(self, loading: bool):

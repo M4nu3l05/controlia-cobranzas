@@ -102,20 +102,14 @@ def test_deudores_navigates_all_pages_and_searches_global_dataset(monkeypatch):
     assert calls[-1]["offset"] == 0
     assert widget.table.model().rowCount() == 1
 
-    assert _wait_until(app, lambda: widget.sidebar.cmb_filtro_ejecutiva.count() == 3)
-    widget.sidebar.cmb_filtro_ejecutiva.setCurrentIndex(
-        widget.sidebar.cmb_filtro_ejecutiva.findData(20)
-    )
-    assert _wait_until(
-        app,
-        lambda: widget._backend_worker is None
-        and calls[-1].get("assigned_user_id") == 20,
-    )
-    assert calls[-1]["offset"] == 0
+    assert calls[-1].get("assigned_user_id") is None
+    assert not widget.sidebar.card_busq.isVisible()
+    assert not widget.sidebar.card_carga.isVisible()
+    assert "RUT, nombre, ejecutiva" in widget.sidebar.txt_search.placeholderText()
     widget.close()
 
 
-def test_supervisor_sidebar_places_search_and_filters_first(monkeypatch):
+def test_supervisor_uses_full_width_table_and_universal_search(monkeypatch):
     app = QApplication.instance() or QApplication([])
 
     monkeypatch.setattr(
@@ -129,19 +123,10 @@ def test_supervisor_sidebar_places_search_and_filters_first(monkeypatch):
         is_active=True, must_change_password=False, access_token="token", auth_source="backend",
     )
     widget = DeudoresWidget(session=session)
-    layout = widget.sidebar.layout()
-    visible_widgets = [
-        layout.itemAt(index).widget()
-        for index in range(layout.count())
-        if layout.itemAt(index).widget() is not None and layout.itemAt(index).widget().isVisibleTo(widget.sidebar)
-    ]
-
-    assert visible_widgets[:6] == [
-        widget.sidebar.card_busq,
-        widget.sidebar.card_carga,
-        widget.sidebar.card_gest,
-        widget.sidebar.card_descarga_gest,
-        widget.sidebar.lbl_periodo,
-        widget.sidebar.cmb_periodo,
-    ]
+    assert not widget._splitter.widget(0).isVisible()
+    assert widget.sidebar.txt_search.parentWidget().objectName() == "SearchBar"
+    assert not widget.sidebar.card_busq.isVisible()
+    assert not widget.sidebar.card_carga.isVisible()
+    assert not widget.sidebar.card_gest.isVisible()
+    assert not widget.sidebar.card_descarga_gest.isVisible()
     widget.close()

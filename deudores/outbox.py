@@ -41,6 +41,7 @@ class GestionPendiente:
     observacion: str
     origen: str
     assigned_to_user_id: int | None
+    client_operation_id: str
     creado_en: str
     intentos: int
     ultimo_error: str
@@ -68,6 +69,7 @@ def _migration_create(con: sqlite3.Connection) -> None:
             observacion         BLOB,
             origen              TEXT    NOT NULL DEFAULT 'manual',
             assigned_to_user_id INTEGER NULL,
+            client_operation_id TEXT    NOT NULL DEFAULT '',
             creado_en           TEXT    NOT NULL,
             intentos            INTEGER NOT NULL DEFAULT 0,
             ultimo_intento_en   TEXT    NOT NULL DEFAULT '',
@@ -82,9 +84,22 @@ def _migration_indexes(con: sqlite3.Connection) -> None:
     con.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLA}_intentos ON {TABLA}(intentos)")
 
 
+def _migration_operation_id(con: sqlite3.Connection) -> None:
+    columns = {str(row[1]) for row in con.execute(f"PRAGMA table_info({TABLA})").fetchall()}
+    if "client_operation_id" not in columns:
+        con.execute(
+            f"ALTER TABLE {TABLA} ADD COLUMN client_operation_id TEXT NOT NULL DEFAULT ''"
+        )
+    con.execute(
+        f"CREATE UNIQUE INDEX IF NOT EXISTS uq_{TABLA}_operation "
+        f"ON {TABLA}(client_operation_id) WHERE client_operation_id <> ''"
+    )
+
+
 MIGRATIONS = [
     Migration(1, "Create gestiones_pendientes table", _migration_create),
     Migration(2, "Create gestiones_pendientes indexes", _migration_indexes),
+    Migration(3, "Add client operation id", _migration_operation_id),
 ]
 
 
@@ -122,6 +137,7 @@ def encolar_gestion(
     observacion: str = "",
     origen: str = "manual",
     assigned_to_user_id: int | None = None,
+    client_operation_id: str = "",
 ) -> int:
     """Guarda una gestion que no pudo enviarse al backend. Devuelve su id local."""
     with _con() as con:
@@ -129,8 +145,9 @@ def encolar_gestion(
             f"""
             INSERT INTO {TABLA} (
                 user_id, rut, empresa, nombre_afiliado, tipo_gestion, estado,
-                fecha_gestion, observacion, origen, assigned_to_user_id, creado_en
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                fecha_gestion, observacion, origen, assigned_to_user_id,
+                creado_en, client_operation_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 int(user_id),
@@ -144,6 +161,7 @@ def encolar_gestion(
                 str(origen).strip() or "manual",
                 int(assigned_to_user_id) if assigned_to_user_id is not None else None,
                 _ahora(),
+                str(client_operation_id or "").strip(),
             ),
         )
         return int(cur.lastrowid)
@@ -162,6 +180,7 @@ def _fila_a_pendiente(r: sqlite3.Row) -> GestionPendiente:
         observacion=desproteger(r["observacion"]),
         origen=r["origen"],
         assigned_to_user_id=r["assigned_to_user_id"],
+        client_operation_id=str(r["client_operation_id"] or ""),
         creado_en=r["creado_en"],
         intentos=int(r["intentos"]),
         ultimo_error=r["ultimo_error"],

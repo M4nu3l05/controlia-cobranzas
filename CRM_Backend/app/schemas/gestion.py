@@ -31,6 +31,7 @@ class GestionCreateRequest(BaseModel):
     observacion: str = ""
     origen: str = "manual"
     assigned_to_user_id: int | None = None
+    client_operation_id: str = ""
 
 
 class GestionImportAmbiguousDebtor(BaseModel):

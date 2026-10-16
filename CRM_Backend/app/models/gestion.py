@@ -22,6 +22,7 @@ class DeudorGestion(Base):
     observacion: Mapped[str] = mapped_column(Text, nullable=False, default="")
     origen: Mapped[str] = mapped_column(String(80), nullable=False, default="manual")
     assigned_to_user_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    client_operation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),

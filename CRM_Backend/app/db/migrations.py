@@ -311,6 +311,22 @@ def _migration_10_supervisor_portfolio_teams(db: Session) -> None:
             """))
 
 
+def _migration_11_gestion_idempotency(db: Session) -> None:
+    inspector = inspect(db.connection())
+    if not inspector.has_table("deudores_gestiones"):
+        return
+    columns = {str(column["name"]) for column in inspector.get_columns("deudores_gestiones")}
+    if "client_operation_id" not in columns:
+        db.execute(text(
+            "ALTER TABLE deudores_gestiones ADD COLUMN client_operation_id VARCHAR(64)"
+        ))
+    db.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_deudores_gestiones_client_operation_id "
+        "ON deudores_gestiones(client_operation_id) "
+        "WHERE client_operation_id IS NOT NULL AND client_operation_id <> ''"
+    ))
+
+
 MIGRATIONS = (
     BackendMigration(1, "Registrar y completar el esquema CRM heredado", _migration_1_legacy_schema),
     BackendMigration(2, "Auditoría, notificaciones, derivaciones y reemplazos", _migration_2_operations),
@@ -322,6 +338,7 @@ MIGRATIONS = (
     BackendMigration(8, "Fechas normalizadas e indices para dashboard", _migration_8_dashboard_indexes),
     BackendMigration(9, "Asignacion individual de deudores a ejecutivas", _migration_9_debtor_user_assignments),
     BackendMigration(10, "Supervisores responsables y equipos de cartera", _migration_10_supervisor_portfolio_teams),
+    BackendMigration(11, "Idempotencia para gestiones manuales", _migration_11_gestion_idempotency),
 )
 
 

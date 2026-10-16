@@ -34,7 +34,7 @@ def _encolar(user_id: int = 7, rut: str = "11111111", **extra) -> int:
 
 
 def test_gestion_encolada_queda_pendiente():
-    _encolar()
+    _encolar(client_operation_id="operation-test-1")
     assert outbox.contar_pendientes(7) == 1
 
     pendientes = outbox.listar_pendientes(7)
@@ -42,6 +42,7 @@ def test_gestion_encolada_queda_pendiente():
     assert pendientes[0].rut == "11111111"
     assert pendientes[0].observacion == "Llamada sin contacto"
     assert pendientes[0].intentos == 0
+    assert pendientes[0].client_operation_id == "operation-test-1"
 
 
 def test_la_cola_sobrevive_al_cierre_de_la_aplicacion():

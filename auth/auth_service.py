@@ -45,7 +45,7 @@ __all__ = [
     "backend_delete_gestion", "backend_register_pago", "backend_update_deudor_cliente",
     "backend_list_mis_gestiones_asignadas", "backend_marcar_gestion_asignada_realizada",
     "backend_get_user_carteras", "backend_list_cartera_asignaciones", "backend_save_cartera_asignaciones", "backend_list_all_gestiones",
-    "backend_clear_empresa_deudores", "backend_clear_all_deudores", "backend_clear_all_gestiones", "backend_delete_deudor_individual",
+    "backend_clear_empresa_deudores", "backend_clear_all_deudores", "backend_clear_all_gestiones", "backend_clear_all_gestiones_con_estado", "backend_delete_deudor_individual",
     "backend_get_legal_acceptance_status", "backend_register_legal_acceptance", "backend_assisted_reset_password",
     "backend_list_pending_recovery_requests", "backend_reset_pending_recovery_request",
     "backend_list_email_templates", "backend_create_email_template",
@@ -827,19 +827,25 @@ def backend_clear_all_deudores(session: UserSession) -> str:
 
 
 def backend_clear_all_gestiones(session: UserSession) -> str:
+    message, _error = backend_clear_all_gestiones_con_estado(session)
+    return message
+
+
+def backend_clear_all_gestiones_con_estado(session: UserSession) -> Tuple[str, str]:
     try:
         data = _http_request_auth(
             "DELETE",
             "/gestiones",
             token=_require_backend_token(session),
+            timeout=600,
         )
         if isinstance(data, dict):
-            return str(data.get("message", "")).strip()
-        return ""
+            return str(data.get("message", "")).strip(), ""
+        return "", "El servidor respondió sin confirmar la eliminación."
     except ValueError as exc:
-        return str(exc)
+        return "", str(exc)
     except requests.RequestException as exc:
-        return _friendly_backend_error(exc)
+        return "", _friendly_backend_error(exc)
 
 
 def backend_list_gestiones(
@@ -968,6 +974,7 @@ def backend_create_gestion_con_estado(
     observacion: str = "",
     origen: str = "manual",
     assigned_to_user_id: int | None = None,
+    client_operation_id: str = "",
 ) -> Tuple[dict | None, str, bool]:
     """Crea una gestion en el backend.
 
@@ -989,6 +996,7 @@ def backend_create_gestion_con_estado(
                 "observacion": observacion,
                 "origen": origen,
                 "assigned_to_user_id": assigned_to_user_id,
+                "client_operation_id": str(client_operation_id or "").strip(),
             },
         )
         return data if isinstance(data, dict) else None, "", False
@@ -1012,6 +1020,7 @@ def backend_create_gestion(
     observacion: str = "",
     origen: str = "manual",
     assigned_to_user_id: int | None = None,
+    client_operation_id: str = "",
 ) -> Tuple[dict | None, str]:
     data, err, _ = backend_create_gestion_con_estado(
         session,
@@ -1024,6 +1033,7 @@ def backend_create_gestion(
         observacion=observacion,
         origen=origen,
         assigned_to_user_id=assigned_to_user_id,
+        client_operation_id=client_operation_id,
     )
     return data, err
 

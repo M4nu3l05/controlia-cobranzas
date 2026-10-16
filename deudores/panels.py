@@ -371,6 +371,39 @@ def build_splitter_layout(parent: QWidget, session=None) -> tuple[QVBoxLayout, Q
     header.addWidget(lbl_total)
     root.addLayout(header)
 
+    sidebar = DeudoresSidebar(session=session)
+
+    search_bar = QFrame()
+    search_bar.setObjectName("SearchBar")
+    search_layout = QHBoxLayout(search_bar)
+    search_layout.setContentsMargins(12, 8, 12, 8)
+    search_layout.setSpacing(8)
+    search_input = QLineEdit()
+    search_input.setPlaceholderText("🔍  Buscar por RUT, nombre, ejecutiva o cualquier dato…")
+    search_input.setMinimumHeight(40)
+    search_clear = QToolButton()
+    search_clear.setText("✕")
+    search_clear.setToolTip("Limpiar búsqueda")
+    search_clear.setMinimumSize(34, 34)
+    search_results = QLabel("—")
+    search_results.setObjectName("MutedLabel")
+    search_results.setMinimumWidth(170)
+    search_results.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    search_layout.addWidget(search_input, 1)
+    search_layout.addWidget(search_clear)
+    search_layout.addWidget(search_results)
+    root.addWidget(search_bar)
+
+    # La vista conserva estos nombres como interfaz interna, pero los controles
+    # visibles viven ahora en una única barra superior.
+    sidebar.txt_search = search_input
+    sidebar.btn_cls = search_clear
+    sidebar.lbl_resultados = search_results
+    sidebar.card_carga.setVisible(False)
+    sidebar.card_gest.setVisible(False)
+    sidebar.card_descarga_gest.setVisible(False)
+    sidebar.card_busq.setVisible(False)
+
     splitter = QSplitter(Qt.Orientation.Horizontal)
     splitter.setChildrenCollapsible(False)
     splitter.setHandleWidth(8)
@@ -387,7 +420,6 @@ def build_splitter_layout(parent: QWidget, session=None) -> tuple[QVBoxLayout, Q
     left_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
     left_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
 
-    sidebar = DeudoresSidebar(session=session)
     sidebar.setMinimumWidth(200)
     sidebar.setMaximumWidth(500)
 
@@ -396,6 +428,8 @@ def build_splitter_layout(parent: QWidget, session=None) -> tuple[QVBoxLayout, Q
     right.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     left_scroll.setWidget(sidebar)
+    role = str(getattr(session, "role", "")).strip().lower()
+    left_scroll.setVisible(role.startswith("ejecut"))
 
     splitter.addWidget(left_scroll)
     splitter.addWidget(right)
