@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFormLayout,
@@ -79,10 +80,21 @@ class TabPlantillas(QWidget):
         self.txt_cuerpo.setMinimumHeight(180)
         card_edit.body.addWidget(self.txt_cuerpo, 1)
 
-        lbl_vars = QLabel("Variables disponibles: " + "  ".join(list(VARIABLES_DISPONIBLES.keys())))
-        lbl_vars.setObjectName("MutedLabel")
-        lbl_vars.setWordWrap(True)
-        card_edit.body.addWidget(lbl_vars)
+        self.lbl_vars = QLabel(
+            "Variables disponibles (selecciona y copia con Ctrl+C): "
+            + "  ".join(list(VARIABLES_DISPONIBLES.keys()))
+        )
+        self.lbl_vars.setObjectName("MutedLabel")
+        self.lbl_vars.setWordWrap(True)
+        self.lbl_vars.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self.lbl_vars.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.lbl_vars.setToolTip(
+            "Selecciona una variable, cópiala y pégala en el asunto o en el cuerpo de la plantilla."
+        )
+        card_edit.body.addWidget(self.lbl_vars)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)

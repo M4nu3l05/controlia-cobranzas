@@ -793,6 +793,7 @@ class _VistaPreviaEmailDialog(QDialog):
         self.setWindowTitle("Vista previa del email")
         self.resize(760, 560)
         self.setModal(True)
+        self.send_requested = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
@@ -817,10 +818,20 @@ class _VistaPreviaEmailDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
-        btn_cerrar = QPushButton("Cerrar")
-        btn_cerrar.clicked.connect(self.accept)
-        btn_row.addWidget(btn_cerrar)
+        self.btn_enviar = QPushButton("\u2709\ufe0f Enviar email")
+        self.btn_enviar.setObjectName("PrimaryButton")
+        self.btn_enviar.setMinimumHeight(34)
+        self.btn_enviar.clicked.connect(self._solicitar_envio)
+        btn_row.addWidget(self.btn_enviar)
+        self.btn_cerrar = QPushButton("Cerrar")
+        self.btn_cerrar.setMinimumHeight(34)
+        self.btn_cerrar.clicked.connect(self.reject)
+        btn_row.addWidget(self.btn_cerrar)
         root.addLayout(btn_row)
+
+    def _solicitar_envio(self) -> None:
+        self.send_requested = True
+        self.accept()
 
 
 
@@ -1611,11 +1622,6 @@ class _CorreoDeudorMixin:
             self.btn_preview_email.setToolTip(
                 "" if can_operate else "Bloqueado: cartera no asignada a tu usuario"
             )
-        if getattr(self, "btn_enviar_email", None) is not None:
-            self.btn_enviar_email.setEnabled(can_operate)
-            self.btn_enviar_email.setToolTip(
-                "" if can_operate else "Bloqueado: cartera no asignada a tu usuario"
-            )
         if getattr(self, "btn_enviar_whatsapp", None) is not None:
             self.btn_enviar_whatsapp.setEnabled(can_operate)
             self.btn_enviar_whatsapp.setToolTip(
@@ -1676,13 +1682,6 @@ class _CorreoDeudorMixin:
         self.btn_preview_email.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.btn_preview_email.clicked.connect(self._vista_previa_email)
 
-        self.btn_enviar_email = QPushButton("\u2709\ufe0f Enviar email")
-        self.btn_enviar_email.setObjectName("PrimaryButton")
-        self.btn_enviar_email.setProperty("blockableAction", True)
-        self.btn_enviar_email.setMinimumHeight(34)
-        self.btn_enviar_email.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.btn_enviar_email.clicked.connect(self._enviar_email)
-
         self.btn_enviar_whatsapp = QPushButton("\U0001F7E2 Enviar WhatsApp")
         self.btn_enviar_whatsapp.setObjectName("PrimaryButton")
         self.btn_enviar_whatsapp.setProperty("blockableAction", True)
@@ -1691,7 +1690,6 @@ class _CorreoDeudorMixin:
         self.btn_enviar_whatsapp.clicked.connect(self._enviar_whatsapp)
 
         row_mail_btns.addWidget(self.btn_preview_email, 1)
-        row_mail_btns.addWidget(self.btn_enviar_email, 1)
         row_mail_btns.addWidget(self.btn_enviar_whatsapp, 1)
         card_mail.body.addLayout(row_mail_btns)
         return card_mail
@@ -2018,7 +2016,8 @@ class _CorreoDeudorMixin:
         return email, nombre, plantilla_nombre, asunto, cuerpo
 
     def _vista_previa_email(self):
-        email, _, _, asunto, cuerpo = self._generar_preview()
+        preview_data = self._generar_preview()
+        email, _, _, asunto, cuerpo = preview_data
 
         if not email:
             QMessageBox.warning(
@@ -2030,6 +2029,8 @@ class _CorreoDeudorMixin:
 
         dlg = _VistaPreviaEmailDialog(email, asunto, cuerpo, self)
         dlg.exec()
+        if dlg.send_requested:
+            self._enviar_email(preview_data)
 
     def _smtp_config_disponible(self) -> tuple[bool, dict]:
         if sesion_smtp_activa():
@@ -2052,8 +2053,8 @@ class _CorreoDeudorMixin:
         }
         return bool(host and usuario), cfg_out
 
-    def _enviar_email(self):
-        email, nombre, plantilla_nombre, asunto, cuerpo = self._generar_preview()
+    def _enviar_email(self, preview_data: tuple[str, str, str, str, str] | None = None):
+        email, nombre, plantilla_nombre, asunto, cuerpo = preview_data or self._generar_preview()
 
         if not email:
             QMessageBox.warning(
@@ -2117,7 +2118,6 @@ class _CorreoDeudorMixin:
         self._ultimo_nombre = nombre
         self._ultima_plantilla = plantilla_nombre
 
-        self.btn_enviar_email.setEnabled(False)
         self.btn_preview_email.setEnabled(False)
         self.btn_enviar_whatsapp.setEnabled(False)
 
@@ -2210,7 +2210,6 @@ class _CorreoDeudorMixin:
 
     def _on_email_terminado(self, ok_count: int, fallidos: int, omitidos: int):
         can_operate = bool(getattr(self, "_can_operate_current_cartera", True))
-        self.btn_enviar_email.setEnabled(can_operate)
         self.btn_preview_email.setEnabled(can_operate)
         self.btn_enviar_whatsapp.setEnabled(can_operate)
 
@@ -2264,7 +2263,6 @@ class _CorreoDeudorMixin:
 
     def _on_email_error_fatal(self, err: str):
         can_operate = bool(getattr(self, "_can_operate_current_cartera", True))
-        self.btn_enviar_email.setEnabled(can_operate)
         self.btn_preview_email.setEnabled(can_operate)
         self.btn_enviar_whatsapp.setEnabled(can_operate)
 
