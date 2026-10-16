@@ -146,7 +146,7 @@ class GuardarGestionWorker(QThread):
 
 
 class RefrescarGestionWorker(QThread):
-    completed = pyqtSignal(object, object, str)
+    completed = pyqtSignal(object, object, str, str)
 
     def __init__(self, session, *, rut: str, empresa: str, parent=None):
         super().__init__(parent)
@@ -166,8 +166,13 @@ class RefrescarGestionWorker(QThread):
                 rut=self._rut,
                 empresa=self._empresa,
             )
-            error = detail_error or management_error
-            self.completed.emit(payload or {}, rows or [], error)
+            self.completed.emit(
+                payload or {},
+                rows or [],
+                detail_error or "",
+                management_error or "",
+            )
         except Exception as exc:
             logger.exception("Fallo al refrescar una gestión guardada")
-            self.completed.emit({}, [], str(exc) or type(exc).__name__)
+            error = str(exc) or type(exc).__name__
+            self.completed.emit({}, [], error, error)

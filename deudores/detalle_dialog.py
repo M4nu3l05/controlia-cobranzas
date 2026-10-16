@@ -73,6 +73,16 @@ def _normalizar_nombre_cartera(valor: str) -> str:
     return "".join(ch for ch in texto if ch.isalnum())
 
 
+def _estado_gestion_legible(valor: str) -> str:
+    txt = str(valor or "").strip()
+    txt_low = txt.lower()
+    if txt_low in {"gestion asignada", "gestin asignada"}:
+        return "Gesti\u00f3n asignada"
+    if txt_low in {"gestion realizada", "gestin realizada"}:
+        return "Gesti\u00f3n realizada"
+    return txt
+
+
 def _formatear_moneda_chilena(valor) -> str:
     try:
         if valor is None:
@@ -945,15 +955,6 @@ class _GestionWidget(QWidget):
         self.tbl.setRowCount(0)
         self._ids = {}
 
-        def _estado_legible(valor: str) -> str:
-            txt = str(valor or "").strip()
-            txt_low = txt.lower()
-            if txt_low in {"gestion asignada", "gestin asignada"}:
-                return "Gesti\u00f3n asignada"
-            if txt_low in {"gestion realizada", "gestin realizada"}:
-                return "Gesti\u00f3n realizada"
-            return txt
-
         if self._session and getattr(self._session, "auth_source", "") == "backend":
             rows, err = backend_list_gestiones(self._session, rut=self._rut, empresa=self._empresa)
             self.mostrar_backend(rows, err)
@@ -970,7 +971,7 @@ class _GestionWidget(QWidget):
             self._ids[ri] = (str(row.get("id", "")), str(row.get("origen", "")))
             for ci, val in enumerate([
                 tipo,
-                _estado_legible(row.get("Estado", "")),
+                _estado_gestion_legible(row.get("Estado", "")),
                 str(row.get("Fecha_gestion", "")),
                 str(row.get("Observacion", "")),
             ]):
@@ -997,7 +998,7 @@ class _GestionWidget(QWidget):
             self._ids[ri] = (str(row.get("id", "")), str(row.get("origen", "")))
             for ci, val in enumerate((
                 tipo,
-                _estado_legible(row.get("estado", "")),
+                _estado_gestion_legible(row.get("estado", "")),
                 str(row.get("fecha_gestion", "")),
                 str(row.get("observacion", "")),
             )):
@@ -2656,11 +2657,16 @@ class DetalleDeudorDialog(_CorreoDeudorMixin, QDialog):
         worker.finished.connect(self._on_gestion_refresh_finished)
         worker.start()
 
-    def _on_gestion_refresh_completed(self, payload: dict, rows: list, error: str) -> None:
-        if error:
-            return
-        self._aplicar_detalle_backend(payload or {})
-        if self._gestion_widget is not None:
+    def _on_gestion_refresh_completed(
+        self,
+        payload: dict,
+        rows: list,
+        detail_error: str,
+        management_error: str,
+    ) -> None:
+        if not detail_error:
+            self._aplicar_detalle_backend(payload or {})
+        if not management_error and self._gestion_widget is not None:
             self._gestion_widget.mostrar_backend(rows or [])
         self.gestiones_actualizadas.emit()
 
