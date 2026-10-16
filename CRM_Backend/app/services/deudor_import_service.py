@@ -9,6 +9,7 @@ from collections import Counter
 from datetime import datetime
 
 import pandas as pd
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.deudor import DeudorDetalle, DeudorResumen
@@ -1104,7 +1105,9 @@ def _add_birlado_only_summaries(db: Session, *, empresa: str) -> int:
         ).all()
     }
     inactive = db.query(DeudorDetalle).filter(
-        DeudorDetalle.empresa == empresa, DeudorDetalle.is_active.is_(False)
+        DeudorDetalle.empresa == empresa,
+        DeudorDetalle.is_active.is_(False),
+        func.lower(func.trim(DeudorDetalle.estado_deudor)) == "birlado",
     ).all()
     rows_by_rut: dict[str, list[DeudorDetalle]] = {}
     for row in inactive:

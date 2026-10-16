@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
+from urllib.parse import quote
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -45,7 +46,7 @@ __all__ = [
     "backend_delete_gestion", "backend_register_pago", "backend_update_deudor_cliente",
     "backend_list_mis_gestiones_asignadas", "backend_marcar_gestion_asignada_realizada",
     "backend_get_user_carteras", "backend_list_cartera_asignaciones", "backend_save_cartera_asignaciones", "backend_list_all_gestiones",
-    "backend_clear_empresa_deudores", "backend_clear_all_deudores", "backend_clear_all_gestiones", "backend_clear_all_gestiones_con_estado", "backend_delete_deudor_individual",
+    "backend_clear_empresa_deudores", "backend_clear_empresa_deudores_con_estado", "backend_clear_all_deudores", "backend_clear_all_gestiones", "backend_clear_all_gestiones_con_estado", "backend_delete_deudor_individual",
     "backend_get_legal_acceptance_status", "backend_register_legal_acceptance", "backend_assisted_reset_password",
     "backend_list_pending_recovery_requests", "backend_reset_pending_recovery_request",
     "backend_list_email_templates", "backend_create_email_template",
@@ -795,19 +796,32 @@ def backend_apply_debtor_assignments(
 
 
 def backend_clear_empresa_deudores(session: UserSession, *, empresa: str) -> str:
+    message, error = backend_clear_empresa_deudores_con_estado(session, empresa=empresa)
+    return message or error
+
+
+def backend_clear_empresa_deudores_con_estado(
+    session: UserSession,
+    *,
+    empresa: str,
+) -> Tuple[str, str]:
     try:
+        empresa_path = quote(empresa.strip(), safe="")
         data = _http_request_auth(
             "DELETE",
-            f"/deudores/empresa/{empresa.strip()}",
+            f"/deudores/empresa/{empresa_path}",
             token=_require_backend_token(session),
+            timeout=600,
         )
         if isinstance(data, dict):
-            return str(data.get("message", "")).strip()
-        return ""
+            message = str(data.get("message", "")).strip()
+            if message:
+                return message, ""
+        return "", "El servidor respondió sin confirmar la eliminación."
     except ValueError as exc:
-        return str(exc)
+        return "", str(exc)
     except requests.RequestException as exc:
-        return _friendly_backend_error(exc)
+        return "", _friendly_backend_error(exc)
 
 
 def backend_clear_all_deudores(session: UserSession) -> str:

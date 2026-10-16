@@ -9,6 +9,7 @@ from auth import auth_service
 from auth.auth_service import (
     UserSession,
     backend_clear_all_gestiones_con_estado,
+    backend_clear_empresa_deudores_con_estado,
     backend_create_gestion_con_estado,
 )
 
@@ -101,6 +102,34 @@ def test_desktop_clear_gestiones_uses_render_contract(monkeypatch):
         {
             "method": "DELETE",
             "url": f"{RENDER_BACKEND_URL}/gestiones",
+            "json": None,
+            "params": None,
+            "timeout": 600,
+            "headers": {"Authorization": "Bearer token-de-prueba"},
+        }
+    ]
+
+
+def test_desktop_clear_company_uses_encoded_render_contract(monkeypatch):
+    calls: list[dict] = []
+
+    def request(**kwargs):
+        calls.append(kwargs)
+        return _JsonResponse({"message": "Base eliminada."})
+
+    monkeypatch.setattr(auth_service, "get_backend_base_url", lambda: RENDER_BACKEND_URL)
+    monkeypatch.setattr(auth_service._HTTP_SESSION, "request", request)
+
+    message, error = backend_clear_empresa_deudores_con_estado(
+        _backend_session(),
+        empresa="Cruz Blanca",
+    )
+
+    assert (message, error) == ("Base eliminada.", "")
+    assert calls == [
+        {
+            "method": "DELETE",
+            "url": f"{RENDER_BACKEND_URL}/deudores/empresa/Cruz%20Blanca",
             "json": None,
             "params": None,
             "timeout": 600,

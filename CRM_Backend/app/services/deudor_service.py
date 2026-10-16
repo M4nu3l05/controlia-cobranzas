@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.deudor import DeudorDetalle, DeudorResumen
 from app.models.debtor_assignment import DebtorUserAssignment
-from app.models.operations import CustomerChangeAudit
+from app.models.operations import CustomerChangeAudit, DebtorBirladoTransition
 from app.models.payment import PaymentAllocation, PaymentReceipt, PaymentReversal, PaymentTransaction
 from app.models.user import User
 from app.core.authorization import (
@@ -97,6 +97,87 @@ def _has_debtor_assignments_table(db: Session) -> bool:
     return inspect(db.connection()).has_table("debtor_user_assignments")
 
 
+def _clear_deudor_rows(
+    db: Session,
+    *,
+    empresa: str = "",
+    rut: str = "",
+) -> bool:
+    """Retira una base sin romper el libro histórico de pagos.
+
+    Las asignaciones de pago apuntan al detalle original y forman parte del
+    registro financiero inmutable. Esos detalles se conservan archivados; el
+    resto se elimina físicamente después de retirar las transiciones de
+    birlado que sí dependen de ellos.
+    """
+    tables = set(inspect(db.connection()).get_table_names())
+    detail_filters = []
+    resumen_filters = []
+    assignment_filters = []
+    transition_filters = []
+    if empresa:
+        detail_filters.append(func.trim(DeudorDetalle.empresa) == empresa)
+        resumen_filters.append(func.trim(DeudorResumen.empresa) == empresa)
+        assignment_filters.append(func.trim(DebtorUserAssignment.empresa) == empresa)
+        transition_filters.append(func.trim(DebtorBirladoTransition.empresa) == empresa)
+    if rut:
+        detail_filters.append(_rut_db_expr(DeudorDetalle.rut_afiliado) == rut)
+        resumen_filters.append(_rut_db_expr(DeudorResumen.rut_afiliado) == rut)
+        assignment_filters.append(_rut_db_expr(DebtorUserAssignment.rut_afiliado) == rut)
+        transition_filters.append(_rut_db_expr(DebtorBirladoTransition.rut_afiliado) == rut)
+
+    deleted_transitions = 0
+    if "debtor_birlado_transitions" in tables:
+        query = db.query(DebtorBirladoTransition)
+        if transition_filters:
+            query = query.filter(*transition_filters)
+        deleted_transitions = query.delete(synchronize_session=False)
+
+    archived_details = 0
+    detail_query = db.query(DeudorDetalle)
+    if detail_filters:
+        detail_query = detail_query.filter(*detail_filters)
+    if "payment_allocations" in tables:
+        allocated_detail_ids = select(PaymentAllocation.deudor_detalle_id)
+        archived_details = detail_query.filter(
+            DeudorDetalle.id.in_(allocated_detail_ids)
+        ).update(
+            {
+                DeudorDetalle.is_active: False,
+                DeudorDetalle.estado_deudor: "Base eliminada",
+            },
+            synchronize_session=False,
+        )
+        detail_query = db.query(DeudorDetalle)
+        if detail_filters:
+            detail_query = detail_query.filter(*detail_filters)
+        deleted_detalle = detail_query.filter(
+            ~DeudorDetalle.id.in_(allocated_detail_ids)
+        ).delete(synchronize_session=False)
+    else:
+        deleted_detalle = detail_query.delete(synchronize_session=False)
+
+    resumen_query = db.query(DeudorResumen)
+    if resumen_filters:
+        resumen_query = resumen_query.filter(*resumen_filters)
+    deleted_resumen = resumen_query.delete(synchronize_session=False)
+
+    deleted_assignments = 0
+    if "debtor_user_assignments" in tables:
+        assignment_query = db.query(DebtorUserAssignment)
+        if assignment_filters:
+            assignment_query = assignment_query.filter(*assignment_filters)
+        deleted_assignments = assignment_query.delete(synchronize_session=False)
+
+    return bool(
+        deleted_transitions
+        or archived_details
+        or deleted_detalle
+        or deleted_resumen
+        or deleted_assignments
+    )
+
+
 def _can_search_debtor_assignments(db: Session) -> bool:
     inspector = inspect(db.connection())
     return inspector.has_table("debtor_user_assignments") and inspector.has_table("users")
@@ -152,30 +233,35 @@ def clear_empresa_deudores_service(db: Session, *, empresa: str) -> bool:
     if not empresa_txt:
         raise ValueError("Debes indicar una empresa válida.")
 
-    deleted_detalle = db.query(DeudorDetalle).filter(DeudorDetalle.empresa == empresa_txt).delete(synchronize_session=False)
-    deleted_resumen = db.query(DeudorResumen).filter(DeudorResumen.empresa == empresa_txt).delete(synchronize_session=False)
-    deleted_assignments = 0
-    if _has_debtor_assignments_table(db):
-        deleted_assignments = db.query(DebtorUserAssignment).filter(
-            DebtorUserAssignment.empresa == empresa_txt
-        ).delete(synchronize_session=False)
-    db.commit()
-    return bool(deleted_detalle or deleted_resumen or deleted_assignments)
+    try:
+        changed = _clear_deudor_rows(db, empresa=empresa_txt)
+        db.commit()
+        return changed
+    except Exception:
+        db.rollback()
+        raise
 
 
 def clear_all_deudores_service(db: Session) -> list[str]:
-    empresas = [
+    empresas = {
         empresa
         for (empresa,) in db.query(DeudorResumen.empresa).distinct().all()
         if _norm_text(empresa)
-    ]
-
-    db.query(DeudorDetalle).delete(synchronize_session=False)
-    db.query(DeudorResumen).delete(synchronize_session=False)
-    if _has_debtor_assignments_table(db):
-        db.query(DebtorUserAssignment).delete(synchronize_session=False)
-    db.commit()
-    return sorted(set(empresas))
+    }
+    empresas.update(
+        empresa
+        for (empresa,) in db.query(DeudorDetalle.empresa).filter(
+            DeudorDetalle.is_active.is_(True)
+        ).distinct().all()
+        if _norm_text(empresa)
+    )
+    try:
+        _clear_deudor_rows(db)
+        db.commit()
+        return sorted(empresas)
+    except Exception:
+        db.rollback()
+        raise
 
 
 def delete_deudor_individual_service(

@@ -37,7 +37,7 @@ from auth.auth_service import (
     backend_clear_all_deudores,
     backend_clear_all_gestiones,
     backend_clear_all_gestiones_con_estado,
-    backend_clear_empresa_deudores,
+    backend_clear_empresa_deudores_con_estado,
     backend_delete_deudor_individual,
     backend_list_cartera_asignaciones,
     backend_list_customer_change_audit,
@@ -206,6 +206,7 @@ class AdminCarterasWidget(QWidget):
         self._cards_stacked = False
         self._users_cache: list[dict] = []
         self._initial_worker: _AdminInitialLoadWorker | None = None
+        self._clear_empresa_worker: _AdminActionWorker | None = None
         self._clear_gestiones_worker: _AdminActionWorker | None = None
 
         self._combos_asignacion: dict[str, _CheckableUserCombo] = {}
@@ -1082,6 +1083,8 @@ class AdminCarterasWidget(QWidget):
             )
 
     def _accion_limpiar_empresa(self):
+        if self._clear_empresa_worker is not None:
+            return
         empresa = self.cmb_empresa.currentText().strip()
         if not empresa:
             return
@@ -1092,22 +1095,57 @@ class AdminCarterasWidget(QWidget):
         ):
             return
 
-        if self._session and getattr(self._session, "auth_source", "") == "backend":
-            err = backend_clear_empresa_deudores(self._session, empresa=empresa)
-            ok = not err or "Se eliminaron" in err or "No existían" in err
-            if not ok:
-                QMessageBox.warning(self, "Sin cambios", err)
-                return
-            self._limpiar_base_local_empresa(empresa)
-        else:
-            ok = self._limpiar_base_local_empresa(empresa)
-        if ok:
-            self._append_log(f"Base de deudores limpiada para la empresa: {empresa}")
-            self.bd_limpiada.emit([empresa])
-            self.datos_actualizados.emit()
-            QMessageBox.information(self, "Proceso completado", f"✅ Base limpiada para {empresa}.")
-        else:
-            QMessageBox.warning(self, "Sin cambios", f"No se pudo limpiar la base de {empresa} o no existían datos.")
+        uses_backend = bool(
+            self._session and getattr(self._session, "auth_source", "") == "backend"
+        )
+
+        def operation():
+            message = ""
+            if uses_backend:
+                message, error = backend_clear_empresa_deudores_con_estado(
+                    self._session,
+                    empresa=empresa,
+                )
+                if error:
+                    return None, error
+                self._limpiar_base_local_empresa(empresa)
+                return {"message": message, "empresa": empresa}, ""
+            if not self._limpiar_base_local_empresa(empresa):
+                return None, f"No se pudo limpiar la base de {empresa} o no existían datos."
+            return {"message": "", "empresa": empresa}, ""
+
+        self.btn_limpiar_empresa.setEnabled(False)
+        self.btn_limpiar_empresa.setText("Eliminando base…")
+        self._append_log(f"Eliminación de base iniciada para {empresa}…")
+        worker = _AdminActionWorker(operation, self)
+        self._clear_empresa_worker = worker
+        worker.completed.connect(self._on_limpiar_empresa_completed)
+        worker.finished.connect(lambda: self._release_clear_empresa_worker(worker))
+        worker.start()
+
+    def _release_clear_empresa_worker(self, worker: _AdminActionWorker) -> None:
+        if self._clear_empresa_worker is worker:
+            self._clear_empresa_worker = None
+        worker.deleteLater()
+
+    def _on_limpiar_empresa_completed(self, result: object, error: str) -> None:
+        self.btn_limpiar_empresa.setEnabled(True)
+        self.btn_limpiar_empresa.setText("Limpiar base de deudores de empresa")
+        if error:
+            self._append_log(f"No se pudo eliminar la base: {error}")
+            QMessageBox.warning(self, "Sin cambios", error)
+            return
+        payload = result if isinstance(result, dict) else {}
+        empresa = str(payload.get("empresa", "")).strip()
+        message = str(payload.get("message", "")).strip()
+        self._append_log(f"Base de deudores limpiada para la empresa: {empresa}")
+        self.bd_limpiada.emit([empresa])
+        self.datos_actualizados.emit()
+        QMessageBox.information(
+            self,
+            "Proceso completado",
+            message or f"✅ Base limpiada para {empresa}.",
+        )
 
     def _accion_limpiar_todas(self):
         if not self._confirmar(
