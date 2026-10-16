@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import datetime
 
 import pandas as pd
-from sqlalchemy import func
+from sqlalchemy import String, func
 from sqlalchemy.orm import Session
 
 from app.models.deudor import DeudorDetalle, DeudorResumen
@@ -57,6 +57,18 @@ def _rut_completo(rut: str, dv: str) -> str:
     rut_n = _norm_rut(rut)
     dv_n = _clean_text(dv).upper()
     return f"{rut_n}-{dv_n}" if rut_n and dv_n else rut_n
+
+
+def _fit_to_columns(obj):
+    """Recorta textos al largo de su columna VARCHAR; Postgres rechaza el insert completo si alguno excede."""
+    for column in obj.__table__.columns:
+        length = getattr(column.type, "length", None)
+        if not isinstance(column.type, String) or not length:
+            continue
+        value = getattr(obj, column.key, None)
+        if isinstance(value, str) and len(value) > length:
+            setattr(obj, column.key, value[:length].rstrip())
+    return obj
 
 
 def _parse_monto(value) -> float:
@@ -659,7 +671,7 @@ def _build_resumen_objects(df: pd.DataFrame, empresa: str, source_file: str, per
                 periodo_carga=periodo_carga,
             )
         )
-    return objects
+    return [_fit_to_columns(obj) for obj in objects]
 
 
 def _build_detalle_objects(df: pd.DataFrame, empresa: str, source_file: str, periodo_carga: str) -> list[DeudorDetalle]:
@@ -717,7 +729,7 @@ def _build_detalle_objects(df: pd.DataFrame, empresa: str, source_file: str, per
                 is_active=True,
             )
         )
-    return objects
+    return [_fit_to_columns(obj) for obj in objects]
 
 
 def _transform_cart56_raw(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -1006,7 +1018,7 @@ def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
         )
 
     if resumen_objs:
-        db.bulk_save_objects(resumen_objs)
+        db.bulk_save_objects([_fit_to_columns(obj) for obj in resumen_objs])
 
     return len(resumen_objs)
 
@@ -1117,7 +1129,7 @@ def _add_birlado_only_summaries(db: Session, *, empresa: str) -> int:
     for rut, rows in rows_by_rut.items():
         row = rows[-1]
         expedientes = {x.nro_expediente for x in rows if _clean_text(x.nro_expediente)}
-        db.add(DeudorResumen(
+        db.add(_fit_to_columns(DeudorResumen(
             empresa=empresa, rut_afiliado=rut, dv=row.dv,
             rut_completo=row.rut_completo or _rut_completo(rut, row.dv),
             nombre_afiliado=row.nombre_afiliado, estado_deudor="Birlado",
@@ -1126,7 +1138,7 @@ def _add_birlado_only_summaries(db: Session, *, empresa: str) -> int:
             total_pagos=sum(float(x.total_pagos or 0) for x in rows),
             saldo_actual=sum(float(x.saldo_actual or 0) for x in rows), source_file=row.source_file,
             periodo_carga=row.periodo_carga,
-        ))
+        )))
     return len(rows_by_rut)
 
 
@@ -1274,6 +1286,7 @@ def import_deudores_excel_service(
         if (_clean_text(existente.estado_deudor) or "Sin Gestión") == "Sin Gestión":
             existente.estado_deudor = nuevo.estado_deudor or "Sin Gestión"
 
+        _fit_to_columns(existente)
         actualizados += 1
 
     batch = DebtorImportBatch(

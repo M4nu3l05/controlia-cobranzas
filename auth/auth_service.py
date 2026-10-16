@@ -171,6 +171,13 @@ def _friendly_http_status_error(status_code: int, detail: str = "") -> str:
     if status_code == 422:
         return detail_txt or "La solicitud contiene datos inválidos o incompletos."
     if status_code >= 500:
+        if detail_txt:
+            return f"El servidor del CRM presentó un error interno: {detail_txt}"
+        if status_code in (502, 503, 504):
+            return (
+                "El servidor del CRM no respondió o se reinició mientras procesaba la solicitud. "
+                "Intenta nuevamente en unos minutos."
+            )
         return "El servidor del CRM presentó un error interno. Intenta nuevamente en unos minutos."
     if "token" in detail_norm or "credentials" in detail_norm or "credenciales" in detail_norm:
         return "Tu sesión expiró o ya no es válida. Cierra sesión e ingresa nuevamente."
@@ -178,9 +185,14 @@ def _friendly_http_status_error(status_code: int, detail: str = "") -> str:
 
 
 def _extract_error_message(response: requests.Response, default_message: str) -> str:
+    # En 5xx el mensaje por defecto no aporta causa; solo se muestra el detalle real del backend.
+    if response.status_code >= 500:
+        default_message = ""
     try:
         data = response.json()
     except ValueError:
+        return _friendly_http_status_error(response.status_code, default_message)
+    if not isinstance(data, dict):
         return _friendly_http_status_error(response.status_code, default_message)
 
     detail = data.get("detail")

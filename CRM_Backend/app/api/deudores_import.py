@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
@@ -25,6 +27,15 @@ from app.services.deudor_import_service import (
 )
 
 router = APIRouter(prefix="/deudores", tags=["deudores-import"])
+logger = logging.getLogger(__name__)
+
+
+def _describe_unexpected_error(exc: Exception) -> str:
+    if isinstance(exc, DataError):
+        return "Un valor del Excel no es compatible con la base de datos (largo o formato no permitido)."
+    if isinstance(exc, IntegrityError):
+        return "El archivo genera registros duplicados o inconsistentes con los datos existentes."
+    return f"{type(exc).__name__}: {exc}"
 
 
 def _parse_column_mapping(raw: str) -> dict | None:
@@ -111,9 +122,10 @@ async def apply_debtor_assignments(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         db.rollback()
+        logger.exception("Falló la distribución de casos para %s (%s)", empresa, filename)
         raise HTTPException(
             status_code=500,
-            detail=f"No se pudo aplicar la distribución de casos: {exc}",
+            detail=f"No se pudo aplicar la distribución de casos: {_describe_unexpected_error(exc)}",
         ) from exc
 
 
@@ -166,9 +178,10 @@ async def import_deudores(
         ) from exc
     except Exception as exc:
         db.rollback()
+        logger.exception("Falló la importación de deudores para %s (%s)", empresa_txt, filename)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"No se pudo importar la base de deudores: {exc}",
+            detail=f"No se pudo importar la base de deudores: {_describe_unexpected_error(exc)}",
         ) from exc
 
 
@@ -199,8 +212,9 @@ async def preview_import_deudores(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        logger.exception("Falló la vista previa de deudores para %s (%s)", empresa_txt, filename)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"No se pudo generar la vista previa: {exc}",
+            detail=f"No se pudo generar la vista previa: {_describe_unexpected_error(exc)}",
         ) from exc
 

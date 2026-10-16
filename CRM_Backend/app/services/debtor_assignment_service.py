@@ -22,6 +22,9 @@ from app.models.deudor import DeudorDetalle
 from app.core.authorization import primary_user_id_for_company
 
 
+_UPDATE_CHUNK_SIZE = 1000
+
+
 def normalize_assignment_name(value: object) -> str:
     text = unicodedata.normalize("NFKD", str(value or ""))
     text = "".join(char for char in text if not unicodedata.combining(char)).casefold()
@@ -97,8 +100,9 @@ def _assignment_source(content: bytes) -> dict:
         if not rut:
             continue
         valid_rows += 1
-        raw_label = _clean_text(row.get(owner_column, ""))
-        normalized_label = normalize_assignment_name(raw_label)
+        # Las columnas de etiqueta son VARCHAR(255) en Postgres.
+        raw_label = _clean_text(row.get(owner_column, ""))[:255]
+        normalized_label = normalize_assignment_name(raw_label)[:255]
         if not normalized_label:
             blank_assignments += 1
             blank_debtors.add(rut)
@@ -296,6 +300,7 @@ def apply_debtor_assignments_service(
     current = {normalize_assignment_rut(row.rut_afiliado): row for row in current_rows}
 
     assigned = reassigned = unchanged = missing = 0
+    ruts_by_username: dict[str, list[str]] = defaultdict(list)
     source_ruts = set(source["labels_by_rut"]) | set(source["blank_debtors"])
     for rut in source_ruts:
         if rut not in existing_ruts:
@@ -329,14 +334,7 @@ def apply_debtor_assignments_service(
         row.normalized_label = normalized_label
         row.source_file = os.path.basename(source_file)
         row.source_hash = actual_hash
-        db.query(DeudorResumen).filter(
-            DeudorResumen.empresa == empresa_txt,
-            DeudorResumen.rut_afiliado == rut,
-        ).update({"ejecutivo_asignado": str(user.username or "").strip()}, synchronize_session=False)
-        db.query(DeudorDetalle).filter(
-            DeudorDetalle.empresa == empresa_txt,
-            DeudorDetalle.rut_afiliado == rut,
-        ).update({"ejecutivo_asignado": str(user.username or "").strip()}, synchronize_session=False)
+        ruts_by_username[str(user.username or "").strip()].append(rut)
         if previous_user_id != int(user.id):
             db.add(DebtorAssignmentAudit(
                 empresa=empresa_txt,
@@ -347,6 +345,16 @@ def apply_debtor_assignments_service(
                 source_file=os.path.basename(source_file),
                 changed_by_user_id=int(executor.id),
             ))
+
+    # Un UPDATE por ejecutiva y bloque evita miles de consultas individuales en bases grandes.
+    for username, ruts in ruts_by_username.items():
+        for start in range(0, len(ruts), _UPDATE_CHUNK_SIZE):
+            chunk = ruts[start:start + _UPDATE_CHUNK_SIZE]
+            for model in (DeudorResumen, DeudorDetalle):
+                db.query(model).filter(
+                    model.empresa == empresa_txt,
+                    model.rut_afiliado.in_(chunk),
+                ).update({"ejecutivo_asignado": username}, synchronize_session=False)
 
     alias_count = 0
     aliases = {
