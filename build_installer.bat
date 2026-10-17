@@ -23,7 +23,7 @@ if not defined ISCC_PATH goto :iscc_missing
 if errorlevel 1 goto :iss_error
 
 set "LAST_SETUP="
-for %%F in (installer\output\ControliaCobranzas_Setup_*.exe) do set "LAST_SETUP=%%~fF"
+for /f "delims=" %%F in ('dir /b /a:-d /o:-d "installer\output\ControliaCobranzas_Setup_*.exe" 2^>nul') do if not defined LAST_SETUP set "LAST_SETUP=%~dp0installer\output\%%F"
 if "%LAST_SETUP%"=="" (
   echo [ERROR] No se encontro el instalador generado en installer\output.
   exit /b 1
