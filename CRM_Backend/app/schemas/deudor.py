@@ -49,6 +49,42 @@ class DestinatarioItem(BaseModel):
     periodo_carga: str = ""
 
 
+class TemplateDebtItem(BaseModel):
+    id_deuda: str = ""
+    nro_expediente: str = ""
+    fecha_emision: str = ""
+    fecha_vencimiento: str = ""
+    fecha_prestacion: str = ""
+    fecha_prestacion2: str = ""
+    prestador: str = ""
+    monto_total: float = 0
+    monto_cobrar: float = 0
+    monto_facturado: float = 0
+    monto_liquidado: float = 0
+    monto_pagado_parcial: float = 0
+    monto_condonado: float = 0
+    monto_gestionado: float = 0
+    cuota_acordada: float = 0
+    copago: float = 0
+    total_pagos: float = 0
+    saldo_actual: float = 0
+
+
+class TemplateContextRequestItem(BaseModel):
+    empresa: str = Field(min_length=1, max_length=80)
+    rut: str = Field(min_length=1, max_length=40)
+
+
+class TemplateContextBatchRequest(BaseModel):
+    items: list[TemplateContextRequestItem] = Field(min_length=1, max_length=5000)
+
+
+class TemplateContextItem(BaseModel):
+    empresa: str
+    rut: str
+    deudas: list[TemplateDebtItem] = Field(default_factory=list)
+
+
 class DeudorDetalleItem(BaseModel):
     id: int
     empresa: str

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -54,6 +56,24 @@ DEFAULT_EMAIL_TEMPLATES = [
     },
 ]
 
+ALLOWED_TEMPLATE_VARIABLES = frozenset({
+    "nombre", "rut", "saldo", "copago", "total_pagos", "empresa",
+    "nro_expediente", "ultima_emision", "primera_emision", "detalle_deudas",
+})
+
+
+def _validate_template_variables(asunto: str, cuerpo: str) -> None:
+    found = set(re.findall(
+        r"\{([A-Za-z_][A-Za-z0-9_]*)\}",
+        f"{asunto or ''}\n{cuerpo or ''}",
+    ))
+    unsupported = sorted(found - ALLOWED_TEMPLATE_VARIABLES)
+    if unsupported:
+        tokens = ", ".join(f"{{{name}}}" for name in unsupported)
+        raise ValueError(
+            "La plantilla contiene variables no soportadas: " + tokens
+        )
+
 
 def _to_item(row: EmailTemplate) -> EmailTemplateItem:
     return EmailTemplateItem.model_validate(row)
@@ -107,10 +127,14 @@ def create_email_template_service(
     if exists:
         raise ValueError("Ya existe una plantilla con ese nombre.")
 
+    asunto = str(payload.asunto or "").strip()
+    cuerpo = str(payload.cuerpo or "").strip()
+    _validate_template_variables(asunto, cuerpo)
+
     row = EmailTemplate(
         nombre=nombre,
-        asunto=str(payload.asunto or "").strip(),
-        cuerpo=str(payload.cuerpo or "").strip(),
+        asunto=asunto,
+        cuerpo=cuerpo,
         is_active=bool(payload.is_active),
     )
     db.add(row)
@@ -148,6 +172,8 @@ def update_email_template_service(
         row.cuerpo = str(payload.cuerpo).strip()
     if payload.is_active is not None:
         row.is_active = bool(payload.is_active)
+
+    _validate_template_variables(row.asunto, row.cuerpo)
 
     db.commit()
     db.refresh(row)

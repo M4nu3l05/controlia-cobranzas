@@ -23,7 +23,12 @@ from auth.auth_service import (
     backend_delete_email_template,
     backend_update_email_template,
 )
-from .plantillas import VARIABLES_DISPONIBLES, cargar_plantillas, guardar_plantillas
+from .plantillas import (
+    VARIABLES_DISPONIBLES,
+    cargar_plantillas,
+    guardar_plantillas,
+    variables_no_soportadas,
+)
 from .ui_components import Card
 
 
@@ -183,6 +188,15 @@ class TabPlantillas(QWidget):
         nombre = self.txt_nombre_p.text().strip() or f"Plantilla {self._idx_actual + 1}"
         asunto = self.txt_asunto.text().strip()
         cuerpo = self.txt_cuerpo.toPlainText()
+        no_soportadas = variables_no_soportadas({"asunto": asunto, "cuerpo": cuerpo})
+        if no_soportadas:
+            QMessageBox.warning(
+                self,
+                "Variables no disponibles",
+                "Corrige o elimina estas variables antes de guardar:\n\n"
+                + "\n".join(no_soportadas),
+            )
+            return
         current = dict(self._plantillas[self._idx_actual])
         template_id = int(current.get("_id", 0) or 0)
 

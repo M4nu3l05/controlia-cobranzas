@@ -44,14 +44,22 @@ def _to_user_item(user: User) -> UserListItem:
 
 
 def _count_admin_users(db: Session, active_only: bool = False) -> int:
-    query = db.query(User).filter(User.role == ROLE_ADMIN)
+    query = db.query(User).filter(
+        User.role == ROLE_ADMIN,
+        User.deleted_at.is_(None),
+    )
     if active_only:
         query = query.filter(User.is_active.is_(True))
     return query.count()
 
 
 def admin_list_users_service(db: Session) -> list[UserListItem]:
-    rows = db.query(User).order_by(User.role.asc(), User.username.asc()).all()
+    rows = (
+        db.query(User)
+        .filter(User.deleted_at.is_(None))
+        .order_by(User.role.asc(), User.username.asc())
+        .all()
+    )
     return [_to_user_item(row) for row in rows]
 
 
@@ -177,7 +185,12 @@ def admin_update_user_service(
         if executor.id == target_user_id and not is_active:
             raise ValueError("No puedes desactivar tu propia cuenta.")
 
-        if not is_active and user.role == ROLE_ADMIN and _count_admin_users(db, active_only=False) <= 1:
+        if (
+            not is_active
+            and bool(user.is_active)
+            and user.role == ROLE_ADMIN
+            and _count_admin_users(db, active_only=True) <= 1
+        ):
             raise ValueError("No puedes desactivar el ultimo administrador del sistema.")
 
         user.is_active = bool(is_active)
@@ -204,11 +217,106 @@ def admin_delete_user_service(
     if not user:
         raise ValueError("El usuario no existe o ya fue eliminado.")
 
-    if user.role == ROLE_ADMIN and _count_admin_users(db, active_only=False) <= 1:
+    if (
+        user.role == ROLE_ADMIN
+        and bool(user.is_active)
+        and _count_admin_users(db, active_only=True) <= 1
+    ):
         raise ValueError("No puedes eliminar el ultimo administrador del sistema.")
 
-    db.delete(user)
-    db.commit()
+    now = datetime.now()
+    inspector = inspect(db.connection())
+    available_tables = set(inspector.get_table_names())
+
+    try:
+        if "cartera_asignaciones" in available_tables:
+            db.execute(
+                text("DELETE FROM cartera_asignaciones WHERE user_id = :user_id"),
+                {"user_id": int(user.id)},
+            )
+        if "debtor_user_assignments" in available_tables:
+            for table_name in ("deudores_resumen", "deudores_detalle"):
+                if table_name not in available_tables:
+                    continue
+                db.execute(text(f"""
+                    UPDATE {table_name}
+                    SET ejecutivo_asignado = ''
+                    WHERE EXISTS (
+                        SELECT 1 FROM debtor_user_assignments dua
+                        WHERE dua.user_id = :user_id
+                          AND dua.empresa = {table_name}.empresa
+                          AND dua.rut_afiliado = {table_name}.rut_afiliado
+                    )
+                """), {"user_id": int(user.id)})
+            db.execute(
+                text("DELETE FROM debtor_user_assignments WHERE user_id = :user_id"),
+                {"user_id": int(user.id)},
+            )
+        if "debtor_assignment_aliases" in available_tables:
+            db.execute(
+                text("DELETE FROM debtor_assignment_aliases WHERE user_id = :user_id"),
+                {"user_id": int(user.id)},
+            )
+        if "password_reset_tokens" in available_tables:
+            db.execute(
+                text("""
+                    UPDATE password_reset_tokens SET used = TRUE
+                    WHERE user_id = :user_id AND used = FALSE
+                """),
+                {"user_id": int(user.id)},
+            )
+        if "password_recovery_requests" in available_tables:
+            db.execute(
+                text("""
+                    UPDATE password_recovery_requests
+                    SET status = 'cancelled', resolved_at = :now,
+                        resolved_by_user_id = :executor_id,
+                        resolution_note = 'Cuenta eliminada por un administrador'
+                    WHERE target_user_id = :user_id AND status = 'pending'
+                """),
+                {"now": now, "executor_id": int(executor.id), "user_id": int(user.id)},
+            )
+        if "user_session_history" in available_tables:
+            db.execute(
+                text("""
+                    UPDATE user_session_history SET logout_at = :now
+                    WHERE user_id = :user_id AND logout_at IS NULL
+                """),
+                {"now": now, "user_id": int(user.id)},
+            )
+        if "cartera_temporary_replacements" in available_tables:
+            db.execute(
+                text("""
+                    UPDATE cartera_temporary_replacements
+                    SET is_active = FALSE, ended_at = :now
+                    WHERE is_active = TRUE
+                      AND (titular_user_id = :user_id OR replacement_user_id = :user_id)
+                """),
+                {"now": now, "user_id": int(user.id)},
+            )
+        if "derivation_tracking" in available_tables:
+            db.execute(
+                text("""
+                    DELETE FROM derivation_tracking
+                    WHERE assigned_to_user_id = :user_id AND completed_at IS NULL
+                """),
+                {"user_id": int(user.id)},
+            )
+        salt = generate_salt()
+        user.email = f"deleted+{int(user.id)}+{secrets.token_hex(8)}@example.com"
+        user.username = f"Usuario eliminado #{int(user.id)}"
+        user.salt = salt
+        user.password_hash = hash_password(secrets.token_urlsafe(48), salt)
+        user.is_active = False
+        user.must_change_password = False
+        user.deleted_at = now
+        user.deleted_by_user_id = int(executor.id)
+        user.deleted_by_username = str(executor.username or "").strip()
+        db.add(user)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
 
 def ensure_cartera_assignments_table(db: Session, *, commit: bool = True) -> None:

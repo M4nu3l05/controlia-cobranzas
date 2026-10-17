@@ -30,6 +30,7 @@ from conciliador.utils import load_qss
 from core.logging_config import configure_logging
 from core.paths import ensure_runtime_dirs
 from core.runtime import resource_path
+from core.ui_events import ComboBoxWheelGuard
 from legal import enforce_legal_acceptance, ensure_legal_documents_available
 
 
@@ -61,6 +62,8 @@ def main() -> int:
     ensure_legal_documents_available()
 
     app = QApplication(sys.argv)
+    app._combo_wheel_guard = ComboBoxWheelGuard(app)
+    app.installEventFilter(app._combo_wheel_guard)
     load_qss(app, resource_path("styles.qss"))
 
     auth = AuthWindow()

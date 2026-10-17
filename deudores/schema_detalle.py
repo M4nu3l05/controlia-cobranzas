@@ -437,6 +437,17 @@ def extraer_detalle_deudor(df_detalle_completo, rut: str):
             if hidden_col in row.index:
                 entrada[hidden_col] = _valor_limpio(row.get(hidden_col, ""))
         entrada["_expediente_pago"] = _valor_limpio(row.get("Nro_Expediente", ""))
+        # Conserva los campos canónicos que utiliza el motor de plantillas,
+        # aunque algunos no formen parte de las columnas visibles de la tabla.
+        for template_col in (
+            "ID_Deuda", "Nro_Expediente", "Fecha_Emision", "Fecha_Vencimiento",
+            "Fecha_Prestacion", "Fecha_Prestacion2", "Prestador", "Monto_Total",
+            "Monto_Cobrar", "Monto_Facturado", "Monto_Liquidado",
+            "Monto_Pagado_Parcial", "Monto_Condonado", "Monto_Gestionado",
+            "Cuota_Acordada", "Total_Pagos", "Saldo_Actual",
+        ):
+            if template_col in row.index:
+                entrada[template_col] = row.get(template_col, "")
         for etq, col in COLUMNAS_DETALLE_DEUDA:
             if col == "__NA__":
                 entrada[etq] = "N/A"

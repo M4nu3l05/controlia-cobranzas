@@ -14,7 +14,10 @@ from core.paths import get_data_dir
 
 logger = logging.getLogger(__name__)
 
+# Se conserva el catalogo completo para poder leer, respaldar y limpiar datos
+# historicos. Las pantallas operativas deben usar EMPRESAS_OPERATIVAS.
 EMPRESAS = ["Colmena", "Consalud", "Cruz Blanca", "Cart-56"]
+EMPRESAS_OPERATIVAS = ["Colmena", "Cruz Blanca"]
 TABLA = "deudores"
 TABLA_CONTACTOS = "contactos"
 TABLA_DETALLE = "detalle"

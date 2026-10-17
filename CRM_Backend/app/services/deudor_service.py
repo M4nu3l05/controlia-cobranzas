@@ -38,6 +38,8 @@ from app.schemas.deudor import (
     ActualizarClienteResponse,
     DashboardCompanyItem,
     DashboardSummaryResponse,
+    TemplateContextItem,
+    TemplateDebtItem,
 )
 
 
@@ -574,6 +576,74 @@ def list_destinatarios_service(
 
     out.sort(key=lambda x: (str(x.empresa or ""), str(x.nombre_afiliado or ""), str(x.rut_afiliado or "")))
     return out
+
+
+def list_template_contexts_service(
+    db: Session,
+    *,
+    items: list[dict],
+) -> list[TemplateContextItem]:
+    requested: dict[tuple[str, str], tuple[str, str]] = {}
+    for item in items or []:
+        empresa = _norm_text((item or {}).get("empresa", ""))
+        rut = _norm_rut((item or {}).get("rut", ""))
+        if empresa and rut:
+            requested[(empresa.casefold(), rut)] = (empresa, rut)
+    if not requested:
+        return []
+
+    empresas = sorted({empresa for empresa, _ in requested})
+    ruts = sorted({rut for _, rut in requested})
+    rows = (
+        db.query(DeudorDetalle)
+        .filter(
+            func.lower(func.trim(DeudorDetalle.empresa)).in_(empresas),
+            _rut_db_expr(DeudorDetalle.rut_afiliado).in_(ruts),
+            DeudorDetalle.is_active.is_(True),
+        )
+        .order_by(
+            DeudorDetalle.empresa.asc(),
+            DeudorDetalle.rut_afiliado.asc(),
+            DeudorDetalle.fecha_emision.asc(),
+            DeudorDetalle.id.asc(),
+        )
+        .all()
+    )
+
+    grouped: dict[tuple[str, str], list[TemplateDebtItem]] = {
+        key: [] for key in requested
+    }
+    for row in rows:
+        key = (_norm_text(row.empresa).casefold(), _norm_rut(row.rut_afiliado))
+        if key not in grouped:
+            continue
+        grouped[key].append(
+            TemplateDebtItem(
+                id_deuda=_norm_text(row.id_deuda),
+                nro_expediente=_norm_text(row.nro_expediente),
+                fecha_emision=_norm_text(row.fecha_emision),
+                fecha_vencimiento=_norm_text(row.fecha_vencimiento),
+                fecha_prestacion=_norm_text(row.fecha_prestacion),
+                fecha_prestacion2=_norm_text(row.fecha_prestacion2),
+                prestador=_norm_text(row.prestador),
+                monto_total=float(row.monto_total or 0),
+                monto_cobrar=float(row.monto_cobrar or 0),
+                monto_facturado=float(row.monto_facturado or 0),
+                monto_liquidado=float(row.monto_liquidado or 0),
+                monto_pagado_parcial=float(row.monto_pagado_parcial or 0),
+                monto_condonado=float(row.monto_condonado or 0),
+                monto_gestionado=float(row.monto_gestionado or 0),
+                cuota_acordada=float(row.cuota_acordada or 0),
+                copago=float(row.copago or 0),
+                total_pagos=float(row.total_pagos or 0),
+                saldo_actual=float(row.saldo_actual or 0),
+            )
+        )
+
+    return [
+        TemplateContextItem(empresa=original[0], rut=original[1], deudas=grouped[key])
+        for key, original in requested.items()
+    ]
 
 
 def list_deudores_service(

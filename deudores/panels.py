@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
 )
 
-from .database import EMPRESAS
+from .database import EMPRESAS_OPERATIVAS
 from admin_carteras.service import obtener_empresas_asignadas_para_session, session_tiene_restriccion_por_cartera
 from .ui_components import Card
 
@@ -34,8 +34,16 @@ class DeudoresSidebar(QWidget):
     def __init__(self, parent=None, session=None):
         super().__init__(parent)
         _is_ejecutivo = session_tiene_restriccion_por_cartera(session)
-        empresas_asignadas = obtener_empresas_asignadas_para_session(session) if _is_ejecutivo else list(EMPRESAS)
-        empresas_sidebar = empresas_asignadas or list(EMPRESAS)
+        empresas_asignadas = (
+            [
+                empresa
+                for empresa in obtener_empresas_asignadas_para_session(session)
+                if empresa in EMPRESAS_OPERATIVAS
+            ]
+            if _is_ejecutivo
+            else list(EMPRESAS_OPERATIVAS)
+        )
+        empresas_sidebar = empresas_asignadas if _is_ejecutivo else list(EMPRESAS_OPERATIVAS)
 
         left_layout = QVBoxLayout(self)
         left_layout.setContentsMargins(0, 0, 8, 0)

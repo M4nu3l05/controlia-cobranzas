@@ -41,7 +41,13 @@ from comisiones.service import (
 )
 from core.excel_export import write_excel_report
 from core.paths import get_data_dir
-from deudores.database import EMPRESAS, cargar_empresas, cargar_todas, stats_por_empresa, stats_por_empresas
+from deudores.database import (
+    EMPRESAS_OPERATIVAS,
+    cargar_empresas,
+    cargar_todas,
+    stats_por_empresa,
+    stats_por_empresas,
+)
 from admin_carteras.service import obtener_empresas_asignadas_para_session, session_tiene_restriccion_por_cartera
 from deudores.gestiones_db import (
     ESTADO_DEUDOR_DEFAULT,
@@ -53,9 +59,7 @@ from dashboard.worker import GeneralDashboardLoadWorker
 
 EMPRESA_CONFIG = {
     "Colmena": {"bg": "#eff6ff", "border": "#bfdbfe", "txt": "#1d4ed8", "icono": "🔵"},
-    "Consalud": {"bg": "#ecfdf5", "border": "#a7f3d0", "txt": "#047857", "icono": "🟢"},
     "Cruz Blanca": {"bg": "#fdf2f8", "border": "#fbcfe8", "txt": "#be185d", "icono": "🔴"},
-    "Cart-56": {"bg": "#fff7ed", "border": "#fdba74", "txt": "#c2410c", "icono": "🟠"},
 }
 
 STATUS_COLORS = {
@@ -647,7 +651,9 @@ class DashboardWidget(QWidget):
         return session_tiene_restriccion_por_cartera(self._session)
 
     def _empresas_visibles(self) -> list[str]:
-        return self._empresas_asignadas if self._usa_restriccion_carteras() else list(EMPRESAS)
+        if self._usa_restriccion_carteras():
+            return [empresa for empresa in self._empresas_asignadas if empresa in EMPRESAS_OPERATIVAS]
+        return list(EMPRESAS_OPERATIVAS)
 
     def _periodo_actual(self) -> str:
         return self.cmb_periodo.currentText().strip() if hasattr(self, "cmb_periodo") else "Acumulado"
@@ -793,7 +799,7 @@ class DashboardWidget(QWidget):
         company_grid.setVerticalSpacing(12)
 
         self._company_cards: dict[str, _ProgressCard] = {}
-        for i, empresa in enumerate(EMPRESAS):
+        for i, empresa in enumerate(EMPRESAS_OPERATIVAS):
             cfg = EMPRESA_CONFIG.get(empresa, {})
             card = _ProgressCard(
                 title=empresa,
@@ -1034,7 +1040,7 @@ class DashboardWidget(QWidget):
 
         company_map = {str(c.get("empresa", "")): c for c in (payload.get("companies", []) or [])}
 
-        for empresa in EMPRESAS:
+        for empresa in EMPRESAS_OPERATIVAS:
             self._company_cards[empresa].setVisible(empresa in self._empresas_visibles())
             if empresa not in self._empresas_visibles():
                 continue
@@ -1470,7 +1476,7 @@ class DashboardWidget(QWidget):
                 self.op_recuperacion.set_data("0,0%", "Sin carteras asignadas")
                 self._set_rows(self.funnel_rows, [("Sin carteras asignadas", "No tienes empresas visibles", "0")])
                 self._set_rows(self.action_rows, [("Sin carteras asignadas", "No tienes empresas visibles", "0")])
-                for empresa in EMPRESAS:
+                for empresa in EMPRESAS_OPERATIVAS:
                     self._company_cards[empresa].setVisible(False)
                 self.lbl_updated.setText(f"Actualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
                 return
@@ -1536,7 +1542,7 @@ class DashboardWidget(QWidget):
             self.op_recuperacion.set_data("0,0%", "Sin carteras asignadas")
             self._set_rows(self.funnel_rows, [("Sin carteras asignadas", "No tienes empresas visibles", "0")])
             self._set_rows(self.action_rows, [("Sin carteras asignadas", "No tienes empresas visibles", "0")])
-            for empresa in EMPRESAS:
+            for empresa in EMPRESAS_OPERATIVAS:
                 self._company_cards[empresa].setVisible(False)
             self.lbl_updated.setText(f"Actualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
             return
@@ -1649,7 +1655,7 @@ class DashboardWidget(QWidget):
             tipos_rows = [("Sin actividad", "Hoy todavía no hay gestiones registradas", "0")]
         self._set_rows(self.action_rows, tipos_rows)
 
-        for empresa in EMPRESAS:
+        for empresa in EMPRESAS_OPERATIVAS:
             self._company_cards[empresa].setVisible(empresa in empresas_visibles)
             if empresa not in empresas_visibles:
                 continue

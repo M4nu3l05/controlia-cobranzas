@@ -84,11 +84,17 @@ def user_to_me(user: User) -> UserMeResponse:
 
 def get_user_by_email(db: Session, email: str) -> Optional[User]:
     email_norm = email.strip().lower()
-    return db.query(User).filter(User.email == email_norm).first()
+    return db.query(User).filter(
+        User.email == email_norm,
+        User.deleted_at.is_(None),
+    ).first()
 
 
 def get_user_by_id(db: Session, user_id: int) -> Optional[User]:
-    return db.query(User).filter(User.id == user_id).first()
+    return db.query(User).filter(
+        User.id == user_id,
+        User.deleted_at.is_(None),
+    ).first()
 
 
 def create_user(
@@ -296,9 +302,12 @@ def ensure_first_admin(
     username: str,
     password: str,
 ) -> User:
-    existing = db.query(User).count()
+    existing = db.query(User).filter(User.deleted_at.is_(None)).count()
     if existing > 0:
-        return db.query(User).filter(User.role == ROLE_ADMIN).first()
+        return db.query(User).filter(
+            User.role == ROLE_ADMIN,
+            User.deleted_at.is_(None),
+        ).first()
 
     user = create_user(
         db,

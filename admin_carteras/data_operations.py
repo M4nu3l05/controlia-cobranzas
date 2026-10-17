@@ -38,7 +38,7 @@ from auth.auth_service import (
 )
 from core.excel_export import write_excel_report
 from core.paths import get_data_dir
-from deudores.database import EMPRESAS, base_deudores_ya_cargada
+from deudores.database import EMPRESAS_OPERATIVAS, base_deudores_ya_cargada
 from deudores.gestiones_db import TABLA
 from deudores.gestiones_import_dialog import GestionCompanyResolutionDialog
 from deudores.gestiones_worker import CargaGestionesParams, CargaGestionesWorker
@@ -149,7 +149,7 @@ class CarteraDataOperationsPanel(QWidget):
     def _build_deudores_card(self) -> None:
         layout = self.card_deudores.layout()
         self.cmb_empresa = QComboBox()
-        self.cmb_empresa.addItems(EMPRESAS)
+        self.cmb_empresa.addItems(EMPRESAS_OPERATIVAS)
         self.cmb_empresa.setMinimumHeight(36)
         layout.addWidget(QLabel("Compañía"))
         layout.addWidget(self.cmb_empresa)

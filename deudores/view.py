@@ -16,6 +16,7 @@ from core.excel_export import write_excel_report
 from core.paths import get_data_dir, get_exports_dir
 from deudores.database import (
     EMPRESAS,
+    EMPRESAS_OPERATIVAS,
     base_deudores_ya_cargada,
     cargar_detalle_empresa,
     cargar_detalle_empresas,
@@ -2147,10 +2148,14 @@ class DeudoresWidget(QWidget):
             empresas_visibles = (
                 self._empresas_asignadas_actuales()
                 if self._tiene_restriccion_por_cartera()
-                else list(EMPRESAS)
+                else list(EMPRESAS_OPERATIVAS)
             )
         else:
-            empresas_visibles = [e for e in EMPRESAS if e in self._df[COLUMNA_EMPRESA].astype(str).unique().tolist()]
+            empresas_visibles = [
+                e
+                for e in EMPRESAS_OPERATIVAS
+                if e in self._df[COLUMNA_EMPRESA].astype(str).unique().tolist()
+            ]
         if len(empresas_visibles) != 1:
             s.cmb_filtro_empresa.addItem("Todas")
         s.cmb_filtro_empresa.addItems(empresas_visibles)

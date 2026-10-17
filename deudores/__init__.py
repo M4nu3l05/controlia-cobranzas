@@ -4,7 +4,7 @@ from .gestiones_worker import CargaGestionesWorker, CargaGestionesParams
 from .schema import COLUMNAS_OBLIGATORIAS, COLUMNAS_NUMERICAS, ETIQUETAS, aplicar_schema, COLUMNA_EMPRESA
 from .schema_detalle import extraer_detalle_deudor
 from .database import (
-    EMPRESAS, guardar_registros, guardar_contactos,
+    EMPRESAS, EMPRESAS_OPERATIVAS, guardar_registros, guardar_contactos,
     cargar_empresa, cargar_todas,
     cargar_contactos_empresa, cargar_contactos_todas, cargar_para_envio,
     stats_por_empresa, limpiar_empresa, limpiar_todas, hay_datos,
@@ -28,7 +28,7 @@ __all__ = [
     "COLUMNAS_OBLIGATORIAS", "COLUMNAS_NUMERICAS", "ETIQUETAS",
     "aplicar_schema", "COLUMNA_EMPRESA",
     "extraer_detalle_deudor",
-    "EMPRESAS", "guardar_registros", "guardar_contactos",
+    "EMPRESAS", "EMPRESAS_OPERATIVAS", "guardar_registros", "guardar_contactos",
     "cargar_empresa", "cargar_todas",
     "cargar_contactos_empresa", "cargar_contactos_todas", "cargar_para_envio",
     "stats_por_empresa", "limpiar_empresa", "limpiar_todas", "hay_datos",

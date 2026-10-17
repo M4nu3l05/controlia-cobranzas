@@ -20,6 +20,8 @@ from app.schemas.deudor import (
     DeudorListResponse,
     RegistrarPagoRequest,
     RegistrarPagoResponse,
+    TemplateContextBatchRequest,
+    TemplateContextItem,
 )
 from app.services.deudor_service import (
     clear_all_deudores_service,
@@ -27,6 +29,7 @@ from app.services.deudor_service import (
     delete_deudor_individual_service,
     get_deudor_detalle_service,
     list_destinatarios_service,
+    list_template_contexts_service,
     list_deudores_service,
     registrar_pago_service,
     update_deudor_cliente_service,
@@ -109,6 +112,26 @@ def list_destinatarios(
         limit=limit,
         executive_user_id=executive_user_id,
     )
+
+
+@router.post("/template-context", response_model=list[TemplateContextItem])
+def list_template_contexts(
+    payload: TemplateContextBatchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    requested = [
+        {"empresa": item.empresa.strip(), "rut": item.rut.strip()}
+        for item in payload.items
+    ]
+    if not is_privileged_operator(current_user):
+        for item in requested:
+            if not can_operate_debtor(db, current_user, item["empresa"], item["rut"]):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="No tienes permiso para consultar el detalle de uno o más destinatarios.",
+                )
+    return list_template_contexts_service(db, items=requested)
 
 
 @router.get("/{rut}", response_model=DeudorDetalleResponse)

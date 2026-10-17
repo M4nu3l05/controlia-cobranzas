@@ -32,3 +32,5 @@ def test_backend_migrations_are_versioned_and_idempotent():
     assert "customer_change_audit" in tables
     assert "debtor_import_batches" in tables
     assert "backend_schema_migrations" in tables
+    user_columns = {column["name"] for column in inspect(engine).get_columns("users")}
+    assert {"deleted_at", "deleted_by_user_id", "deleted_by_username"} <= user_columns

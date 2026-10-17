@@ -50,7 +50,13 @@ from comisiones.service import guardar_tasas as guardar_tasas_comision, obtener_
 from core.paths import get_data_dir
 from core.db_migrations import Migration, apply_migrations
 from core.excel_export import write_excel_report
-from deudores.database import EMPRESAS, limpiar_empresa, limpiar_todas, eliminar_deudor_individual
+from deudores.database import (
+    EMPRESAS,
+    EMPRESAS_OPERATIVAS,
+    eliminar_deudor_individual,
+    limpiar_empresa,
+    limpiar_todas,
+)
 from deudores.gestiones_db import limpiar_gestiones, limpiar_gestiones_por_ruts
 from .data_operations import CarteraDataOperationsPanel
 
@@ -200,7 +206,7 @@ class AdminCarterasWidget(QWidget):
     datos_actualizados = pyqtSignal()
     bd_limpiada = pyqtSignal(list)
 
-    def __init__(self, session=None, parent=None):
+    def __init__(self, session=None, parent=None, auto_load: bool = True):
         super().__init__(parent)
         self._session = session
         self._cards_stacked = False
@@ -288,7 +294,8 @@ class AdminCarterasWidget(QWidget):
         self.card_log.layout().addWidget(self.txt_log)
 
         self._append_log("Módulo listo. Cargando datos administrativos…")
-        QTimer.singleShot(0, self._start_initial_load)
+        if auto_load:
+            QTimer.singleShot(0, self._start_initial_load)
 
     def _on_data_operation_state(self, busy: bool, message: str) -> None:
         if message:
@@ -478,7 +485,7 @@ class AdminCarterasWidget(QWidget):
         lbl_empresa = QLabel("Empresa:")
         lbl_empresa.setStyleSheet("color:#334155; font-weight:700;")
         self.cmb_empresa = QComboBox()
-        self.cmb_empresa.addItems(EMPRESAS)
+        self.cmb_empresa.addItems(EMPRESAS_OPERATIVAS)
         self.cmb_empresa.setMinimumHeight(36)
 
         row_empresa.addWidget(lbl_empresa)
@@ -560,7 +567,7 @@ class AdminCarterasWidget(QWidget):
         form = QGridLayout()
 
         self.cmb_reemplazo_empresa = QComboBox()
-        self.cmb_reemplazo_empresa.addItems(EMPRESAS)
+        self.cmb_reemplazo_empresa.addItems(EMPRESAS_OPERATIVAS)
         self.cmb_reemplazo_usuario = QComboBox()
         self._replacement_users: list[dict] = []
         for user in self._obtener_supervisores_activos():
@@ -677,7 +684,7 @@ class AdminCarterasWidget(QWidget):
     def _build_asignacion_ui(self):
         lay = self.card_asignacion.layout()
 
-        self.tbl_comisiones = QTableWidget(len(EMPRESAS), 2)
+        self.tbl_comisiones = QTableWidget(len(EMPRESAS_OPERATIVAS), 2)
         self.tbl_comisiones.setHorizontalHeaderLabels(["Cartera", "% Comisión"])
         self.tbl_comisiones.verticalHeader().setVisible(False)
         self.tbl_comisiones.verticalHeader().setDefaultSectionSize(40)
@@ -705,7 +712,7 @@ class AdminCarterasWidget(QWidget):
         )
 
         self._spins_comision = {}
-        for row, empresa in enumerate(EMPRESAS):
+        for row, empresa in enumerate(EMPRESAS_OPERATIVAS):
             item = QTableWidgetItem(empresa)
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.tbl_comisiones.setItem(row, 0, item)
@@ -720,7 +727,7 @@ class AdminCarterasWidget(QWidget):
             self._spins_comision[empresa] = spin
             self.tbl_comisiones.setCellWidget(row, 1, spin)
 
-        alto_filas = self.tbl_comisiones.horizontalHeader().height() + len(EMPRESAS) * 40 + 8
+        alto_filas = self.tbl_comisiones.horizontalHeader().height() + len(EMPRESAS_OPERATIVAS) * 40 + 8
         self.tbl_comisiones.setFixedHeight(alto_filas)
         lay.addWidget(self.tbl_comisiones)
 
@@ -741,7 +748,7 @@ class AdminCarterasWidget(QWidget):
         grid.addWidget(QLabel("Supervisores asignados"), 0, 1)
         grid.addWidget(QLabel("Titular"), 0, 2)
 
-        for row, empresa in enumerate(EMPRESAS, start=1):
+        for row, empresa in enumerate(EMPRESAS_OPERATIVAS, start=1):
             lbl = QLabel(empresa)
             lbl.setStyleSheet("color:#0f172a; font-weight:700;")
 
@@ -1293,8 +1300,8 @@ class AdminCarterasWidget(QWidget):
                 QMessageBox.warning(self, "Error al guardar", err)
                 return
 
-            # Mantiene espejo local para consultas de UI en modo escritorio.
-            self._limpiar_asignaciones()
+            # Actualiza sólo las carteras operativas; las asignaciones históricas
+            # de carteras retiradas permanecen disponibles para trazabilidad.
             for empresa, (selected, primary_id) in values_by_company.items():
                 self._guardar_asignaciones_empresa(empresa, selected, primary_id)
         else:

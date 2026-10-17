@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 from deudores.database import (
-    EMPRESAS,
+    EMPRESAS_OPERATIVAS,
     cargar_detalle_empresa,
     cargar_contactos_empresa,
     cargar_contactos_todas,
@@ -38,9 +38,13 @@ from deudores.gestiones_db import (
     insertar_gestion_manual,
     obtener_estados_deudor_por_rut,
 )
-from auth.auth_service import backend_create_gestion, backend_get_deudor_detalle, backend_list_destinatarios
+from auth.auth_service import (
+    backend_create_gestion,
+    backend_list_destinatarios,
+    backend_list_template_contexts,
+)
 from .config import config_completa
-from .plantillas import cargar_plantillas
+from .plantillas import cargar_plantillas, variables_no_soportadas
 from .ui_components import (
     Card,
     _COLOR_ENVIADO,
@@ -127,7 +131,7 @@ class TabEnvio(QWidget):
         row_emp.addWidget(QLabel("Compañía:"))
         self.cmb_empresa_filtro = QComboBox()
         self.cmb_empresa_filtro.addItem("Todas las compañías")
-        self.cmb_empresa_filtro.addItems(EMPRESAS)
+        self.cmb_empresa_filtro.addItems(EMPRESAS_OPERATIVAS)
         row_emp.addWidget(self.cmb_empresa_filtro, 1)
         card_dest.body.addLayout(row_emp)
 
@@ -594,94 +598,10 @@ class TabEnvio(QWidget):
     def _txt(self, v) -> str:
         return str(v or "").strip()
 
-    def _valor_limpio(self, v, default: str = "-") -> str:
-        txt = self._txt(v)
-        if txt.lower() in {"", "nan", "none", "n", "-"}:
-            return default
-        return txt
-
-    def _fmt_monto_detalle(self, v) -> str:
-        nro = self._parse_float(v)
-        if nro is None:
-            return "-"
-        return f"{int(round(nro)):,}".replace(",", ".")
-
-    def _linea_detalle_licencia(self, item: dict) -> str:
-        no_lic = self._valor_limpio(item.get("No_Licencia", ""))
-        nom = self._valor_limpio(item.get("Nombre Afil", ""))
-        rut = self._valor_limpio(item.get("RUT Afil", ""))
-        fec = self._valor_limpio(item.get("Fecha Pago", ""))
-        cop = self._fmt_monto_detalle(item.get("Copago", ""))
-        sal = self._fmt_monto_detalle(item.get("Saldo_Actual", ""))
-        return (
-            f"- Licencia: {no_lic} | Nombre Afil: {nom} | "
-            f"RUT Afil: {rut} | Fecha Pago: {fec} | Copago: ${cop} | Saldo: ${sal}"
-        )
-
-    def _resolver_detalles_deudor(self, rut: str, empresa: str) -> list[dict]:
-        empresa_txt = self._txt(empresa)
-        rut_norm = self._normalizar_rut(rut)
-        if not empresa_txt or not rut_norm:
-            return []
-
-        detalles: list[dict] = []
-        if self._usa_backend_envios():
-            payload, err = backend_get_deudor_detalle(self._session, rut=rut, empresa=empresa_txt)
-            if not err and isinstance(payload, dict):
-                for item in payload.get("detalle") or []:
-                    it = item or {}
-                    detalles.append(
-                        {
-                            "No_Licencia": self._txt(it.get("nro_expediente", "")),
-                            "Nombre Afil": self._txt(it.get("nombre_afil", it.get("nombre_afiliado", ""))),
-                            "RUT Afil": self._txt(it.get("rut_afil", it.get("rut_afiliado", ""))),
-                            "Fecha Pago": self._txt(it.get("fecha_pago", "")),
-                            "Fecha Recep": self._txt(it.get("cart56_fecha_recep", "")),
-                            "Fecha Recep ISA": self._txt(it.get("cart56_fecha_recep_isa", "")),
-                            "Copago": it.get("copago", ""),
-                            "Saldo_Actual": it.get("saldo_actual", ""),
-                        }
-                    )
-
-        if detalles:
-            return detalles
-
-        try:
-            local = cargar_detalle_empresa(empresa_txt).copy().fillna("")
-        except Exception:
-            local = pd.DataFrame()
-
-        if local.empty or "Rut_Afiliado" not in local.columns:
-            return []
-
-        mask = (
-            local["Rut_Afiliado"].astype(str).str.replace(".", "", regex=False).str.replace("-", "", regex=False).str.strip()
-            == rut_norm
-        )
-        subset = local.loc[mask].copy()
-        if subset.empty:
-            return []
-
-        for _, row in subset.iterrows():
-            detalles.append(
-                {
-                    "No_Licencia": self._txt(row.get("Nro_Expediente", row.get("No_Licencia", ""))),
-                    "Nombre Afil": self._txt(row.get("Nombre Afil", row.get("nombre_afil", ""))),
-                    "RUT Afil": self._txt(row.get("RUT Afil", row.get("rut_afil", ""))),
-                    "Fecha Pago": self._txt(row.get("Fecha Pago", row.get("fecha_pago", ""))),
-                    "Fecha Recep": self._txt(row.get("Cart56_Fecha_Recep", row.get("Fecha Recep", ""))),
-                    "Fecha Recep ISA": self._txt(row.get("Cart56_Fecha_Recep_ISA", row.get("Fecha Recep ISA", ""))),
-                    "Copago": row.get("Copago", ""),
-                    "Saldo_Actual": row.get("Saldo_Actual", ""),
-                }
-            )
-        return detalles
-
     def _construir_df_envio_consolidado(self, df_enviar: pd.DataFrame) -> pd.DataFrame:
         if df_enviar is None or df_enviar.empty:
             return pd.DataFrame()
 
-        cache: dict[tuple[str, str], list[dict]] = {}
         salida: list[dict] = []
 
         for email, grupo in df_enviar.groupby(df_enviar[self._col_email].astype(str).str.strip(), sort=False):
@@ -690,60 +610,12 @@ class TabEnvio(QWidget):
                 continue
 
             base = dict(grupo.iloc[0])
-            detalle_total: list[dict] = []
-            usados: set[tuple[str, str]] = set()
-
-            for _, fila in grupo.iterrows():
-                empresa = self._txt(fila.get("_empresa", ""))
-                rut = self._txt(fila.get("Rut_Afiliado", ""))
-                key = (empresa.lower(), self._normalizar_rut(rut))
-                if not key[0] or not key[1] or key in usados:
-                    continue
-                usados.add(key)
-                if key not in cache:
-                    cache[key] = self._resolver_detalles_deudor(rut=rut, empresa=empresa)
-                detalle_total.extend(cache[key])
-
-            if not detalle_total:
-                for _, fila in grupo.iterrows():
-                    detalle_total.append(
-                        {
-                            "No_Licencia": self._txt(fila.get("No_Licencia", fila.get("Nro_Expediente", ""))),
-                            "Nombre Afil": self._txt(fila.get("Nombre Afil", fila.get("nombre_afil", ""))),
-                            "RUT Afil": self._txt(fila.get("RUT Afil", fila.get("rut_afil", ""))),
-                            "Fecha Pago": self._txt(fila.get("Fecha Pago", fila.get("fecha_pago", ""))),
-                            "Fecha Recep": self._txt(fila.get("Cart56_Fecha_Recep", fila.get("Fecha Recep", ""))),
-                            "Fecha Recep ISA": self._txt(fila.get("Cart56_Fecha_Recep_ISA", fila.get("Fecha Recep ISA", ""))),
-                            "Copago": fila.get("Copago", ""),
-                            "Saldo_Actual": fila.get("Saldo_Actual", ""),
-                        }
-                    )
-
-            unicos: list[dict] = []
-            vistos: set[tuple[str, str, str, str]] = set()
-            for item in detalle_total:
-                sig = (
-                    self._txt(item.get("No_Licencia", "")),
-                    self._txt(item.get("RUT Afil", "")),
-                    self._txt(item.get("Nombre Afil", "")),
-                    self._txt(item.get("Fecha Pago", "")),
-                )
-                if sig in vistos:
-                    continue
-                vistos.add(sig)
-                unicos.append(item)
-
-            lineas = [self._linea_detalle_licencia(item) for item in unicos] or ["- Sin detalle de licencias"]
-            base["detalle_licencias"] = "\n".join(lineas)
-            if unicos:
-                primero = unicos[0]
-                base["No_Licencia"] = self._txt(primero.get("No_Licencia", base.get("No_Licencia", "")))
-                base["Nro_Expediente"] = self._txt(primero.get("No_Licencia", base.get("Nro_Expediente", "")))
-                base["Nombre Afil"] = self._txt(primero.get("Nombre Afil", base.get("Nombre Afil", "")))
-                base["RUT Afil"] = self._txt(primero.get("RUT Afil", base.get("RUT Afil", "")))
-                base["Fecha Pago"] = self._txt(primero.get("Fecha Pago", base.get("Fecha Pago", "")))
-                base["Cart56_Fecha_Recep"] = self._txt(primero.get("Fecha Recep", base.get("Cart56_Fecha_Recep", "")))
-                base["Cart56_Fecha_Recep_ISA"] = self._txt(primero.get("Fecha Recep ISA", base.get("Cart56_Fecha_Recep_ISA", "")))
+            deudas_plantilla: list[dict] = []
+            for value in grupo.get("_detalle_deudas", pd.Series(dtype=object)).tolist():
+                if isinstance(value, list):
+                    deudas_plantilla.extend(item for item in value if isinstance(item, dict))
+            if deudas_plantilla:
+                base["_detalle_deudas"] = deudas_plantilla
 
             salida.append(base)
 
@@ -871,6 +743,9 @@ class TabEnvio(QWidget):
             if df.empty or "mail_afiliado" not in df.columns or df["mail_afiliado"].astype(str).str.strip().eq("").all():
                 df = cargar_contactos_empresa(emp_param) if emp_param else cargar_contactos_todas()
 
+        if not df.empty and "_empresa" in df.columns:
+            df = df[df["_empresa"].astype(str).str.strip().isin(EMPRESAS_OPERATIVAS)].copy()
+
         if df.empty:
             QMessageBox.warning(self, "Sin datos", "Carga antes una base en Búsqueda de Deudores.")
             return
@@ -984,6 +859,16 @@ class TabEnvio(QWidget):
             return
 
         plantilla = pls[idx]
+        no_soportadas = variables_no_soportadas(plantilla)
+        if no_soportadas:
+            QMessageBox.warning(
+                self,
+                "Plantilla incompatible",
+                "La plantilla contiene variables que ya no están disponibles:\n\n"
+                + "\n".join(no_soportadas)
+                + "\n\nEdítala antes de realizar el envío.",
+            )
+            return
         self._plantilla_envio_nombre = str(plantilla.get("nombre", "")).strip()
 
         if (
@@ -1005,24 +890,14 @@ class TabEnvio(QWidget):
 
         mask = self._df_dest[self._col_email].astype(str).isin(emails_pendientes)
         df_enviar = self._df_dest[mask].copy()
-        if self._usa_backend_envios():
-            asunto_tpl = str(plantilla.get("asunto", "") or "")
-            cuerpo_tpl = str(plantilla.get("cuerpo", "") or "")
-            tokens = (
-                "{No_Licencia}",
-                "{nombre_afil}",
-                "{rut_afil}",
-                "{fecha_pago}",
-                "{Nombre_Afil}",
-                "{RUT_Afil}",
-                "{Fecha_Pago}",
-                "{Fecha_Recep}",
-                "{Fecha_Recep_ISA}",
-                "{detalle_licencias}",
-                "{Detalle_Licencias}",
-            )
-            if any(t in asunto_tpl or t in cuerpo_tpl for t in tokens):
-                df_enviar = self._enriquecer_placeholders_cart56_para_envio(df_enviar)
+        asunto_tpl = str(plantilla.get("asunto", "") or "")
+        cuerpo_tpl = str(plantilla.get("cuerpo", "") or "")
+        if "{detalle_deudas}" in asunto_tpl or "{detalle_deudas}" in cuerpo_tpl:
+            try:
+                df_enviar = self._enriquecer_detalle_deudas_para_envio(df_enviar)
+            except ValueError as exc:
+                QMessageBox.warning(self, "No se pudo cargar el detalle de deudas", str(exc))
+                return
 
         modo_consolidado = self._modo_envio_consolidado()
         self._modo_envio_ejecucion = "consolidado" if modo_consolidado else "individual"
@@ -1070,163 +945,53 @@ class TabEnvio(QWidget):
         self.btn_enviar.setEnabled(False)
         self.btn_cancelar.setEnabled(True)
 
-    def _enriquecer_placeholders_cart56_para_envio(self, df_enviar: pd.DataFrame) -> pd.DataFrame:
+    def _enriquecer_detalle_deudas_para_envio(self, df_enviar: pd.DataFrame) -> pd.DataFrame:
         if df_enviar is None or df_enviar.empty:
             return df_enviar
 
         df_out = df_enviar.copy()
-        if "No_Licencia" not in df_out.columns:
-            df_out["No_Licencia"] = ""
-        if "Nro_Expediente" not in df_out.columns:
-            df_out["Nro_Expediente"] = ""
-        if "Nombre Afil" not in df_out.columns:
-            df_out["Nombre Afil"] = ""
-        if "RUT Afil" not in df_out.columns:
-            df_out["RUT Afil"] = ""
-        if "Fecha Pago" not in df_out.columns:
-            df_out["Fecha Pago"] = ""
-        if "Cart56_Fecha_Recep" not in df_out.columns:
-            df_out["Cart56_Fecha_Recep"] = ""
-        if "Cart56_Fecha_Recep_ISA" not in df_out.columns:
-            df_out["Cart56_Fecha_Recep_ISA"] = ""
+        contexts: dict[tuple[str, str], list[dict]] = {}
+        requested: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+        for _, row in df_out.iterrows():
+            empresa = self._txt(row.get("_empresa", ""))
+            rut = self._normalizar_rut(self._txt(row.get("Rut_Afiliado", "")))
+            key = (empresa.casefold(), rut)
+            if empresa in EMPRESAS_OPERATIVAS and rut and key not in seen:
+                seen.add(key)
+                requested.append({"empresa": empresa, "rut": rut})
 
-        cache: dict[tuple[str, str], dict] = {}
+        if self._usa_backend_envios():
+            rows, err = backend_list_template_contexts(self._session, items=requested)
+            if err:
+                raise ValueError(err)
+            for item in rows:
+                empresa = self._txt((item or {}).get("empresa", ""))
+                rut = self._normalizar_rut(self._txt((item or {}).get("rut", "")))
+                contexts[(empresa.casefold(), rut)] = [
+                    dict(deuda) for deuda in ((item or {}).get("deudas") or []) if isinstance(deuda, dict)
+                ]
+        else:
+            for empresa in EMPRESAS_OPERATIVAS:
+                detalle = cargar_detalle_empresa(empresa).copy().fillna("")
+                if detalle.empty or "Rut_Afiliado" not in detalle.columns:
+                    continue
+                for rut, group in detalle.groupby(
+                    detalle["Rut_Afiliado"].astype(str).map(self._normalizar_rut),
+                    sort=False,
+                ):
+                    contexts[(empresa.casefold(), rut)] = [dict(row) for _, row in group.iterrows()]
 
-        def _txt(v) -> str:
-            return str(v or "").strip()
-
-        def _invalido(v: str) -> bool:
-            t = _txt(v).lower()
-            return t in {"", "nan", "none", "n", "—", "-"}
-
-        def _parece_contador(v: str) -> bool:
-            t = _txt(v)
-            return bool(t.isdigit() and int(t) <= 20)
-
-        detalle_local = pd.DataFrame()
-        try:
-            detalle_local = cargar_detalle_empresa("Cart-56").copy().fillna("")
-        except Exception:
-            detalle_local = pd.DataFrame()
-
-        def _resolver_desde_local(rut_norm: str, exp_ref: str) -> dict:
-            if detalle_local.empty or "Rut_Afiliado" not in detalle_local.columns:
-                return {}
-
-            d = detalle_local.copy()
-            rut_mask = (
-                d["Rut_Afiliado"].astype(str).str.replace(".", "", regex=False).str.replace("-", "", regex=False).str.strip()
-                == rut_norm
+        df_out["_detalle_deudas"] = [
+            contexts.get(
+                (
+                    self._txt(row.get("_empresa", "")).casefold(),
+                    self._normalizar_rut(self._txt(row.get("Rut_Afiliado", ""))),
+                ),
+                [],
             )
-            d = d.loc[rut_mask].copy()
-            if d.empty:
-                return {}
-
-            if exp_ref and "Nro_Expediente" in d.columns:
-                dd = d.loc[d["Nro_Expediente"].astype(str).str.strip() == exp_ref].copy()
-                if not dd.empty:
-                    d = dd
-
-            r0 = d.iloc[0]
-            return {
-                "No_Licencia": _txt(r0.get("Nro_Expediente", "")),
-                "Nombre Afil": _txt(r0.get("Nombre Afil", "")),
-                "RUT Afil": _txt(r0.get("RUT Afil", "")),
-                "Fecha Pago": _txt(r0.get("Fecha Pago", "")),
-                "Cart56_Fecha_Recep": _txt(r0.get("Cart56_Fecha_Recep", r0.get("Fecha Recep", ""))),
-                "Cart56_Fecha_Recep_ISA": _txt(r0.get("Cart56_Fecha_Recep_ISA", r0.get("Fecha Recep ISA", ""))),
-            }
-
-        for idx, row in df_out.iterrows():
-            empresa = _txt(row.get("_empresa", ""))
-            rut = _txt(row.get("Rut_Afiliado", ""))
-            if not empresa or not rut:
-                continue
-            if empresa.lower() != "cart-56":
-                continue
-
-            actual = _txt(row.get("No_Licencia", "")) or _txt(row.get("Nro_Expediente", ""))
-            faltan_campos = any(
-                _invalido(_txt(row.get(col, "")))
-                for col in ("Nombre Afil", "RUT Afil", "Fecha Pago", "Cart56_Fecha_Recep", "Cart56_Fecha_Recep_ISA")
-            )
-            if not (_invalido(actual) or _parece_contador(actual) or faltan_campos):
-                continue
-
-            key = (empresa.lower(), self._normalizar_rut(rut))
-            if key in cache:
-                resolved_payload = cache[key]
-            else:
-                payload, err = backend_get_deudor_detalle(self._session, rut=rut, empresa=empresa)
-                resolved_payload: dict = {}
-                if not err and isinstance(payload, dict):
-                    detalle = payload.get("detalle") or []
-                    chosen = None
-                    if actual:
-                        for item in detalle:
-                            val = _txt((item or {}).get("nro_expediente", ""))
-                            if val == actual:
-                                chosen = item or {}
-                                break
-                    if chosen is None:
-                        for item in detalle:
-                            val = _txt((item or {}).get("nro_expediente", ""))
-                            if not _invalido(val) and not _parece_contador(val):
-                                chosen = item or {}
-                                break
-                    chosen = chosen or (detalle[0] if detalle else {})
-
-                    resolved_payload = {
-                        "No_Licencia": _txt(chosen.get("nro_expediente", "")),
-                        "Nombre Afil": _txt(chosen.get("nombre_afil", "")),
-                        "RUT Afil": _txt(chosen.get("rut_afil", "")),
-                        "Fecha Pago": _txt(chosen.get("fecha_pago", "")),
-                        "Cart56_Fecha_Recep": _txt(chosen.get("cart56_fecha_recep", "")),
-                        "Cart56_Fecha_Recep_ISA": _txt(chosen.get("cart56_fecha_recep_isa", "")),
-                    }
-                    if _invalido(resolved_payload.get("No_Licencia", "")):
-                        resumen = payload.get("resumen") or {}
-                        val = _txt((resumen or {}).get("nro_expediente", ""))
-                        if not _invalido(val):
-                            resolved_payload["No_Licencia"] = val
-
-                if not resolved_payload:
-                    resolved_payload = _resolver_desde_local(self._normalizar_rut(rut), actual)
-                else:
-                    local_payload = _resolver_desde_local(
-                        self._normalizar_rut(rut),
-                        resolved_payload.get("No_Licencia", "") or actual,
-                    )
-                    for k, v in local_payload.items():
-                        if _invalido(_txt(resolved_payload.get(k, ""))) and not _invalido(_txt(v)):
-                            resolved_payload[k] = v
-                cache[key] = resolved_payload
-
-            resolved = _txt(resolved_payload.get("No_Licencia", ""))
-            if resolved:
-                df_out.at[idx, "No_Licencia"] = resolved
-                df_out.at[idx, "Nro_Expediente"] = resolved
-            if _invalido(_txt(row.get("Nombre Afil", ""))):
-                val = _txt(resolved_payload.get("Nombre Afil", ""))
-                if val:
-                    df_out.at[idx, "Nombre Afil"] = val
-            if _invalido(_txt(row.get("RUT Afil", ""))):
-                val = _txt(resolved_payload.get("RUT Afil", ""))
-                if val:
-                    df_out.at[idx, "RUT Afil"] = val
-            if _invalido(_txt(row.get("Fecha Pago", ""))):
-                val = _txt(resolved_payload.get("Fecha Pago", ""))
-                if val:
-                    df_out.at[idx, "Fecha Pago"] = val
-            if _invalido(_txt(row.get("Cart56_Fecha_Recep", ""))):
-                val = _txt(resolved_payload.get("Cart56_Fecha_Recep", ""))
-                if val:
-                    df_out.at[idx, "Cart56_Fecha_Recep"] = val
-            if _invalido(_txt(row.get("Cart56_Fecha_Recep_ISA", ""))):
-                val = _txt(resolved_payload.get("Cart56_Fecha_Recep_ISA", ""))
-                if val:
-                    df_out.at[idx, "Cart56_Fecha_Recep_ISA"] = val
-
+            for _, row in df_out.iterrows()
+        ]
         return df_out
 
     def _cancelar(self):

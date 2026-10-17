@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
+from deudores.database import EMPRESAS_OPERATIVAS
+
 
 class GestionCompanyResolutionDialog(QDialog):
     """Solicita una cartera para cada RUT ambiguo de una importación."""
@@ -48,7 +50,7 @@ class GestionCompanyResolutionDialog(QDialog):
             combo.addItem("Selecciona una cartera…", "")
             for company in debtor.get("companies", []) or []:
                 company_text = str(company).strip()
-                if company_text:
+                if company_text in EMPRESAS_OPERATIVAS:
                     combo.addItem(company_text, company_text)
             table.setCellWidget(row_index, 2, combo)
             self._combos.append((rut, combo))

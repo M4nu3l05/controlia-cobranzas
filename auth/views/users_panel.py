@@ -10,7 +10,7 @@ from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication,
-    QComboBox, QDialog, QFrame, QHBoxLayout, QHeaderView,
+    QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
     QLabel, QInputDialog, QLineEdit, QMessageBox, QProgressBar, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
@@ -307,27 +307,23 @@ class UsersPanel(QWidget):
         lay.addLayout(legend)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
-            [
-                "Nombre",
-                "Correo",
-                "Rol",
-                "Estado",
-                "Editar nombre",
-                "Editar rol",
-                "Activar / Desactivar",
-                "Eliminar",
-                "Recuperación asistida",
-            ]
+            ["Nombre", "Correo", "Rol", "Estado", "Acciones"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
+        header = self.table.horizontalHeader()
+        header.setMinimumSectionSize(90)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setColumnWidth(0, 170)
+        self.table.setColumnWidth(1, 260)
+        self.table.setColumnWidth(2, 150)
+        self.table.setColumnWidth(3, 185)
+        self.table.setColumnWidth(4, 260)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
@@ -370,7 +366,7 @@ class UsersPanel(QWidget):
         self.table.setRowCount(len(users))
 
         for row, u in enumerate(users):
-            self.table.setRowHeight(row, 48)
+            self.table.setRowHeight(row, 78)
             is_self = u["id"] == self._session.user_id
             uid = u["id"]
 
@@ -381,32 +377,8 @@ class UsersPanel(QWidget):
             self.table.setItem(row, 0, n)
             self.table.setItem(row, 1, QTableWidgetItem(u["email"]))
 
-            badge_w = QWidget()
-            bl = QHBoxLayout(badge_w)
-            bl.setContentsMargins(4, 4, 4, 4)
-            bl.addWidget(_badge(u["role"]))
-            bl.addStretch(1)
-            self.table.setCellWidget(row, 2, badge_w)
-
-            status = "✅ Activo" if u["is_active"] else "⛔ Inactivo"
-            s_item = QTableWidgetItem(status)
-            s_item.setForeground(QColor("#16a34a") if u["is_active"] else QColor("#dc2626"))
-            self.table.setItem(row, 3, s_item)
-
-            btn_name = QPushButton("Renombrar")
-            btn_name.setFixedHeight(30)
-            btn_name.setStyleSheet(_BTN_SEC)
-            btn_name.clicked.connect(
-                lambda _, user_id=uid, name=u["username"]: self._edit_name(user_id, name)
-            )
-            w_name = QWidget()
-            name_layout = QHBoxLayout(w_name)
-            name_layout.setContentsMargins(4, 4, 4, 4)
-            name_layout.addWidget(btn_name)
-            self.table.setCellWidget(row, 4, w_name)
-
             cmb = QComboBox()
-            cmb.setFixedHeight(30)
+            cmb.setMinimumSize(132, 30)
             cmb.setStyleSheet("""
                 QComboBox { background:#f8fafc; border:1px solid #e2e8f0;
                     border-radius:6px; padding:0 8px; font-size:8.5pt; }
@@ -422,51 +394,69 @@ class UsersPanel(QWidget):
             cmb.currentIndexChanged.connect(
                 lambda _, c=cmb, i=uid: self._change_role(i, c.currentData())
             )
-            self.table.setCellWidget(row, 5, cmb)
+            role_widget = QWidget()
+            role_layout = QVBoxLayout(role_widget)
+            role_layout.setContentsMargins(4, 4, 4, 4)
+            role_layout.addWidget(cmb)
+            self.table.setCellWidget(row, 2, role_widget)
 
+            state_widget = QWidget()
+            state_layout = QVBoxLayout(state_widget)
+            state_layout.setContentsMargins(4, 4, 4, 4)
+            state_layout.setSpacing(4)
+            state_label = QLabel("Activo" if u["is_active"] else "Inactivo")
+            state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            state_label.setStyleSheet(
+                "color:#16a34a; font-weight:700;" if u["is_active"]
+                else "color:#dc2626; font-weight:700;"
+            )
+            state_layout.addWidget(state_label)
             if is_self:
-                self.table.setItem(row, 6, QTableWidgetItem("(tu cuenta)"))
+                own_label = QLabel("Tu cuenta")
+                own_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                own_label.setStyleSheet("color:#64748b; font-size:8pt;")
+                state_layout.addWidget(own_label)
             else:
                 lbl_btn = "Desactivar" if u["is_active"] else "Activar"
                 btn = QPushButton(lbl_btn)
-                btn.setFixedHeight(30)
+                btn.setMinimumSize(104, 26)
                 btn.setStyleSheet(_BTN_DANGER if u["is_active"] else _BTN_PRIMARY)
                 btn.clicked.connect(lambda _, i=uid, active=bool(u["is_active"]): self._toggle(i, active))
-                w = QWidget()
-                bl2 = QHBoxLayout(w)
-                bl2.setContentsMargins(4, 4, 4, 4)
-                bl2.addWidget(btn)
-                self.table.setCellWidget(row, 6, w)
+                state_layout.addWidget(btn)
+            self.table.setCellWidget(row, 3, state_widget)
 
-            if is_self:
-                self.table.setItem(row, 7, QTableWidgetItem("(protegido)"))
-            else:
+            actions_widget = QWidget()
+            actions = QGridLayout(actions_widget)
+            actions.setContentsMargins(4, 4, 4, 4)
+            actions.setHorizontalSpacing(5)
+            actions.setVerticalSpacing(5)
+
+            btn_name = QPushButton("Renombrar")
+            btn_name.setMinimumSize(104, 28)
+            btn_name.setStyleSheet(_BTN_SEC)
+            btn_name.clicked.connect(
+                lambda _, user_id=uid, name=u["username"]: self._edit_name(user_id, name)
+            )
+            actions.addWidget(btn_name, 0, 0)
+
+            if not is_self:
                 btn_del = QPushButton("Eliminar")
-                btn_del.setFixedHeight(30)
+                btn_del.setMinimumSize(104, 28)
                 btn_del.setStyleSheet(_BTN_DANGER)
                 btn_del.clicked.connect(
                     lambda _, user_id=uid, name=u["username"], email=u["email"]: self._delete_user(user_id, name, email)
                 )
-                w_del = QWidget()
-                bl3 = QHBoxLayout(w_del)
-                bl3.setContentsMargins(4, 4, 4, 4)
-                bl3.addWidget(btn_del)
-                self.table.setCellWidget(row, 7, w_del)
+                actions.addWidget(btn_del, 0, 1)
 
             if self._puede_recuperar_asistido(u):
                 btn_rec = QPushButton("Restablecer")
-                btn_rec.setFixedHeight(30)
+                btn_rec.setMinimumSize(104, 28)
                 btn_rec.setStyleSheet(_BTN_PRIMARY)
                 btn_rec.clicked.connect(
                     lambda _, user_id=uid, name=u["username"], role=u["role"]: self._reset_asistido(user_id, name, role)
                 )
-                w_rec = QWidget()
-                bl4 = QHBoxLayout(w_rec)
-                bl4.setContentsMargins(4, 4, 4, 4)
-                bl4.addWidget(btn_rec)
-                self.table.setCellWidget(row, 8, w_rec)
-            else:
-                self.table.setItem(row, 8, QTableWidgetItem("No autorizado"))
+                actions.addWidget(btn_rec, 1, 0, 1, 2)
+            self.table.setCellWidget(row, 4, actions_widget)
 
     def _open_create(self):
         dlg = _CreateUserDialog(self._session, self)
@@ -539,10 +529,12 @@ class UsersPanel(QWidget):
         resp = QMessageBox.question(
             self,
             "Eliminar usuario",
-            f"¿Deseas eliminar permanentemente este usuario?\n\n"
+            f"¿Deseas eliminar el acceso de este usuario?\n\n"
             f"Nombre: {username}\n"
             f"Correo: {email}\n\n"
-            f"Esta acción no se puede deshacer.",
+            "La cuenta no podrá volver a iniciar sesión y sus asignaciones operativas "
+            "serán retiradas. La trazabilidad financiera y de auditoría se conservará.\n\n"
+            "Esta acción no se puede deshacer.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if resp != QMessageBox.StandardButton.Yes:
@@ -555,7 +547,7 @@ class UsersPanel(QWidget):
             QMessageBox.information(
                 self,
                 "Usuario eliminado",
-                f"✅  El usuario '{username}' fue eliminado correctamente."
+                f"✅  Se eliminó el acceso de '{username}' y se conservó su historial."
             )
 
         self.reload()

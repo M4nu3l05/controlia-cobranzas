@@ -49,7 +49,12 @@ from envios.config import (
     guardar_sesion_smtp,
     sesion_smtp_activa,
 )
-from envios.plantillas import cargar_plantillas, renderizar, variables_desde_fila
+from envios.plantillas import (
+    cargar_plantillas,
+    renderizar,
+    variables_desde_fila,
+    variables_no_soportadas,
+)
 from envios.worker import EnvioParams, EnvioWorker, ResultadoEnvio
 from envios.history_db import registrar_historial_envio
 from core.text_utils import fix_mojibake_text
@@ -1893,6 +1898,11 @@ class _CorreoDeudorMixin:
                 if self._modo_envio_detalle_consolidado()
                 else self._fila_deuda_para_envio_individual() or self._filas_deuda[0]
             )
+            base["_detalle_deudas"] = (
+                [dict(fila) for fila in self._filas_deuda]
+                if self._modo_envio_detalle_consolidado()
+                else [dict(primera)]
+            )
             exp_detalle = _txt(
                 primera.get("N° Expediente", "")
                 or primera.get("No Licencia", "")
@@ -2009,6 +2019,12 @@ class _CorreoDeudorMixin:
         email = self._obtener_email_destino()
         fila = self._construir_fila_envio()
         plantilla = self._plantilla_actual()
+        no_soportadas = variables_no_soportadas(plantilla)
+        if no_soportadas:
+            raise ValueError(
+                "La plantilla contiene variables que ya no están disponibles: "
+                + ", ".join(no_soportadas)
+            )
         variables = variables_desde_fila(fila)
         asunto, cuerpo = renderizar(plantilla, variables)
         nombre = str(fila.get("Nombre_Afiliado", self._rut)).strip()
@@ -2016,7 +2032,11 @@ class _CorreoDeudorMixin:
         return email, nombre, plantilla_nombre, asunto, cuerpo
 
     def _vista_previa_email(self):
-        preview_data = self._generar_preview()
+        try:
+            preview_data = self._generar_preview()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Plantilla incompatible", str(exc))
+            return
         email, _, _, asunto, cuerpo = preview_data
 
         if not email:
@@ -2054,7 +2074,11 @@ class _CorreoDeudorMixin:
         return bool(host and usuario), cfg_out
 
     def _enviar_email(self, preview_data: tuple[str, str, str, str, str] | None = None):
-        email, nombre, plantilla_nombre, asunto, cuerpo = preview_data or self._generar_preview()
+        try:
+            email, nombre, plantilla_nombre, asunto, cuerpo = preview_data or self._generar_preview()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Plantilla incompatible", str(exc))
+            return
 
         if not email:
             QMessageBox.warning(
@@ -2139,7 +2163,11 @@ class _CorreoDeudorMixin:
             )
             return
 
-        _, nombre, plantilla_nombre, asunto, cuerpo = self._generar_preview()
+        try:
+            _, nombre, plantilla_nombre, asunto, cuerpo = self._generar_preview()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Plantilla incompatible", str(exc))
+            return
         mensaje = cuerpo.strip()
 
         if not mensaje:

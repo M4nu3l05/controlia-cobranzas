@@ -33,6 +33,7 @@ from admin_carteras.service import (
     obtener_empresas_asignadas_para_session,
     session_tiene_restriccion_por_cartera,
 )
+from deudores.database import EMPRESAS_OPERATIVAS
 from auth.auth_service import get_backend_base_url
 from auth.session_history_db import obtener_conexiones_hoy, obtener_conexiones_mes
 from comisiones.service import obtener_comision_propia, obtener_tasas
@@ -773,8 +774,8 @@ class DashboardWidget(QWidget):
 
     def _visible_companies(self) -> list[str]:
         if session_tiene_restriccion_por_cartera(self._session):
-            return list(self._empresas_asignadas)
-        return []
+            return [empresa for empresa in self._empresas_asignadas if empresa in EMPRESAS_OPERATIVAS]
+        return list(EMPRESAS_OPERATIVAS)
 
     def _load_backend(self) -> tuple[list[dict], dict]:
         base = get_backend_base_url()
@@ -1043,7 +1044,14 @@ class DashboardWidget(QWidget):
             combo.blockSignals(False)
 
         pending = [d for d in self._debtors if d["monto"] > 0]
-        companies = sorted({d["empresa"] for d in pending if d["empresa"]}, key=_text_norm)
+        companies = sorted(
+            {
+                d["empresa"]
+                for d in pending
+                if d["empresa"] in EMPRESAS_OPERATIVAS
+            },
+            key=_text_norm,
+        )
         states = sorted({d["estado"] for d in pending if d["estado"]}, key=_text_norm)
         populate(self.company_filter, "Todas las carteras", companies)
         populate(self.state_filter, "Todos los estados", states)

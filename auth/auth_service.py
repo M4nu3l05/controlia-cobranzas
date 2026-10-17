@@ -39,7 +39,7 @@ __all__ = [
     "password_strength", "list_users", "invalidate_users_cache", "toggle_user_active",
     "admin_update_user", "admin_delete_user",
     "backend_list_deudores", "backend_list_deudores_page", "backend_get_deudor_detalle",
-    "backend_list_destinatarios",
+    "backend_list_destinatarios", "backend_list_template_contexts",
     "backend_import_deudores", "backend_preview_import_deudores",
     "backend_preview_debtor_assignments", "backend_apply_debtor_assignments",
     "backend_list_gestiones", "backend_create_gestion", "backend_create_gestion_con_estado",
@@ -651,6 +651,37 @@ def backend_list_destinatarios(
                 "periodo_carga": periodo_carga.strip(),
                 "limit": max(1, min(int(limit), 50000)),
             },
+        )
+        return data if isinstance(data, list) else [], ""
+    except ValueError as exc:
+        return [], str(exc)
+    except requests.RequestException as exc:
+        return [], _friendly_backend_error(exc)
+
+
+def backend_list_template_contexts(
+    session: UserSession,
+    *,
+    items: list[dict],
+) -> Tuple[list[dict], str]:
+    try:
+        payload_items = [
+            {
+                "empresa": str((item or {}).get("empresa", "")).strip(),
+                "rut": str((item or {}).get("rut", "")).strip(),
+            }
+            for item in items or []
+            if str((item or {}).get("empresa", "")).strip()
+            and str((item or {}).get("rut", "")).strip()
+        ]
+        if not payload_items:
+            return [], ""
+        data = _http_request_auth(
+            "POST",
+            "/deudores/template-context",
+            token=_require_backend_token(session),
+            payload={"items": payload_items},
+            timeout=60,
         )
         return data if isinstance(data, list) else [], ""
     except ValueError as exc:

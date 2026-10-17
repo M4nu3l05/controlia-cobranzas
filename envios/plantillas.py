@@ -10,6 +10,8 @@
 import os
 import json
 import re
+from datetime import date, datetime
+from numbers import Number
 
 from auth.auth_service import backend_list_email_templates
 from core.paths import get_data_dir
@@ -24,18 +26,14 @@ VARIABLES_DISPONIBLES = {
     "{saldo}":           "Saldo actual pendiente ($)",
     "{copago}":          "Monto copago original ($)",
     "{total_pagos}":     "Total de pagos realizados ($)",
-    "{empresa}":         "Compañía (Colmena, Consalud, Cruz Blanca)",
+    "{empresa}":         "Compañía (Colmena o Cruz Blanca)",
     "{nro_expediente}":  "Número de expediente (si aplica)",
-    "{No_Licencia}":     "Numero de licencia (Cart-56)",
-    "{nombre_afil}":     "Nombre Afil (Cart-56, por licencia)",
-    "{rut_afil}":        "RUT Afil (Cart-56, por licencia)",
-    "{fecha_pago}":      "Fecha Pago (Cart-56, por licencia)",
-    "{Fecha_Recep}":     "Fecha Recep (Cart-56, por licencia)",
-    "{Fecha_Recep_ISA}": "Fecha Recep ISA (Cart-56, por licencia)",
-    "{detalle_licencias}": "Detalle consolidado de licencias/folios (modo consolidado)",
     "{ultima_emision}":  "Fecha última emisión",
     "{primera_emision}": "Fecha primera emisión",
+    "{detalle_deudas}":  "Detalle individualizado de las deudas de Colmena o Cruz Blanca",
 }
+
+VARIABLES_PERMITIDAS = frozenset(token[1:-1] for token in VARIABLES_DISPONIBLES)
 
 # ────────────────────────────────────────────────────────────────
 #  Plantillas predeterminadas
@@ -150,12 +148,20 @@ def renderizar(plantilla: dict, variables: dict) -> tuple[str, str]:
     return asunto, cuerpo
 
 
-def _fmt_monto(val: str) -> str:
+def variables_no_soportadas(plantilla: dict) -> list[str]:
+    texto = f"{plantilla.get('asunto', '')}\n{plantilla.get('cuerpo', '')}"
+    encontradas = set(re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", texto))
+    return [f"{{{nombre}}}" for nombre in sorted(encontradas - VARIABLES_PERMITIDAS)]
+
+
+def _fmt_monto(val: object) -> str:
     """Formatea número como $ 1.112.838"""
     try:
+        if isinstance(val, Number) and not isinstance(val, bool):
+            return f"{int(round(float(val))):,}".replace(",", ".")
         txt = str(val).strip()
-        if not txt or txt in ("â€”", "nan", "None"):
-            return "â€”"
+        if not txt or txt in ("—", "â€”", "nan", "None"):
+            return "—"
 
         txt = txt.replace("$", "").replace(" ", "")
 
@@ -178,6 +184,72 @@ def _fmt_monto(val: str) -> str:
         return str(val).strip() if val else "—"
 
 
+def _fmt_fecha(value: object) -> str:
+    if isinstance(value, (datetime, date)):
+        return value.strftime("%d/%m/%Y")
+    text = str(value or "").strip()
+    if not text or text.lower() in {"nan", "none", "—", "-"}:
+        return ""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(text[:19], fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            continue
+    return text
+
+
+def _first_value(row: dict, *keys: str):
+    for key in keys:
+        value = row.get(key, "")
+        if str(value or "").strip().lower() not in {"", "nan", "none", "n/a", "—", "-"}:
+            return value
+    return ""
+
+
+def formatear_detalle_deudas(deudas: list[dict] | tuple[dict, ...] | None) -> str:
+    bloques: list[str] = []
+    campos = (
+        ("ID / expediente", ("ID_Deuda", "id_deuda", "Nro_Expediente", "N° Expediente", "No Licencia", "_expediente_pago"), False),
+        ("Fecha de emisión", ("Fecha_Emision", "fecha_emision", "Fecha Emisión"), False),
+        ("Fecha de vencimiento", ("Fecha_Vencimiento", "fecha_vencimiento", "Fecha Vencimiento"), False),
+        ("Fecha de prestación", ("Fecha_Prestacion", "fecha_prestacion", "Fecha Prestación"), False),
+        ("Fecha de prestación 2", ("Fecha_Prestacion2", "fecha_prestacion2", "Fecha Prestación 2"), False),
+        ("Prestador", ("Prestador", "prestador"), False),
+        ("Monto total", ("Monto_Total", "monto_total", "Mto Pagar"), True),
+        ("Monto a cobrar", ("Monto_Cobrar", "monto_cobrar"), True),
+        ("Monto facturado", ("Monto_Facturado", "monto_facturado"), True),
+        ("Monto liquidado", ("Monto_Liquidado", "monto_liquidado"), True),
+        ("Monto pagado parcial", ("Monto_Pagado_Parcial", "monto_pagado_parcial"), True),
+        ("Monto condonado", ("Monto_Condonado", "monto_condonado"), True),
+        ("Monto gestionado", ("Monto_Gestionado", "monto_gestionado"), True),
+        ("Cuota acordada", ("Cuota_Acordada", "cuota_acordada"), True),
+        ("Copago", ("Copago", "copago", "Copago ($)"), True),
+        ("Total pagos", ("Total_Pagos", "total_pagos", "Pagos", "Total Pagos ($)"), True),
+        ("Saldo", ("Saldo_Actual", "saldo_actual", "Saldo Actual", "Saldo Actual ($)"), True),
+    )
+    for indice, deuda in enumerate(deudas or [], start=1):
+        if not isinstance(deuda, dict):
+            continue
+        lineas = [f"Deuda {indice}"]
+        for etiqueta, keys, es_monto in campos:
+            value = _first_value(deuda, *keys)
+            if value == "":
+                continue
+            if es_monto:
+                try:
+                    if float(str(value).replace(".", "").replace(",", ".")) == 0:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+                value = f"$ {_fmt_monto(value)}"
+            elif etiqueta.startswith("Fecha"):
+                value = _fmt_fecha(value)
+            lineas.append(f"- {etiqueta}: {value}")
+        if len(lineas) > 1:
+            bloques.append("\n".join(lineas))
+    return "\n\n".join(bloques) if bloques else "—"
+
+
 def variables_desde_fila(fila: dict) -> dict:
     """
     Construye el dict de variables desde una fila del DataFrame de deudores.
@@ -187,31 +259,6 @@ def variables_desde_fila(fila: dict) -> dict:
         v = fix_mojibake_text(val).strip()
         return v if v not in ("", "nan", "None", "—") else "—"
 
-    no_licencia = _limpio(
-        fila.get(
-            "No_Licencia",
-            fila.get(
-                "no_licencia",
-                fila.get(
-                "No Licencia",
-                fila.get(
-                    "No. Licencia",
-                    fila.get(
-                        "N? Licencia",
-                        fila.get(
-                            "N? Licencia",
-                            fila.get(
-                                "Folio LIQ",
-                                fila.get("Nro_Expediente", fila.get("nro_expediente", "")),
-                            ),
-                        ),
-                    ),
-                ),
-                ),
-            ),
-        )
-    )
-
     return {
         "nombre":          _limpio(fila.get("Nombre_Afiliado", fila.get("Nombre", ""))),
         "rut":             _limpio(fila.get("Rut_Afiliado", fila.get("RUT", ""))),
@@ -220,29 +267,9 @@ def variables_desde_fila(fila: dict) -> dict:
         "total_pagos":     _fmt_monto(fila.get("Total_Pagos", "")),
         "empresa":         _limpio(fila.get("_empresa", fila.get("Compañía", ""))),
         "nro_expediente":  _limpio(fila.get("Nro_Expediente", fila.get("nro_expediente", ""))),
-        "No_Licencia":     no_licencia,
-        "nombre_afil":     _limpio(fila.get("Nombre Afil", fila.get("nombre_afil", ""))),
-        "rut_afil":        _limpio(fila.get("RUT Afil", fila.get("rut_afil", ""))),
-        "fecha_pago":      _limpio(fila.get("Fecha Pago", fila.get("fecha_pago", ""))),
-        "Fecha_Recep":     _limpio(
-            fila.get("Fecha Recep", fila.get("Cart56_Fecha_Recep", fila.get("fecha_recep", "")))
+        "ultima_emision":  _fmt_fecha(fila.get("MAX_Emision_ok", "")) or "—",
+        "primera_emision": _fmt_fecha(fila.get("MIN_Emision_ok", "")) or "—",
+        "detalle_deudas":  formatear_detalle_deudas(
+            fila.get("_detalle_deudas", fila.get("detalle_deudas_items", []))
         ),
-        "Fecha_Recep_ISA": _limpio(
-            fila.get(
-                "Fecha Recep ISA",
-                fila.get("Cart56_Fecha_Recep_ISA", fila.get("fecha_recep_isa", "")),
-            )
-        ),
-        "detalle_licencias": _limpio(
-            fila.get("detalle_licencias", fila.get("Detalle Licencias", ""))
-        ),
-        # Alias para facilitar compatibilidad con estilos de placeholders previos.
-        "Nombre_Afil":     _limpio(fila.get("Nombre Afil", fila.get("nombre_afil", ""))),
-        "RUT_Afil":        _limpio(fila.get("RUT Afil", fila.get("rut_afil", ""))),
-        "Fecha_Pago":      _limpio(fila.get("Fecha Pago", fila.get("fecha_pago", ""))),
-        "Detalle_Licencias": _limpio(
-            fila.get("detalle_licencias", fila.get("Detalle Licencias", ""))
-        ),
-        "ultima_emision":  _limpio(fila.get("MAX_Emision_ok", "")),
-        "primera_emision": _limpio(fila.get("MIN_Emision_ok", "")),
     }

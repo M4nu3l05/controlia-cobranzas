@@ -327,6 +327,24 @@ def _migration_11_gestion_idempotency(db: Session) -> None:
     ))
 
 
+def _migration_12_user_soft_delete(db: Session) -> None:
+    inspector = inspect(db.connection())
+    if not inspector.has_table("users"):
+        return
+    columns = {str(column["name"]) for column in inspector.get_columns("users")}
+    additions = {
+        "deleted_at": "TIMESTAMP NULL",
+        "deleted_by_user_id": "INTEGER NULL",
+        "deleted_by_username": "VARCHAR(120) NOT NULL DEFAULT ''",
+    }
+    for column_name, sql_type in additions.items():
+        if column_name not in columns:
+            db.execute(text(f"ALTER TABLE users ADD COLUMN {column_name} {sql_type}"))
+    db.execute(text(
+        "CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON users(deleted_at)"
+    ))
+
+
 MIGRATIONS = (
     BackendMigration(1, "Registrar y completar el esquema CRM heredado", _migration_1_legacy_schema),
     BackendMigration(2, "Auditoría, notificaciones, derivaciones y reemplazos", _migration_2_operations),
@@ -339,6 +357,7 @@ MIGRATIONS = (
     BackendMigration(9, "Asignacion individual de deudores a ejecutivas", _migration_9_debtor_user_assignments),
     BackendMigration(10, "Supervisores responsables y equipos de cartera", _migration_10_supervisor_portfolio_teams),
     BackendMigration(11, "Idempotencia para gestiones manuales", _migration_11_gestion_idempotency),
+    BackendMigration(12, "Eliminacion logica y trazable de usuarios", _migration_12_user_soft_delete),
 )
 
 

@@ -61,7 +61,7 @@ class ConciliacionTab(QWidget):
         row_emp = QHBoxLayout()
         row_emp.addWidget(QLabel("Compañía:"))
         self.cmb_empresa = QComboBox()
-        self.cmb_empresa.addItems(["Colmena", "Consalud", "Cruz Blanca"])
+        self.cmb_empresa.addItems(["Colmena", "Cruz Blanca"])
         self.cmb_empresa.currentTextChanged.connect(self._on_company_changed)
         row_emp.addWidget(self.cmb_empresa, 1)
         card_form.body.addLayout(row_emp)
