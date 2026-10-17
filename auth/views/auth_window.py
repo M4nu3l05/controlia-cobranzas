@@ -25,7 +25,6 @@ from auth.auth_service import (
     password_strength,
     request_password_reset,
 )
-from auth.session_history_db import register_login
 
 
 class _LeftPanel(QWidget):
@@ -502,11 +501,6 @@ class _ForceChangePage(QWidget):
 
         updated = get_user_by_id(self._session.user_id)
         updated_session = LocalUserSession.from_db(updated)
-        setattr(
-            updated_session,
-            "session_history_id",
-            getattr(self._session, "session_history_id", None),
-        )
         self.sig_done.emit(updated_session)
 
 
@@ -745,12 +739,6 @@ class AuthWindow(QDialog):
         self._apply_responsive()
 
     def _after_login(self, session: UserSession):
-        if getattr(session, "auth_source", "") != "backend" and not getattr(session, "session_history_id", None):
-            try:
-                setattr(session, "session_history_id", register_login(session))
-            except Exception:
-                setattr(session, "session_history_id", None)
-
         if session.must_change_password:
             self._pg_force.load_session(session)
             self._stack.setCurrentIndex(1)

@@ -24,8 +24,6 @@ class _SlowResponse:
         return None
 
     def json(self):
-        if self.url.endswith("/dashboard/sessions"):
-            return {"today": [], "month": []}
         return {
             "periodos_disponibles": [], "total_deudores": 0, "copago_total": 0,
             "total_pagos_total": 0, "saldo_total": 0, "sin_gestion_total": 0,
@@ -39,7 +37,10 @@ class _SlowResponse:
 def test_admin_dashboard_remains_responsive_with_ten_second_endpoints(monkeypatch):
     app = QApplication.instance() or QApplication([])
 
+    requested_urls = []
+
     def slow_get(url, **_kwargs):
+        requested_urls.append(url)
         time.sleep(10)
         return _SlowResponse(url)
 
@@ -75,4 +76,5 @@ def test_admin_dashboard_remains_responsive_with_ten_second_endpoints(monkeypatc
         app.processEvents()
         time.sleep(0.02)
     assert widget.general_dashboard._backend_worker is None
+    assert not any(url.endswith("/dashboard/sessions") for url in requested_urls)
     widget.close()

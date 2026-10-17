@@ -10,8 +10,6 @@ import requests
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
-    QAbstractItemView,
-    QFileDialog,
     QFrame,
     QGridLayout,
     QComboBox,
@@ -22,24 +20,15 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
-    QHeaderView,
 )
 
-from auth.session_history_db import (
-    obtener_conexiones_hoy,
-    obtener_conexiones_mes,
-    preparar_reporte_excel,
-)
 from auth.auth_service import get_backend_base_url
 from comisiones.service import (
     obtener_resumen as obtener_resumen_comisiones,
     reestablecer_comisiones,
 )
-from core.excel_export import write_excel_report
 from core.paths import get_data_dir
 from deudores.database import (
     EMPRESAS_OPERATIVAS,
@@ -130,17 +119,6 @@ def _parse_datetime_multi(value: str) -> pd.Timestamp:
     return pd.to_datetime(text, errors="coerce")
 
 
-def _format_duration_hhmmss(total_seconds: float) -> str:
-    try:
-        total = max(int(total_seconds), 0)
-    except Exception:
-        total = 0
-    horas = total // 3600
-    minutos = (total % 3600) // 60
-    segundos = total % 60
-    return f"{horas:02d}:{minutos:02d}:{segundos:02d}"
-
-
 def _add_shadow(widget: QWidget, blur: int = 26, y_offset: int = 8) -> None:
     shadow = QGraphicsDropShadowEffect(widget)
     shadow.setBlurRadius(blur)
@@ -221,7 +199,7 @@ class _HeroCard(_DashboardCard):
         left = QVBoxLayout()
         left.setSpacing(4)
 
-        self.lbl_kicker = QLabel("CRM DE COBRANZAS · PRODUCTIVIDAD")
+        self.lbl_kicker = QLabel("CRM DE COBRANZAS · OPERACIÓN")
         self.lbl_kicker.setStyleSheet(
             "color: rgba(255,255,255,0.72); font-size:8pt; font-weight:800; letter-spacing:1px;"
         )
@@ -231,7 +209,7 @@ class _HeroCard(_DashboardCard):
         self.lbl_title.setStyleSheet("color:#ffffff;")
 
         self.lbl_subtitle = QLabel(
-            "Vista integral del rendimiento operativo, avance de cartera, foco diario y actividad del equipo."
+            "Vista integral del rendimiento operativo, avance de cartera y foco diario."
         )
         self.lbl_subtitle.setWordWrap(True)
         self.lbl_subtitle.setStyleSheet("color: rgba(255,255,255,0.88); font-size:9.5pt;")
@@ -566,7 +544,7 @@ class DashboardWidget(QWidget):
         title_block = QVBoxLayout()
         title_block.setSpacing(2)
 
-        title = QLabel("Dashboard de Productividad")
+        title = QLabel("Dashboard general")
         title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
         title.setStyleSheet("color:#0f172a;")
 
@@ -672,10 +650,7 @@ class DashboardWidget(QWidget):
     def _sin_carteras_asignadas(self) -> bool:
         return self._usa_restriccion_carteras() and not self._empresas_asignadas
 
-    def _is_supervisor(self) -> bool:
-        return bool(self._session and getattr(self._session, "role", "") == "supervisor")
-
-    def _can_view_reporte_ejecutiva(self) -> bool:
+    def _can_view_comisiones(self) -> bool:
         return bool(self._session and getattr(self._session, "role", "") in ("admin", "supervisor"))
 
     def _build_ui(self):
@@ -736,7 +711,7 @@ class DashboardWidget(QWidget):
         # de comisiones de cada ejecutiva.
         self.card_actions: _SectionCard | None = None
         self.card_comisiones: _SectionCard | None = None
-        if self._can_view_reporte_ejecutiva():
+        if self._can_view_comisiones():
             self.card_comisiones = _SectionCard(
                 "Comisiones por ejecutiva",
                 "Monto acumulado por cada ejecutiva según los pagos que registró y el porcentaje de su cartera.",
@@ -810,118 +785,6 @@ class DashboardWidget(QWidget):
             company_grid.addWidget(card, i // 2, i % 2)
 
         self.sec_empresas.body.addLayout(company_grid)
-
-        if self._can_view_reporte_ejecutiva():
-            self.sec_team = _SectionCard(
-                "Productividad del equipo",
-                "Panel de sesiones y actividad de ejecutivas con enfoque visual de dashboard.",
-            )
-            self.content.addWidget(self.sec_team)
-
-            team_metrics = QGridLayout()
-            team_metrics.setHorizontalSpacing(12)
-            team_metrics.setVerticalSpacing(12)
-
-            self.pill_conexiones_hoy = _MetricCard("Conexiones hoy", "#2563eb", "🔐")
-            self.pill_ejecutivas_hoy = _MetricCard("Ejecutivas activas", "#059669", "👩")
-            self.pill_conexiones_mes = _MetricCard("Conexiones del mes", "#7c3aed", "🗓")
-            self.pill_duracion_prom = _MetricCard("Duración promedio", "#ea580c", "⏱")
-
-            team_metrics.addWidget(self.pill_conexiones_hoy, 0, 0)
-            team_metrics.addWidget(self.pill_ejecutivas_hoy, 0, 1)
-            team_metrics.addWidget(self.pill_conexiones_mes, 0, 2)
-            team_metrics.addWidget(self.pill_duracion_prom, 0, 3)
-
-            self.sec_team.body.addLayout(team_metrics)
-
-            team_lower = QHBoxLayout()
-            team_lower.setSpacing(12)
-
-            self.team_rank_card = _SectionCard(
-                "Ranking mensual",
-                "Top de ejecutivas por cantidad de conexiones del mes.",
-            )
-            self.team_rank_rows: list[_ListItemCard] = []
-            for _ in range(5):
-                row = _ListItemCard("#059669")
-                self.team_rank_rows.append(row)
-                self.team_rank_card.body.addWidget(row)
-
-            self.team_table_card = _SectionCard(
-                "Sesiones del día",
-                "Detalle diario de ingreso, salida y horas trabajadas.",
-            )
-
-            actions = QHBoxLayout()
-            actions.addStretch(1)
-
-            self.lbl_mes_reporte = QLabel("")
-            self.lbl_mes_reporte.setStyleSheet("color:#64748b; font-size:9pt;")
-            actions.addWidget(self.lbl_mes_reporte)
-
-            if self._is_supervisor():
-                self.btn_export = QPushButton("📥 Descargar Excel mensual")
-                self.btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
-                self.btn_export.setStyleSheet(
-                    """
-                    QPushButton {
-                        background:#ffffff;
-                        color:#0f172a;
-                        border:1px solid #cbd5e1;
-                        border-radius: 12px;
-                        padding: 9px 12px;
-                        font-weight:700;
-                    }
-                    QPushButton:hover {
-                        background:#f8fafc;
-                    }
-                    """
-                )
-                self.btn_export.clicked.connect(self._exportar_excel_mensual)
-                actions.addWidget(self.btn_export)
-
-            self.team_table_card.body.addLayout(actions)
-
-            self.tbl_ej = QTableWidget(0, 5)
-            self.tbl_ej.setHorizontalHeaderLabels(
-                ["Ejecutiva", "Fecha", "Hora de inicio", "Hora de término", "Horas trabajadas"]
-            )
-            self.tbl_ej.verticalHeader().setVisible(False)
-            self.tbl_ej.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-            self.tbl_ej.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-            self.tbl_ej.setAlternatingRowColors(True)
-            self.tbl_ej.setStyleSheet(
-                """
-                QTableWidget {
-                    border:1px solid #e2e8f0;
-                    border-radius: 14px;
-                    background:#ffffff;
-                    alternate-background-color:#f8fafc;
-                    gridline-color:#eef2f7;
-                }
-                QHeaderView::section {
-                    background:#f8fafc;
-                    color:#334155;
-                    border:none;
-                    border-bottom:1px solid #e2e8f0;
-                    padding:10px;
-                    font-weight:700;
-                }
-                """
-            )
-            hh = self.tbl_ej.horizontalHeader()
-            hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-            hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-            hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-            hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-            hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-
-            self.team_table_card.body.addWidget(self.tbl_ej)
-
-            team_lower.addWidget(self.team_rank_card, 1)
-            team_lower.addWidget(self.team_table_card, 2)
-
-            self.sec_team.body.addLayout(team_lower)
 
         self.content.addStretch(1)
 
@@ -1065,40 +928,6 @@ class DashboardWidget(QWidget):
         self.lbl_updated.setText(f"Actualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         return True
 
-    def _backend_session_history(self, *, strict: bool = False) -> tuple[pd.DataFrame, pd.DataFrame]:
-        empty = pd.DataFrame(columns=["id", "user_id", "email", "username", "role", "login_at", "logout_at"])
-        try:
-            now = datetime.now()
-            resp = requests.get(
-                f"{_backend_base_url()}/dashboard/sessions",
-                params={"role": "supervisor", "year": now.year, "month": now.month},
-                headers=self._backend_headers(),
-                timeout=15,
-            )
-            resp.raise_for_status()
-            payload = resp.json() or {}
-            today_rows = payload.get("today", []) or []
-            month_rows = payload.get("month", []) or []
-
-            df_today = pd.DataFrame(today_rows).fillna("")
-            df_month = pd.DataFrame(month_rows).fillna("")
-
-            for df in (df_today, df_month):
-                if "login_at" in df.columns:
-                    df["login_at"] = pd.to_datetime(df["login_at"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
-                if "logout_at" in df.columns:
-                    df["logout_at"] = pd.to_datetime(df["logout_at"], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
-                for col in ["id", "user_id", "email", "username", "role", "login_at", "logout_at"]:
-                    if col not in df.columns:
-                        df[col] = ""
-                df.fillna("", inplace=True)
-
-            return df_today, df_month
-        except Exception:
-            if strict:
-                raise
-            return empty.copy(), empty.copy()
-
     def _gestiones_db_path(self) -> str:
         return os.path.join(str(get_data_dir()), "db_gestiones.sqlite")
 
@@ -1179,65 +1008,6 @@ class DashboardWidget(QWidget):
             "tipos_hoy": {str(k): int(v) for k, v in tipos_hoy.items()},
         }
 
-    def _build_team_stats(self, df_hoy: pd.DataFrame, df_mes: pd.DataFrame) -> dict:
-        def _prepare(df: pd.DataFrame) -> pd.DataFrame:
-            if df is None or df.empty:
-                return pd.DataFrame(columns=["username", "login_at", "logout_at"])
-            out = df.copy()
-            out["login_dt"] = pd.to_datetime(out["login_at"], errors="coerce")
-            out["logout_dt"] = pd.to_datetime(out["logout_at"], errors="coerce")
-            out["duration_sec"] = (out["logout_dt"] - out["login_dt"]).dt.total_seconds().fillna(0)
-            out.loc[out["duration_sec"] < 0, "duration_sec"] = 0
-            return out
-
-        hoy_p = _prepare(df_hoy)
-        mes_p = _prepare(df_mes)
-
-        avg_today = hoy_p["duration_sec"].mean() if not hoy_p.empty else 0
-        ranking = []
-
-        if not mes_p.empty:
-            grouped = (
-                mes_p.groupby("username", dropna=False)
-                .agg(
-                    conexiones=("username", "size"),
-                    total_segundos=("duration_sec", "sum"),
-                    promedio_segundos=("duration_sec", "mean"),
-                )
-                .sort_values(by=["conexiones", "total_segundos"], ascending=[False, False])
-                .head(5)
-                .reset_index()
-            )
-            for _, row in grouped.iterrows():
-                ranking.append(
-                    {
-                        "username": str(row.get("username", "") or "Sin usuario"),
-                        "conexiones": int(row.get("conexiones", 0)),
-                        "total": _format_duration_hhmmss(row.get("total_segundos", 0)),
-                        "promedio": _format_duration_hhmmss(row.get("promedio_segundos", 0)),
-                    }
-                )
-
-        return {
-            "avg_today": _format_duration_hhmmss(avg_today),
-            "ranking": ranking,
-        }
-
-    def _fill_ejecutivas_table(self, df_hoy: pd.DataFrame):
-        if not self._can_view_reporte_ejecutiva():
-            return
-
-        rep = preparar_reporte_excel(df_hoy)
-        self.tbl_ej.setRowCount(0)
-
-        for _, row in rep.iterrows():
-            r = self.tbl_ej.rowCount()
-            self.tbl_ej.insertRow(r)
-            for c, key in enumerate(rep.columns):
-                item = QTableWidgetItem(str(row.get(key, "")))
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.tbl_ej.setItem(r, c, item)
-
     def _set_rows(self, rows: list[_ListItemCard], data: list[tuple[str, str, str]]):
         for idx, row in enumerate(rows):
             if idx < len(data):
@@ -1246,31 +1016,6 @@ class DashboardWidget(QWidget):
                 row.set_data(left, mid, right)
             else:
                 row.hide()
-
-    def _exportar_excel_mensual(self):
-        hoy = datetime.now()
-        if self._usa_backend_dashboard():
-            _, df_mes = self._backend_session_history()
-        else:
-            df_mes = obtener_conexiones_mes(hoy.year, hoy.month, role="supervisor")
-        rep = preparar_reporte_excel(df_mes)
-
-        if rep.empty:
-            QMessageBox.information(self, "Sin datos", "No hay conexiones mensuales para exportar todavía.")
-            return
-
-        sugerido = f"reporte_conexiones_ejecutivas_{hoy.strftime('%Y_%m')}.xlsx"
-        path, _ = QFileDialog.getSaveFileName(self, "Guardar reporte mensual", sugerido, "Excel (*.xlsx)")
-        if not path:
-            return
-        if not path.lower().endswith(".xlsx"):
-            path += ".xlsx"
-
-        try:
-            write_excel_report(path, {"Conexiones": rep})
-            QMessageBox.information(self, "Reporte generado", f"El reporte fue exportado correctamente en:\n{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo exportar el Excel.\n\nDetalle:\n{e}")
 
     def _build_global_status(
         self,
@@ -1330,40 +1075,6 @@ class DashboardWidget(QWidget):
         resumen, err = self._load_comisiones()
         self._apply_comisiones(resumen, err)
 
-    def _apply_backend_sessions(self, data: tuple[pd.DataFrame, pd.DataFrame]) -> None:
-        if not self._can_view_reporte_ejecutiva():
-            return
-        df_hoy, df_mes = data
-        hoy = datetime.now()
-        team_stats = self._build_team_stats(df_hoy, df_mes)
-        self._fill_ejecutivas_table(df_hoy)
-        unique_today = int(df_hoy["username"].nunique()) if not df_hoy.empty and "username" in df_hoy.columns else 0
-        self.pill_conexiones_hoy.set_data(
-            _fmt_int(len(df_hoy)), f"{_fmt_int(unique_today)} ejecutivas activas", "Número total de sesiones iniciadas hoy."
-        )
-        self.pill_ejecutivas_hoy.set_data(
-            _fmt_int(unique_today), f"{_fmt_int(len(df_hoy))} sesiones hoy", "Usuarios únicos conectados hoy con rol supervisor."
-        )
-        self.pill_conexiones_mes.set_data(
-            _fmt_int(len(df_mes)), f"Mes actual: {hoy.strftime('%m/%Y')}", "Acumulado de sesiones del mes actual."
-        )
-        self.pill_duracion_prom.set_data(
-            team_stats.get("avg_today", "00:00:00"), "Duración promedio por sesión del día", "Sirve para leer continuidad operativa del equipo."
-        )
-        self.lbl_mes_reporte.setText(f"Mes actual: {hoy.strftime('%m/%Y')}")
-        ranking_rows = [
-            (
-                item.get("username", "Sin usuario"),
-                f"Total: {item.get('total', '00:00:00')} · Promedio: {item.get('promedio', '00:00:00')}",
-                _fmt_int(item.get("conexiones", 0)),
-            )
-            for item in team_stats.get("ranking", [])
-        ]
-        self._set_rows(
-            self.team_rank_rows,
-            ranking_rows or [("Sin actividad", "Aún no hay conexiones mensuales registradas", "0")],
-        )
-
     def _start_backend_refresh(self, generation: int) -> None:
         empresas = self._backend_empresas_param()
         periodo = self._periodo_actual()
@@ -1372,8 +1083,6 @@ class DashboardWidget(QWidget):
         }
         if self.card_comisiones is not None:
             loaders["commissions"] = self._load_comisiones
-        if self._can_view_reporte_ejecutiva():
-            loaders["sessions"] = lambda: self._backend_session_history(strict=True)
 
         self.lbl_updated.setText("Cargando…")
         self.btn_refresh.setEnabled(False)
@@ -1407,13 +1116,6 @@ class DashboardWidget(QWidget):
             elif commissions_result.get("value") is not None:
                 resumen, err = commissions_result["value"]
                 self._apply_comisiones(resumen, err)
-
-        sessions_result = results.get("sessions")
-        if sessions_result:
-            if sessions_result.get("error"):
-                errors.append(f"Sesiones: {sessions_result['error']}")
-            elif sessions_result.get("value") is not None:
-                self._apply_backend_sessions(sessions_result["value"])
 
         if errors:
             self.hero.set_health("Datos parciales", " · ".join(errors))
@@ -1480,55 +1182,6 @@ class DashboardWidget(QWidget):
                     self._company_cards[empresa].setVisible(False)
                 self.lbl_updated.setText(f"Actualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
                 return
-
-        if self._usa_backend_dashboard():
-            ok = self._refrescar_dashboard_backend()
-
-            if ok and self._can_view_reporte_ejecutiva():
-                hoy = datetime.now()
-                df_hoy, df_mes = self._backend_session_history()
-                team_stats = self._build_team_stats(df_hoy, df_mes)
-                self._fill_ejecutivas_table(df_hoy)
-
-                unique_today = int(df_hoy["username"].nunique()) if not df_hoy.empty and "username" in df_hoy.columns else 0
-
-                self.pill_conexiones_hoy.set_data(
-                    _fmt_int(len(df_hoy)),
-                    f"{_fmt_int(unique_today)} ejecutivas activas",
-                    "Número total de sesiones iniciadas hoy.",
-                )
-                self.pill_ejecutivas_hoy.set_data(
-                    _fmt_int(unique_today),
-                    f"{_fmt_int(len(df_hoy))} sesiones hoy",
-                    "Usuarios únicos conectados hoy con rol supervisor.",
-                )
-                self.pill_conexiones_mes.set_data(
-                    _fmt_int(len(df_mes)),
-                    f"Mes actual: {hoy.strftime('%m/%Y')}",
-                    "Acumulado de sesiones del mes actual.",
-                )
-                self.pill_duracion_prom.set_data(
-                    team_stats.get("avg_today", "00:00:00"),
-                    "Duración promedio por sesión del día",
-                    "Sirve para leer continuidad operativa del equipo.",
-                )
-
-                self.lbl_mes_reporte.setText(f"Mes actual: {hoy.strftime('%m/%Y')}")
-
-                ranking_rows = []
-                for item in team_stats.get("ranking", []):
-                    ranking_rows.append(
-                        (
-                            item.get("username", "Sin usuario"),
-                            f"Total: {item.get('total', '00:00:00')} · Promedio: {item.get('promedio', '00:00:00')}",
-                            _fmt_int(item.get("conexiones", 0)),
-                        )
-                    )
-                if not ranking_rows:
-                    ranking_rows = [("Sin actividad", "Aún no hay conexiones mensuales registradas", "0")]
-
-                self._set_rows(self.team_rank_rows, ranking_rows)
-            return
 
         if self._sin_carteras_asignadas():
             self.hero.set_health("Sin carteras asignadas", "Contacta a un supervisor o administrador para obtener visibilidad.")
@@ -1705,52 +1358,6 @@ class DashboardWidget(QWidget):
                 chip_text=status_label,
                 chip_level=status_level,
             )
-
-        if self._can_view_reporte_ejecutiva():
-            hoy = datetime.now()
-            df_hoy = obtener_conexiones_hoy(role="supervisor")
-            df_mes = obtener_conexiones_mes(hoy.year, hoy.month, role="supervisor")
-            team_stats = self._build_team_stats(df_hoy, df_mes)
-            self._fill_ejecutivas_table(df_hoy)
-
-            unique_today = int(df_hoy["username"].nunique()) if not df_hoy.empty and "username" in df_hoy.columns else 0
-
-            self.pill_conexiones_hoy.set_data(
-                _fmt_int(len(df_hoy)),
-                f"{_fmt_int(unique_today)} ejecutivas activas",
-                "Número total de sesiones iniciadas hoy.",
-            )
-            self.pill_ejecutivas_hoy.set_data(
-                _fmt_int(unique_today),
-                f"{_fmt_int(len(df_hoy))} sesiones hoy",
-                "Usuarios únicos conectados hoy con rol supervisor.",
-            )
-            self.pill_conexiones_mes.set_data(
-                _fmt_int(len(df_mes)),
-                f"Mes actual: {hoy.strftime('%m/%Y')}",
-                "Acumulado de sesiones del mes actual.",
-            )
-            self.pill_duracion_prom.set_data(
-                team_stats.get("avg_today", "00:00:00"),
-                "Duración promedio por sesión del día",
-                "Sirve para leer continuidad operativa del equipo.",
-            )
-
-            self.lbl_mes_reporte.setText(f"Mes actual: {hoy.strftime('%m/%Y')}")
-
-            ranking_rows = []
-            for item in team_stats.get("ranking", []):
-                ranking_rows.append(
-                    (
-                        item.get("username", "Sin usuario"),
-                        f"Total: {item.get('total', '00:00:00')} · Promedio: {item.get('promedio', '00:00:00')}",
-                        _fmt_int(item.get("conexiones", 0)),
-                    )
-                )
-            if not ranking_rows:
-                ranking_rows = [("Sin actividad", "Aún no hay conexiones mensuales registradas", "0")]
-
-            self._set_rows(self.team_rank_rows, ranking_rows)
 
         self.lbl_updated.setText(f"Actualizado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
 

@@ -344,9 +344,9 @@ def contents(doc):
 def chapter_1(doc):
     title(doc, "1. Conocer la aplicación", "Qué resuelve Controlia Cobranzas y cómo orientarse en pantalla")
     h2(doc, "1.1 ¿Para qué sirve Controlia Cobranzas?")
-    para(doc, "Controlia Cobranzas centraliza el trabajo operativo de cobranza en una sola aplicación de escritorio. Permite controlar carteras por compañía, consultar deudores, registrar gestiones y pagos, preparar comunicaciones, comparar nóminas mensuales y observar indicadores de productividad.")
+    para(doc, "Controlia Cobranzas centraliza el trabajo operativo de cobranza en una sola aplicación de escritorio. Permite controlar carteras por compañía, consultar deudores, registrar gestiones y pagos, preparar comunicaciones, comparar nóminas mensuales y observar indicadores operativos.")
     bullet(doc, "Evita trabajar con información dispersa en múltiples planillas.")
-    bullet(doc, "Mantiene trazabilidad de gestiones, pagos, asignaciones y sesiones.")
+    bullet(doc, "Mantiene trazabilidad de gestiones, pagos y asignaciones.")
     bullet(doc, "Restringe información y acciones según el rol y la cartera asignada.")
     bullet(doc, "Genera reportes Excel para conciliación, gestiones y actividad.")
     h2(doc, "1.2 Conceptos básicos")
@@ -385,7 +385,7 @@ def chapter_1(doc):
     ], [3000, 1700, 4660], 8.8)
     para(doc, "La aceptación queda registrada con el usuario, la fecha y la versión del documento. Si se publica una versión posterior, la aplicación volverá a solicitar la aceptación aunque usted ya haya aceptado la anterior.")
     h2(doc, "1.6 Cierre seguro")
-    para(doc, "Para terminar, pulse Cerrar sesión en la barra superior. Esto registra el término de la sesión y vuelve a la pantalla de acceso. Evite dejar la aplicación abierta en un equipo compartido.")
+    para(doc, "Para terminar, pulse Cerrar sesión en la barra superior. La aplicación vuelve a la pantalla de acceso. Evite dejar la aplicación abierta en un equipo compartido.")
     h2(doc, "1.7 Si se corta la conexión")
     para(doc, "La aplicación necesita conexión con el servidor para trabajar. Si Internet se cae o el servidor deja de responder mientras usted registra una gestión manual, el trabajo no se pierde: queda guardado en el equipo y se envía solo cuando el servicio vuelve.")
     table(doc, ["Lo que verá", "Qué significa", "Qué hacer"], [
@@ -421,7 +421,7 @@ def chapter_2(doc):
     h2(doc, "2.2 Administrador")
     para(doc, "Es el perfil de mayor alcance. Administra usuarios, puede asignar carteras, ejecutar acciones de limpieza, cargar información y consultar los módulos de control. Debe usar con especial cuidado las funciones que eliminan datos.")
     h2(doc, "2.3 Supervisor")
-    para(doc, "Coordina la operación. Puede conciliar nóminas, cargar bases y gestiones, asignar o reemplazar responsables de cartera, utilizar el envío masivo y consultar productividad. No puede administrar usuarios.")
+    para(doc, "Coordina la operación. Puede conciliar nóminas, cargar bases y gestiones, asignar o reemplazar responsables de cartera, utilizar el envío masivo y consultar el Dashboard. No puede administrar usuarios.")
     h2(doc, "2.4 Ejecutivo")
     para(doc, "Trabaja la cobranza diaria. Puede consultar la ficha de cualquier deudor, incluso de una cartera que no tenga asignada, para atender una llamada y derivar el caso. En cambio, las acciones operativas -registrar gestión o pago- quedan limitadas a sus carteras asignadas y a los reemplazos temporales vigentes. No puede cargar bases ni usar módulos administrativos.")
     callout(doc, "Comisiones a la vista", "En Dashboard > Mi trabajo, cada ejecutiva ve únicamente su propia comisión acumulada. Ninguna ejecutiva puede ver los montos de otra: la aplicación entrega solo la información del usuario que inició sesión.", "info")
@@ -437,7 +437,7 @@ def chapter_2(doc):
 
 
 def chapter_3(doc):
-    title(doc, "3. Dashboard", "Lectura de la cartera, prioridades y productividad")
+    title(doc, "3. Dashboard", "Lectura de la cartera, prioridades y comisiones")
     h2(doc, "3.1 Cambiar entre Mi trabajo y Vista general")
     para(doc, "En la parte superior del Dashboard se encuentran dos modos. Mi trabajo prioriza la gestión diaria; Vista general muestra la lectura consolidada. El perfil Ejecutivo abre por defecto Mi trabajo y los perfiles de coordinación abren Vista general.")
     h2(doc, "3.2 Mi trabajo")
@@ -494,11 +494,8 @@ def chapter_3(doc):
         ("Saldo actual", "Suma de saldos pendientes."),
         ("Cobertura de gestión", "Proporción de la cartera que registra gestiones."),
         ("Gestiones hoy", "Acciones registradas durante la fecha actual."),
-        ("Conexiones hoy / del mes", "Actividad de acceso al sistema."),
-        ("Ejecutivas activas", "Usuarios ejecutivos únicos con actividad."),
-        ("Duración promedio", "Tiempo medio de sesiones cerradas calculables."),
     ], [2250, 7110], 8.8)
-    para(doc, "Seleccione el período disponible y pulse Actualizar para recalcular los indicadores. El Supervisor puede usar Descargar Excel mensual para obtener el reporte de conexiones de ejecutivas.")
+    para(doc, "Seleccione el período disponible y pulse Actualizar para recalcular los indicadores.")
     callout(doc, "Lectura responsable", "Los indicadores reflejan la información cargada y visible para la sesión. Si una cartera, gestión o asignación aún no está disponible, el Dashboard puede mostrar valores parciales o el mensaje Sin datos.", "info")
     h2(doc, "3.5 Comisiones por ejecutiva — Administrador y Supervisor")
     para(doc, "En la Vista general, los perfiles de coordinación disponen de la sección Comisiones por ejecutiva. Muestra una tarjeta por cada ejecutiva activa con su nombre, su correo, el monto acumulado en comisiones y la cantidad de pagos que lo generaron. El perfil Ejecutivo no ve esta sección.")
@@ -771,7 +768,7 @@ def chapter_10(doc):
         ("Cierre", "Cerrar tareas realizadas, revisar pendientes y cerrar sesión.", "No dejar la aplicación abierta."),
     ], [1350, 5260, 2750], 8.4)
     h2(doc, "10.2 Rutina del Supervisor")
-    bullet(doc, "Revisar Vista general, conexiones, cobertura y gestiones del día.")
+    bullet(doc, "Revisar Vista general, cobertura y gestiones del día.")
     bullet(doc, "Atender recuperaciones, notificaciones y derivaciones pendientes.")
     bullet(doc, "Comprobar asignaciones, porcentajes de comisión y reemplazos antes de la jornada.")
     bullet(doc, "Revisar Comisiones por ejecutiva; al pagar el período, registrar los montos y luego reestablecerlos a $0.")

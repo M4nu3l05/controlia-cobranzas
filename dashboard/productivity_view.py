@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
 import time
 import unicodedata
 
@@ -35,7 +34,6 @@ from admin_carteras.service import (
 )
 from deudores.database import EMPRESAS_OPERATIVAS
 from auth.auth_service import get_backend_base_url
-from auth.session_history_db import obtener_conexiones_hoy, obtener_conexiones_mes
 from comisiones.service import obtener_comision_propia, obtener_tasas
 from dashboard.worker import DashboardLoadWorker
 from deudores.database import cargar_para_envio
@@ -739,29 +737,7 @@ class DashboardWidget(QWidget):
         focus_lay.addStretch(1)
         lower.addWidget(focus_card, 1)
         lay.addLayout(lower)
-        if self._can_view_team():
-            self.team_card = QFrame()
-            self.team_card.setObjectName("teamCard")
-            _card(self.team_card)
-            team = QHBoxLayout(self.team_card)
-            team.setContentsMargins(16, 12, 16, 12)
-            label = QLabel("Productividad del equipo")
-            label.setStyleSheet(f"color:{TEXT};font-size:13px;font-weight:600;border:none;")
-            self.team_today = QLabel("Conexiones hoy: 0")
-            self.team_month = QLabel("Conexiones del mes: 0")
-            self.team_users = QLabel("Ejecutivas activas: 0")
-            for item in (self.team_today, self.team_month, self.team_users):
-                item.setStyleSheet(f"color:{SECONDARY};font-size:12px;border:none;")
-            team.addWidget(label)
-            team.addStretch(1)
-            team.addWidget(self.team_today)
-            team.addWidget(self.team_users)
-            team.addWidget(self.team_month)
-            lay.addWidget(self.team_card)
         lay.addStretch(1)
-
-    def _can_view_team(self) -> bool:
-        return bool(self._session and getattr(self._session, "role", "") in {"admin", "supervisor"})
 
     def _is_ejecutivo(self) -> bool:
         return bool(self._session and getattr(self._session, "role", "") == "ejecutivo")
@@ -944,7 +920,7 @@ class DashboardWidget(QWidget):
 
     def _load_extras(self) -> dict:
         """Corre en el hilo del worker: datos secundarios del panel."""
-        return {"comision": self._load_commission(), "equipo": self._load_team()}
+        return {"comision": self._load_commission()}
 
     def _load_commission(self) -> dict | None:
         if getattr(self, "commission_card", None) is None:
@@ -965,7 +941,6 @@ class DashboardWidget(QWidget):
         except Exception as exc:
             self.warning.setText(f"⚠  No fue posible actualizar el dashboard: {exc}")
         extras = extras or {}
-        self._apply_team(extras.get("equipo"))
         self._apply_commission(extras.get("comision"))
 
     def _on_load_failed(self, mensaje: str) -> None:
@@ -1324,29 +1299,3 @@ class DashboardWidget(QWidget):
             desde = f"{desde[8:10]}/{desde[5:7]}/{desde[0:4]}"
         since = f"Acumulado desde el último corte del {desde}" if desde else "Acumulado histórico"
         self.commission_card.set_data(_money(fila.get("comision_clp", 0)), detalle, rates, since)
-
-    def _load_team(self):
-        """Corre en el hilo del worker: devuelve (hoy, mes) o None."""
-        if not self._can_view_team():
-            return None
-        try:
-            if self._uses_backend():
-                legacy = _LegacyDashboardWidget.__new__(_LegacyDashboardWidget)
-                legacy._session = self._session
-                return legacy._backend_session_history()
-            now = datetime.now()
-            return obtener_conexiones_hoy(role="supervisor"), obtener_conexiones_mes(now.year, now.month, role="supervisor")
-        except Exception:
-            return None
-
-    def _apply_team(self, equipo) -> None:
-        if not self._can_view_team() or not equipo:
-            return
-        try:
-            today, month = equipo
-            active = today["username"].nunique() if not today.empty and "username" in today.columns else 0
-            self.team_today.setText(f"Conexiones hoy: {_number(len(today))}")
-            self.team_users.setText(f"Ejecutivas activas: {_number(active)}")
-            self.team_month.setText(f"Conexiones del mes: {_number(len(month))}")
-        except Exception:
-            pass

@@ -125,7 +125,7 @@ class DashboardWidget(QWidget):
         if index == self.WORK_INDEX:
             self.mode_description.setText("Prioridades, canales disponibles y acciones para la gestión diaria")
         else:
-            self.mode_description.setText("Visión consolidada de cartera, cobertura y productividad")
+            self.mode_description.setText("Visión consolidada de cartera, cobertura y rendimiento")
         if not self._loaded.get(index, False):
             self._loaded[index] = True
             QTimer.singleShot(0, self._current_dashboard().refrescar)

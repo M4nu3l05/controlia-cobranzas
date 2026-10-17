@@ -102,7 +102,7 @@ def test_soft_delete_revokes_access_and_preserves_history_and_email_reuse():
         assert all(item.id != target_id for item in admin_list_users_service(db))
         assert db.query(PaymentTransaction).filter_by(registered_by_user_id=target_id).count() == 1
         assert db.query(CustomerChangeAudit).filter_by(changed_by_user_id=target_id).count() == 1
-        assert db.query(UserSessionHistory).filter_by(user_id=target_id).one().logout_at is not None
+        assert db.query(UserSessionHistory).filter_by(user_id=target_id).one().logout_at is None
         assert db.query(PasswordResetToken).filter_by(user_id=target_id).one().used is True
         assert db.execute(
             text("SELECT COUNT(*) FROM cartera_asignaciones WHERE user_id = :uid"),

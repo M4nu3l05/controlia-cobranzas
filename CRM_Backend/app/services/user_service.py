@@ -276,14 +276,6 @@ def admin_delete_user_service(
                 """),
                 {"now": now, "executor_id": int(executor.id), "user_id": int(user.id)},
             )
-        if "user_session_history" in available_tables:
-            db.execute(
-                text("""
-                    UPDATE user_session_history SET logout_at = :now
-                    WHERE user_id = :user_id AND logout_at IS NULL
-                """),
-                {"now": now, "user_id": int(user.id)},
-            )
         if "cartera_temporary_replacements" in available_tables:
             db.execute(
                 text("""

@@ -61,7 +61,7 @@ Se **aprueba funcionalmente la V1** para salida controlada a produccion (piloto)
 | Smoke test Supervisor en produccion | Pendiente | Asignacion, gestiones, limpieza |
 | Smoke test Ejecutiva en produccion | Pendiente | Restriccion por cartera, gestion diaria |
 | Envio de correos de prueba (plantilla real) | Pendiente | Validar destinatarios y log |
-| Validacion de dashboard/productividad con datos reales | Pendiente | Coherencia de metricas |
+| Validacion de dashboard con datos reales | Pendiente | Coherencia de metricas |
 | Monitoreo de errores primera jornada | Pendiente | Logs backend + feedback usuarios |
 
 ## 2.3 Post-Go-Live (48-72h)

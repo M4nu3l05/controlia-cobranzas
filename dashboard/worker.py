@@ -30,8 +30,8 @@ class DashboardLoadWorker(QThread):
             self.failed.emit(str(exc))
             return
 
-        # Comisiones y productividad del equipo son informativas: si fallan, el
-        # panel igual debe mostrar la cartera.
+        # Las comisiones son informativas: si fallan, el panel igual debe
+        # mostrar la cartera.
         try:
             extras = self._cargar_extras()
         except Exception:

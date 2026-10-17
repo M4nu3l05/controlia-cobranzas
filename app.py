@@ -37,13 +37,11 @@ from deudores.outbox import contar_agotadas, contar_pendientes
 from deudores.outbox_worker import OutboxSyncWorker
 
 from auth.auth_service import (
-    backend_close_session,
     backend_list_notifications,
     backend_mark_notification_read,
     backend_list_pending_recovery_requests,
     backend_reset_pending_recovery_request,
 )
-from auth.session_history_db import close_session
 from legal import LegalDocumentDialog, enforce_legal_acceptance, get_privacy_text, get_terms_text
 
 
@@ -484,7 +482,6 @@ class MainWindow(QMainWindow):
     def __init__(self, session=None):
         super().__init__()
         self._session = session
-        self._session_closed = False
         self._last_pending_recovery_ids: set[int] = set()
         self._notification_count = 0
         self._recovery_count = 0
@@ -680,19 +677,6 @@ class MainWindow(QMainWindow):
             parent=self,
         ).exec()
 
-    def _cerrar_sesion_activa(self):
-        if self._session_closed or not self._session:
-            return
-
-        if getattr(self._session, "auth_source", "") == "backend":
-            backend_close_session(self._session)
-        else:
-            close_session(
-                session_id=getattr(self._session, "session_history_id", None),
-                user_id=getattr(self._session, "user_id", None),
-            )
-        self._session_closed = True
-
     def _init_recovery_notifications(self):
         if not self._session or getattr(self._session, "auth_source", "") != "backend":
             return
@@ -852,7 +836,6 @@ class MainWindow(QMainWindow):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if resp == QMessageBox.StandardButton.Yes:
-            self._cerrar_sesion_activa()
             self.close()
 
             from auth import AuthWindow
@@ -865,11 +848,6 @@ class MainWindow(QMainWindow):
                 new_win = MainWindow(session=auth.session)
                 new_win.show()
                 QApplication.instance()._main_window = new_win
-
-    def closeEvent(self, event):
-        self._cerrar_sesion_activa()
-        super().closeEvent(event)
-
 
 def main():
     ensure_runtime_dirs()

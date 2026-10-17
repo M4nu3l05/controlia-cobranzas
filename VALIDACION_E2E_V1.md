@@ -43,7 +43,7 @@ Cada caso debe registrar:
 7. Registra pago y valida recalculo de `Pagos` y `Saldo Actual`.
 8. Carga base de gestiones y valida persistencia en detalle.
 9. Exporta base de gestiones (completa y por fecha) con datos reales.
-10. Dashboard muestra metricas y productividad con datos coherentes.
+10. Dashboard muestra metricas, companias y comisiones con datos coherentes.
 
 ### Supervisor
 
@@ -52,7 +52,7 @@ Cada caso debe registrar:
 3. Carga base deudores y base de gestiones.
 4. Botones de limpieza eliminan datos reales, no solo vista.
 5. Puede descargar exportes de gestiones con resultados.
-6. Dashboard muestra productividad/sesiones cuando hay actividad.
+6. Dashboard muestra metricas, companias y comisiones coherentes.
 
 ### Ejecutiva
 
@@ -86,13 +86,13 @@ Cada caso debe registrar:
 | A-07 | Registro de pago | Admin |  |  |  |
 | A-08 | Carga de gestiones | Admin |  |  |  |
 | A-09 | Exportes de gestiones | Admin |  |  |  |
-| A-10 | Dashboard/productividad | Admin |  |  |  |
+| A-10 | Dashboard general | Admin |  |  |  |
 | S-01 | Login y visibilidad por rol | Supervisor |  |  |  |
 | S-02 | Asignacion de carteras | Supervisor |  |  |  |
 | S-03 | Carga de bases | Supervisor |  |  |  |
 | S-04 | Limpieza real de datos | Supervisor |  |  |  |
 | S-05 | Exportes de gestiones | Supervisor |  |  |  |
-| S-06 | Dashboard/productividad | Supervisor |  |  |  |
+| S-06 | Dashboard general | Supervisor |  |  |  |
 | E-01 | Login y modulos permitidos | Ejecutiva |  |  |  |
 | E-02 | Restriccion por cartera | Ejecutiva |  |  |  |
 | E-03 | Sin cartera asignada | Ejecutiva |  |  |  |

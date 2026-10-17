@@ -54,7 +54,6 @@ __all__ = [
     "backend_list_notifications", "backend_mark_notification_read",
     "backend_list_customer_change_audit", "backend_list_replacements",
     "backend_create_replacement", "backend_end_replacement",
-    "backend_close_session",
 ]
 
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
@@ -80,7 +79,6 @@ class UserSession:
     access_token: str | None = None
     auth_source: str = "local"
     empresas_asignadas: list[str] | None = None
-    session_history_id: int | None = None
 
     @property
     def role_label(self) -> str:
@@ -108,11 +106,6 @@ class UserSession:
             access_token=str(payload.get("access_token", "")) or None,
             auth_source="backend",
             empresas_asignadas=[],
-            session_history_id=(
-                int(payload.get("session_history_id"))
-                if payload.get("session_history_id") is not None
-                else None
-            ),
         )
 
 
@@ -1638,23 +1631,6 @@ def backend_delete_deudor_individual(
         )
         if isinstance(data, dict):
             return str(data.get("message", "")).strip()
-        return ""
-    except ValueError as exc:
-        return str(exc)
-    except requests.RequestException as exc:
-        return _friendly_backend_error(exc)
-
-
-def backend_close_session(session: UserSession) -> str:
-    if getattr(session, "auth_source", "") != "backend":
-        return ""
-    try:
-        _http_request_auth(
-            "POST",
-            "/auth/logout",
-            token=_require_backend_token(session),
-            payload={"session_history_id": getattr(session, "session_history_id", None)},
-        )
         return ""
     except ValueError as exc:
         return str(exc)
