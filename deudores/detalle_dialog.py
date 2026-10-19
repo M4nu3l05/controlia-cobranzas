@@ -182,6 +182,12 @@ def _formatear_rut_completo(rut: str, dv: str = "", rut_completo: str = "") -> s
         else:
             rut_txt = rut_txt or bruto.strip()
 
+    # Si el RUT ya trae el DV tras el guion, se separa para no duplicarlo en el cuerpo.
+    if "-" in rut_txt:
+        base, dv_from_rut = rut_txt.rsplit("-", 1)
+        rut_txt = base
+        dv_txt = dv_txt or dv_from_rut.strip().upper()
+
     rut_txt = rut_txt.replace(".", "").replace("-", "").replace(" ", "").strip().upper()
     dv_txt = dv_txt.replace(".", "").replace("-", "").replace(" ", "").strip().upper()
 
