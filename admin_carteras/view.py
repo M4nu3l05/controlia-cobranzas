@@ -485,7 +485,8 @@ class AdminCarterasWidget(QWidget):
         lbl_empresa = QLabel("Empresa:")
         lbl_empresa.setStyleSheet("color:#334155; font-weight:700;")
         self.cmb_empresa = QComboBox()
-        self.cmb_empresa.addItems(EMPRESAS_OPERATIVAS)
+        # Catalogo completo: la limpieza debe alcanzar tambien carteras retiradas.
+        self.cmb_empresa.addItems(EMPRESAS)
         self.cmb_empresa.setMinimumHeight(36)
 
         row_empresa.addWidget(lbl_empresa)

@@ -65,6 +65,8 @@ def test_dashboard_and_assignments_build_exactly_two_operational_entries():
         "Colmena", "Cruz Blanca"
     ]
     assert list(admin._combos_asignacion) == ["Colmena", "Cruz Blanca"]
+    # La limpieza controlada mantiene acceso a carteras retiradas (ej. Cart-56).
+    assert [admin.cmb_empresa.itemText(i) for i in range(admin.cmb_empresa.count())] == EMPRESAS
 
     admin.close()
     dashboard.close()
