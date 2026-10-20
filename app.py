@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QTableWidgetItem,
     QLineEdit,
+    QProgressDialog,
 )
 
 from conciliador import ConciliacionTab, load_qss
@@ -43,6 +44,9 @@ from auth.auth_service import (
     backend_reset_pending_recovery_request,
 )
 from legal import LegalDocumentDialog, enforce_legal_acceptance, get_privacy_text, get_terms_text
+from core import updater
+from core.update_workers import UpdateCheckWorker, UpdateDownloadWorker
+from core.version import APP_VERSION
 
 
 def _app_icon_path() -> str:
@@ -490,7 +494,7 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(icon_path))
 
         username = session.username if session else "Usuario"
-        self.setWindowTitle(f"Controlia Cobranzas  |  {username}")
+        self.setWindowTitle(f"Controlia Cobranzas {APP_VERSION}  |  {username}")
         self.setMinimumSize(760, 520)
 
         screen = QApplication.primaryScreen()
@@ -544,6 +548,13 @@ class MainWindow(QMainWindow):
             self._lbl_sync.setMinimumHeight(30)
             self._lbl_sync.setVisible(False)
             strip_row.addWidget(self._lbl_sync)
+
+            self._btn_update = QPushButton("")
+            self._btn_update.setMinimumHeight(30)
+            self._btn_update.setStyleSheet(self._top_button_style(active=True))
+            self._btn_update.setVisible(False)
+            self._btn_update.clicked.connect(self._prompt_update)
+            strip_row.addWidget(self._btn_update)
 
             self._btn_notifications = QPushButton("🔔 Notificaciones")
             self._btn_notifications.setMinimumHeight(30)
@@ -629,6 +640,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.tabs)
         self._init_legal_menu()
+        self._init_updates()
         self._init_recovery_notifications()
         self._init_operational_notifications()
 
@@ -654,6 +666,134 @@ class MainWindow(QMainWindow):
         act_privacy = QAction("Política de Privacidad", self)
         act_privacy.triggered.connect(self._abrir_privacidad)
         menu_ayuda.addAction(act_privacy)
+
+        menu_ayuda.addSeparator()
+        act_updates = QAction("Buscar actualizaciones", self)
+        act_updates.triggered.connect(lambda: self._check_for_updates(manual=True))
+        menu_ayuda.addAction(act_updates)
+
+    # ── Actualizaciones ─────────────────────────────────────────────
+    def _init_updates(self):
+        self._pending_release = None
+        self._update_check_worker = None
+        self._update_download_worker = None
+        QTimer.singleShot(5000, lambda: self._check_for_updates(manual=False))
+
+    def _check_for_updates(self, *, manual: bool):
+        if self._update_check_worker is not None and self._update_check_worker.isRunning():
+            return
+        worker = UpdateCheckWorker(self)
+        worker.finished_ok.connect(lambda release: self._on_update_checked(release, manual=manual))
+        if manual:
+            worker.failed.connect(
+                lambda err: QMessageBox.warning(
+                    self,
+                    "Actualizaciones",
+                    "No se pudo consultar si hay una versión nueva.\n"
+                    "Revisa tu conexión a internet e inténtalo más tarde.",
+                )
+            )
+        self._update_check_worker = worker
+        worker.start()
+
+    def _on_update_checked(self, release, *, manual: bool):
+        self._pending_release = release
+        btn = getattr(self, "_btn_update", None)
+        if release is None:
+            if btn is not None:
+                btn.setVisible(False)
+            if manual:
+                QMessageBox.information(
+                    self,
+                    "Actualizaciones",
+                    f"Ya tienes la última versión ({APP_VERSION}).",
+                )
+            return
+        if btn is not None:
+            btn.setText(f"⬆ Actualizar a {release.version}")
+            btn.setToolTip(f"Hay una versión nueva disponible. Tienes la {APP_VERSION}.")
+            btn.setVisible(True)
+        if manual or btn is None:
+            self._prompt_update()
+
+    def _prompt_update(self):
+        release = self._pending_release
+        if release is None:
+            return
+        if self._update_download_worker is not None and self._update_download_worker.isRunning():
+            return
+
+        notes = release.notes or "Sin notas para esta versión."
+        if len(notes) > 1200:
+            notes = notes[:1200].rstrip() + "…"
+        box = QMessageBox(self)
+        box.setWindowTitle("Actualización disponible")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(
+            f"Hay una nueva versión de Controlia Cobranzas: {release.version}\n"
+            f"Versión instalada: {APP_VERSION}"
+        )
+        box.setInformativeText(
+            "Al actualizar, la aplicación se cerrará, Windows puede pedir permiso de "
+            "administrador y se volverá a abrir sola al terminar. Tus datos se conservan."
+        )
+        box.setDetailedText(notes)
+        btn_now = box.addButton("Actualizar ahora", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Más tarde", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is not btn_now:
+            return
+
+        if not updater.can_self_update():
+            QMessageBox.information(
+                self,
+                "Actualizaciones",
+                "La actualización automática solo funciona en la aplicación instalada.\n"
+                "En modo desarrollo actualiza el código con git.",
+            )
+            return
+
+        self._start_update_download(release)
+
+    def _start_update_download(self, release):
+        dlg = QProgressDialog("Descargando actualización…", "Cancelar", 0, 100, self)
+        dlg.setWindowTitle("Actualizando Controlia Cobranzas")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setValue(0)
+
+        worker = UpdateDownloadWorker(release, self)
+        self._update_download_worker = worker
+
+        def on_progress(done: int, total: int):
+            if total > 0:
+                dlg.setValue(min(100, int(done * 100 / total)))
+                dlg.setLabelText(
+                    f"Descargando actualización… {done / 1_048_576:.1f} de {total / 1_048_576:.1f} MB"
+                )
+
+        def on_ok(path: str):
+            dlg.close()
+            try:
+                updater.launch_installer(path)
+            except Exception as exc:
+                logger.exception("No se pudo iniciar el instalador de la actualización")
+                QMessageBox.warning(self, "Actualizaciones", f"No se pudo iniciar el instalador:\n{exc}")
+                return
+            QApplication.instance().quit()
+
+        def on_failed(err: str):
+            dlg.close()
+            QMessageBox.warning(self, "Actualizaciones", err)
+
+        worker.progress.connect(on_progress)
+        worker.finished_ok.connect(on_ok)
+        worker.failed.connect(on_failed)
+        worker.cancelled.connect(dlg.close)
+        dlg.canceled.connect(worker.cancel)
+        worker.start()
 
     def _abrir_terminos(self):
         texto, err = get_terms_text()

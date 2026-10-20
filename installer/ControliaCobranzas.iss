@@ -2,7 +2,11 @@
 ; Requiere tener compilado: dist\ControliaCobranzas\ControliaCobranzas.exe
 
 #define MyAppName "Controlia Cobranzas"
-#define MyAppVersion "2.4.15"
+; La versión viene de core\version.py: build_installer.bat la pasa con
+; ISCC /DMyAppVersion=<version>. Así app, instalador y release no se desalinean.
+#ifndef MyAppVersion
+  #error Compila con build_installer.bat (define MyAppVersion desde core\version.py)
+#endif
 #define MyAppPublisher "Controlia"
 #define MyAppExeName "ControliaCobranzas.exe"
 ; La llave doble es el escape de Inno Setup: el AppId real es {1D6E7720-...}
@@ -33,6 +37,9 @@ SetupIconFile={#MyAppIconFile}
 ; recomendado y ademas cubre Windows ARM64 ejecutando el binario x64.
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
+; Permite que la actualización desde la app (setup en modo /SILENT) cierre la
+; instancia abierta antes de reemplazar archivos.
+CloseApplications=yes
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
@@ -59,7 +66,10 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFile
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\app_icon.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Ejecutar {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; Sin "skipifsilent": tras una actualización silenciosa lanzada desde la app,
+; esta entrada la reabre (las entradas postinstall corren como el usuario
+; original, no como administrador).
+Filename: "{app}\{#MyAppExeName}"; Description: "Ejecutar {#MyAppName}"; Flags: nowait postinstall
 
 [Code]
 var
@@ -105,9 +115,20 @@ begin
   PrivacyAccepted.Caption := 'He leído y acepto la Política de Privacidad y Confidencialidad.';
 end;
 
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  { En una actualización la política ya fue aceptada al instalar; además la app
+    exige la aceptación legal al iniciar sesión (legal\gate.py). }
+  Result := (PageID = PrivacyPage.ID) and (WizardForm.PrevAppDir <> '');
+end;
+
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
+
+  { En modo silencioso Setup simula los clics en Siguiente; no hay casilla que marcar. }
+  if WizardSilent then
+    Exit;
 
   if CurPageID = PrivacyPage.ID then
   begin

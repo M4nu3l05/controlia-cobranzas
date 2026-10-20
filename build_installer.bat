@@ -18,12 +18,18 @@ if exist "%ISCC_A%" set "ISCC_PATH=%ISCC_A%"
 if not defined ISCC_PATH if exist "%ISCC_B%" set "ISCC_PATH=%ISCC_B%"
 if not defined ISCC_PATH goto :iscc_missing
 
-"%ISCC_PATH%" "installer\ControliaCobranzas.iss"
+rem La version sale de core\version.py para que app, instalador y release coincidan.
+set "APP_VERSION="
+for /f "usebackq delims=" %%V in (`".venv\Scripts\python.exe" -c "from core.version import APP_VERSION; print(APP_VERSION)"`) do set "APP_VERSION=%%V"
+if not defined APP_VERSION goto :version_error
+echo Version: %APP_VERSION%
+
+"%ISCC_PATH%" "/DMyAppVersion=%APP_VERSION%" "installer\ControliaCobranzas.iss"
 
 if errorlevel 1 goto :iss_error
 
 set "LAST_SETUP="
-for /f "delims=" %%F in ('dir /b /a:-d /o:-d "installer\output\ControliaCobranzas_Setup_*.exe" 2^>nul') do if not defined LAST_SETUP set "LAST_SETUP=%~dp0installer\output\%%F"
+if exist "installer\output\ControliaCobranzas_Setup_%APP_VERSION%.exe" set "LAST_SETUP=%~dp0installer\output\ControliaCobranzas_Setup_%APP_VERSION%.exe"
 if "%LAST_SETUP%"=="" (
   echo [ERROR] No se encontro el instalador generado en installer\output.
   exit /b 1
@@ -51,6 +57,10 @@ exit /b 1
 :iscc_missing
 echo [ERROR] No se encontro ISCC.exe (Inno Setup 6).
 echo Instala Inno Setup desde: https://jrsoftware.org/isdl.php
+exit /b 1
+
+:version_error
+echo [ERROR] No se pudo leer APP_VERSION desde core\version.py.
 exit /b 1
 
 :iss_error

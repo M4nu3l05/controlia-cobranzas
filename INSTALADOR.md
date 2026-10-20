@@ -13,14 +13,15 @@ Guía corta para reconstruir `ControliaCobranzas_Setup_<version>.exe` después d
 
 ## Pasos para publicar una nueva versión
 
-1. **Subir la versión** en `installer\ControliaCobranzas.iss`:
+1. **Subir la versión** en `core\version.py` (es la única fuente; el `.iss` la recibe
+   desde `build_installer.bat`):
 
    ```
-   #define MyAppVersion "2.4.15"
+   APP_VERSION = "2.4.15"
    ```
 
-   El `AppId` **no se toca**: es el que hace que el setup actualice la instalación
-   existente en vez de dejar una copia paralela.
+   El `AppId` del `.iss` **no se toca**: es el que hace que el setup actualice la
+   instalación existente en vez de dejar una copia paralela.
 
 2. **Compilar ejecutable + instalador** (desde la carpeta del proyecto):
 
@@ -45,6 +46,30 @@ Guía corta para reconstruir `ControliaCobranzas_Setup_<version>.exe` después d
    dist\ControliaCobranzas\ControliaCobranzas.exe
    ```
 
+4. **Publicar la release** para que las apps instaladas se actualicen solas:
+
+   ```
+   publish_release.bat notas.md
+   ```
+
+   Calcula `SHA256SUMS.txt` y crea la release `v<version>` en el repositorio público
+   de binarios (`UPDATE_REPO` en `core\version.py`) con el instalador y el hash. El
+   archivo de notas es opcional; su contenido se muestra al usuario antes de actualizar.
+   Requiere [GitHub CLI](https://cli.github.com) autenticado (`gh auth login`).
+
+## Actualización desde la aplicación
+
+- Al iniciar, la app consulta la última release de `UPDATE_REPO`. Si es más nueva que
+  `APP_VERSION`, aparece el botón **⬆ Actualizar a X** en la barra superior. También
+  se puede revisar a mano en *Ayuda → Buscar actualizaciones*.
+- Al aceptar, descarga el instalador, verifica su SHA256 y lo ejecuta en modo
+  silencioso (`/SILENT`). Windows pide permiso de administrador, la app se cierra, se
+  actualiza en el mismo lugar y vuelve a abrirse. Los datos de `%APPDATA%` no se tocan.
+- La primera versión que incluye el botón hay que instalarla a mano una vez; desde ahí
+  las siguientes se actualizan con el botón.
+- Nunca publiques una release con un número menor o igual al ya publicado: la app
+  compara números (`2.4.15` > `2.4.9`) y la ignoraría.
+
 ## Solo el ejecutable (sin instalador)
 
 ```
@@ -57,6 +82,8 @@ cambio sin esperar la compilación del setup.
 ## Notas
 
 - `installer\output\` está en `.gitignore`: los instaladores no se versionan, solo el `.iss`.
+- El `.iss` ya no compila directamente desde el IDE de Inno Setup sin definir
+  `MyAppVersion`; usar `build_installer.bat`.
 - Si `build_installer.bat` falla con `No se encontro ISCC.exe`, es que falta Inno Setup 6.
 - Si falla la instalación de dependencias, revisar conexión a internet: `pip` descarga
   `pyinstaller` y lo declarado en `requirements.txt`.
