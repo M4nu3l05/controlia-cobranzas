@@ -17,7 +17,7 @@ Guía corta para reconstruir `ControliaCobranzas_Setup_<version>.exe` después d
    desde `build_installer.bat`):
 
    ```
-   APP_VERSION = "2.5.0"
+   APP_VERSION = "2.5.1"
    ```
 
    El `AppId` del `.iss` **no se toca**: es el que hace que el setup actualice la
@@ -59,7 +59,7 @@ Guía corta para reconstruir `ControliaCobranzas_Setup_<version>.exe` después d
 
 ## Actualización desde la aplicación
 
-- Al iniciar, la app consulta la última release de `UPDATE_REPO`. Si es más nueva que
+- Al iniciar (y luego cada 2 horas), la app consulta la última release de `UPDATE_REPO`. Si es más nueva que
   `APP_VERSION`, aparece el botón **⬆ Actualizar a X** en la barra superior. También
   se puede revisar a mano en *Ayuda → Buscar actualizaciones*.
 - Al aceptar, descarga el instalador, verifica su SHA256 y lo ejecuta en modo

@@ -465,6 +465,8 @@ QLabel {
 }
 """
 
+_UPDATE_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000
+
 _TOP_BUTTON_STYLE = """
 QPushButton {
     background: %s;
@@ -678,6 +680,11 @@ class MainWindow(QMainWindow):
         self._update_check_worker = None
         self._update_download_worker = None
         QTimer.singleShot(5000, lambda: self._check_for_updates(manual=False))
+        # Quien deja la app abierta todo el día también debe ver las versiones nuevas.
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(_UPDATE_CHECK_INTERVAL_MS)
+        self._update_timer.timeout.connect(lambda: self._check_for_updates(manual=False))
+        self._update_timer.start()
 
     def _check_for_updates(self, *, manual: bool):
         if self._update_check_worker is not None and self._update_check_worker.isRunning():
