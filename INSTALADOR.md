@@ -17,7 +17,7 @@ Guía corta para reconstruir `ControliaCobranzas_Setup_<version>.exe` después d
    desde `build_installer.bat`):
 
    ```
-   APP_VERSION = "2.4.15"
+   APP_VERSION = "2.5.0"
    ```
 
    El `AppId` del `.iss` **no se toca**: es el que hace que el setup actualice la

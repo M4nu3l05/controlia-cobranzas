@@ -20,7 +20,8 @@ if not defined ISCC_PATH goto :iscc_missing
 
 rem La version sale de core\version.py para que app, instalador y release coincidan.
 set "APP_VERSION="
-for /f "usebackq delims=" %%V in (`".venv\Scripts\python.exe" -c "from core.version import APP_VERSION; print(APP_VERSION)"`) do set "APP_VERSION=%%V"
+rem Ruta sin comillas: si el comando de for /f empieza con comillas, cmd las recorta mal.
+for /f "delims=" %%V in ('.venv\Scripts\python.exe -c "from core.version import APP_VERSION; print(APP_VERSION)"') do set "APP_VERSION=%%V"
 if not defined APP_VERSION goto :version_error
 echo Version: %APP_VERSION%
 

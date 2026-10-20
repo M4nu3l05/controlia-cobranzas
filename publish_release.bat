@@ -20,8 +20,9 @@ if errorlevel 1 (
 
 set "APP_VERSION="
 set "UPDATE_REPO="
-for /f "usebackq delims=" %%V in (`"%VENV_PY%" -c "from core.version import APP_VERSION; print(APP_VERSION)"`) do set "APP_VERSION=%%V"
-for /f "usebackq delims=" %%R in (`"%VENV_PY%" -c "from core.version import UPDATE_REPO; print(UPDATE_REPO)"`) do set "UPDATE_REPO=%%R"
+rem Ruta sin comillas: si el comando de for /f empieza con comillas, cmd las recorta mal.
+for /f "delims=" %%V in ('%VENV_PY% -c "from core.version import APP_VERSION; print(APP_VERSION)"') do set "APP_VERSION=%%V"
+for /f "delims=" %%R in ('%VENV_PY% -c "from core.version import UPDATE_REPO; print(UPDATE_REPO)"') do set "UPDATE_REPO=%%R"
 if not defined APP_VERSION (
     echo [ERROR] No se pudo leer APP_VERSION desde core\version.py.
     exit /b 1
