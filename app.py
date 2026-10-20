@@ -775,6 +775,9 @@ class MainWindow(QMainWindow):
                 )
 
         def on_ok(path: str):
+            # La descarga pudo terminar justo después de que el usuario cancelara.
+            if dlg.wasCanceled():
+                return
             dlg.close()
             try:
                 updater.launch_installer(path)

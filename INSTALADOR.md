@@ -70,6 +70,19 @@ Guía corta para reconstruir `ControliaCobranzas_Setup_<version>.exe` después d
 - Nunca publiques una release con un número menor o igual al ya publicado: la app
   compara números (`2.4.15` > `2.4.9`) y la ignoraría.
 
+## Probar la actualización sin publicar nada
+
+- `tools\simular_actualizacion.py`: abre la app con un "GitHub" falso en `127.0.0.1`,
+  datos aislados en una carpeta temporal y un usuario ficticio. Muestra el botón, descarga,
+  "instala" y reabre la app como versión nueva. Escenarios con `--escenario`: `ok`,
+  `al-dia`, `sin-releases`, `sin-red`, `hash-malo`, `lenta` (para probar Cancelar).
+  `--con-login` usa el login real.
+- `tools\probar_actualizacion.py`: recorre todos los escenarios anteriores solo y valida
+  cada resultado.
+- `tools\probar_instalador.py`: compila una variante aislada del `.iss` (otro AppId, sin
+  admin) e instala 1.0.0, actualiza a 1.0.1 en silencio como lo hace el botón y desinstala.
+  No toca la instalación real.
+
 ## Solo el ejecutable (sin instalador)
 
 ```
