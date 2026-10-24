@@ -11,7 +11,7 @@ BACKEND_ROOT = ROOT / "CRM_Backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.services.deudor_import_service import _detalle_identity_key
+from app.services.deudor_import_service import _detalle_identity_key, _import_match_key
 
 
 def _fila(empresa: str, **campos):
@@ -69,3 +69,25 @@ def test_una_cartera_nueva_hereda_la_regla_por_defecto():
     uno = _detalle_identity_key(_fila("Isapre Nueva", monto_cobrar=100_000.0))
     dos = _detalle_identity_key(_fila("Isapre Nueva", monto_cobrar=80_000.0))
     assert uno != dos
+
+
+@pytest.mark.parametrize("empresa", ["Cruz Blanca", "Colmena"])
+def test_isapres_con_politica_identifican_por_folio_y_rut(empresa):
+    """El monto se compara aparte: mismo folio y RUT es el mismo caso."""
+    mes_1 = _import_match_key(_fila(empresa, id_deuda="F-1", monto_cobrar=100_000.0))
+    mes_2 = _import_match_key(_fila(empresa, id_deuda="F-1", monto_cobrar=50_000.0, fecha_emision="01/08/2026"))
+    otro_rut = _import_match_key(_fila(empresa, id_deuda="F-1", rut_afiliado="87654321"))
+    assert mes_1 == mes_2
+    assert mes_1 != otro_rut
+
+
+@pytest.mark.parametrize("empresa", ["Cruz Blanca", "Colmena"])
+def test_isapres_sin_folio_usan_la_identidad_historica(empresa):
+    fila = _fila(empresa, id_deuda="", monto_cobrar=100_000.0)
+    assert _import_match_key(fila) == _detalle_identity_key(fila)
+
+
+@pytest.mark.parametrize("empresa", ["Consalud", "Cart-56", "Isapre Nueva"])
+def test_carteras_sin_politica_mantienen_la_identidad_historica(empresa):
+    fila = _fila(empresa, id_deuda="F-1", monto_cobrar=100_000.0)
+    assert _import_match_key(fila) == _detalle_identity_key(fila)

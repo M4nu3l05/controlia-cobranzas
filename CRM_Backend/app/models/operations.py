@@ -82,6 +82,8 @@ class DebtorImportBatch(Base):
     updated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     omitted_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     birlado_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    amount_updated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    removed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, server_default=func.now(), index=True)
 
 

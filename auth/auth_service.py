@@ -746,6 +746,26 @@ def backend_import_deudores(
         return None, f"No se pudo abrir el archivo Excel: {exc}"
 
 
+def backend_remove_import_missing_cases(
+    session: UserSession,
+    *,
+    batch_id: int,
+    detalle_ids: list[int],
+) -> Tuple[dict | None, str]:
+    try:
+        data = _http_request_auth(
+            "POST",
+            f"/deudores/import/{int(batch_id)}/eliminar-no-informados",
+            token=_require_backend_token(session),
+            payload={"detalle_ids": [int(detalle_id) for detalle_id in detalle_ids]},
+        )
+        return data if isinstance(data, dict) else None, ""
+    except ValueError as exc:
+        return None, str(exc)
+    except requests.RequestException as exc:
+        return None, _friendly_backend_error(exc)
+
+
 def backend_preview_import_deudores(
     session: UserSession,
     *,

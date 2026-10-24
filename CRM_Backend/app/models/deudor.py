@@ -109,6 +109,8 @@ class DeudorDetalle(Base):
     source_file: Mapped[str] = mapped_column(Text, nullable=False, default="")
     periodo_carga: Mapped[str] = mapped_column(String(20), index=True, nullable=False, default="")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Ultima carga que informo el caso; permite saber que casos no vinieron en ella.
+    last_import_batch_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=False),

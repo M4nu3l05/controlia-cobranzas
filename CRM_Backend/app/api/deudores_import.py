@@ -13,6 +13,8 @@ from app.models.user import User
 from app.schemas.deudor import (
     DebtorAssignmentApplyResponse,
     DebtorAssignmentPreviewResponse,
+    EliminarNoInformadosRequest,
+    EliminarNoInformadosResponse,
     ImportDeudoresPreviewResponse,
     ImportDeudoresResponse,
 )
@@ -24,6 +26,7 @@ from app.services.deudor_import_service import (
     EMPRESAS_VALIDAS,
     import_deudores_excel_service,
     preview_deudores_excel_service,
+    remove_import_missing_cases_service,
 )
 
 router = APIRouter(prefix="/deudores", tags=["deudores-import"])
@@ -182,6 +185,36 @@ async def import_deudores(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"No se pudo importar la base de deudores: {_describe_unexpected_error(exc)}",
+        ) from exc
+
+
+@router.post(
+    "/import/{batch_id}/eliminar-no-informados",
+    response_model=EliminarNoInformadosResponse,
+)
+def eliminar_no_informados(
+    batch_id: int,
+    payload: EliminarNoInformadosRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _ensure_supervisor_or_admin(current_user)
+    try:
+        result = remove_import_missing_cases_service(
+            db,
+            batch_id=batch_id,
+            detalle_ids=payload.detalle_ids,
+        )
+        return EliminarNoInformadosResponse(**result)
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Falló la eliminación de casos no informados (carga %s)", batch_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"No se pudieron eliminar los casos no informados: {_describe_unexpected_error(exc)}",
         ) from exc
 
 

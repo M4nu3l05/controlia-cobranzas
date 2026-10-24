@@ -6,20 +6,46 @@ import os
 import re
 import unicodedata
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 
 import pandas as pd
-from sqlalchemy import String, func, inspect, select
+from sqlalchemy import String, func, inspect, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.debtor_assignment import DebtorUserAssignment
 from app.models.deudor import DeudorDetalle, DeudorResumen
 from app.models.operations import DebtorBirladoTransition, DebtorImportBatch
 from app.models.payment import PaymentAllocation
 from app.models.user import User
 from app.core.text_utils import fix_mojibake_text
 from app.services.debtor_assignment_service import apply_debtor_assignments_service
+from app.services.deudor_service import _retire_details
 
 EMPRESAS_VALIDAS = ["Colmena", "Consalud", "Cruz Blanca", "Cart-56"]
+
+AUSENTES_BIRLADO = "birlado"
+AUSENTES_MANTENER = "keep"
+AUSENTES_ELIMINAR_CONFIRMANDO = "remove_after_confirm"
+
+
+@dataclass(frozen=True)
+class ImportPolicy:
+    # Con match_by_folio el caso se identifica por Folio cuenta + RUT y el monto
+    # se compara aparte; sin el, rige la identidad historica con monto incluido.
+    match_by_folio: bool = False
+    missing: str = AUSENTES_BIRLADO
+
+
+IMPORT_POLICIES = {
+    # Modelo de solo flujo: los casos ausentes en la base se mantienen.
+    "Cruz Blanca": ImportPolicy(match_by_folio=True, missing=AUSENTES_MANTENER),
+    "Colmena": ImportPolicy(match_by_folio=True, missing=AUSENTES_ELIMINAR_CONFIRMANDO),
+}
+
+
+def _import_policy(empresa: str) -> ImportPolicy:
+    return IMPORT_POLICIES.get(str(empresa or "").strip(), ImportPolicy())
 HOJA_RESUMEN = "RESUMEN"
 HOJA_DETALLE = "DETALLE"
 
@@ -898,6 +924,69 @@ def _detalle_identity_key(row: DeudorDetalle) -> tuple[str, str, str, str, str]:
     return (empresa, rut, expediente, fecha, discriminador)
 
 
+def _import_match_key(row: DeudorDetalle) -> tuple[str, ...]:
+    empresa = _clean_text(row.empresa)
+    folio = _clean_text(getattr(row, "id_deuda", ""))
+    if folio and _import_policy(empresa).match_by_folio:
+        return (empresa, _norm_rut(row.rut_afiliado), "FOLIO", folio)
+    # Sin folio informado no hay una identidad estable distinta de la historica.
+    return _detalle_identity_key(row)
+
+
+def _existing_match_map(existentes: list[DeudorDetalle]) -> dict[tuple[str, ...], DeudorDetalle]:
+    # La regla anterior pudo dejar varias filas con el mismo folio: se compara
+    # contra la activa mas reciente.
+    out: dict[tuple[str, ...], DeudorDetalle] = {}
+    for row in existentes:
+        key = _import_match_key(row)
+        current = out.get(key)
+        if current is None or (bool(row.is_active), int(row.id or 0)) > (
+            bool(current.is_active),
+            int(current.id or 0),
+        ):
+            out[key] = row
+    return out
+
+
+def _detalle_tiene_movimiento(row: DeudorDetalle) -> bool:
+    return (
+        float(row.total_pagos or 0) != 0
+        or float(row.saldo_actual or 0) != float(row.copago or 0)
+    )
+
+
+def _allocated_detail_ids(db: Session, empresa: str) -> set[int]:
+    if "payment_allocations" not in set(inspect(db.connection()).get_table_names()):
+        return set()
+    rows = (
+        db.query(PaymentAllocation.deudor_detalle_id)
+        .join(DeudorDetalle, DeudorDetalle.id == PaymentAllocation.deudor_detalle_id)
+        .filter(DeudorDetalle.empresa == empresa)
+        .distinct()
+        .all()
+    )
+    return {int(detalle_id) for (detalle_id,) in rows if detalle_id is not None}
+
+
+def _monto_difiere(existente: DeudorDetalle, nuevo: DeudorDetalle) -> bool:
+    return round(float(existente.monto_cobrar or 0), 2) != round(float(nuevo.monto_cobrar or 0), 2)
+
+
+def _no_informado_payload(row: DeudorDetalle, allocated_ids: set[int]) -> dict:
+    return {
+        "detalle_id": int(row.id),
+        "rut_afiliado": row.rut_afiliado,
+        "rut_completo": row.rut_completo,
+        "nombre_afiliado": row.nombre_afiliado,
+        "folio": _clean_text(row.id_deuda) or _clean_text(row.nro_expediente),
+        "fecha_emision": row.fecha_emision,
+        "monto_cobrar": float(row.monto_cobrar or 0),
+        "saldo_actual": float(row.saldo_actual or 0),
+        "estado_deudor": row.estado_deudor,
+        "tiene_pagos": int(row.id) in allocated_ids,
+    }
+
+
 def _rebuild_resumen_from_detalle(db: Session, *, empresa: str) -> int:
     detalle_rows = (
         db.query(DeudorDetalle)
@@ -1056,10 +1145,10 @@ def _missing_active_details(
     existentes: list[DeudorDetalle],
     detalle_objs: list[DeudorDetalle],
 ) -> list[DeudorDetalle]:
-    incoming_keys = {_detalle_identity_key(row) for row in detalle_objs}
+    incoming_keys = {_import_match_key(row) for row in detalle_objs}
     return [
         row for row in existentes
-        if bool(row.is_active) and _detalle_identity_key(row) not in incoming_keys
+        if bool(row.is_active) and _import_match_key(row) not in incoming_keys
     ]
 
 
@@ -1083,21 +1172,38 @@ def preview_deudores_excel_service(
         source_file=source_file,
         column_mapping=column_mapping,
     )
+    policy = _import_policy(empresa_txt)
     detalle_objs = _build_detalle_objects(df_detalle, empresa_txt, source_file, periodo)
     existentes = db.query(DeudorDetalle).filter(DeudorDetalle.empresa == empresa_txt).all()
-    existentes_map = {_detalle_identity_key(row): row for row in existentes}
+    existentes_map = _existing_match_map(existentes)
     # Una carga sin hoja DETALLE no prueba que las obligaciones hayan sido retiradas.
-    missing = _missing_active_details(existentes, detalle_objs) if detalle_objs else []
-    unique_incoming = {_detalle_identity_key(row) for row in detalle_objs}
+    ausentes = _missing_active_details(existentes, detalle_objs) if detalle_objs else []
+    missing = ausentes if policy.missing == AUSENTES_BIRLADO else []
+
+    incoming_by_key: dict[tuple[str, ...], DeudorDetalle] = {}
+    for row in detalle_objs:
+        incoming_by_key.setdefault(_import_match_key(row), row)
+    montos_a_actualizar = 0
+    if policy.match_by_folio:
+        for key, nuevo in incoming_by_key.items():
+            existente = existentes_map.get(key)
+            if existente is not None and bool(existente.is_active) and _monto_difiere(existente, nuevo):
+                montos_a_actualizar += 1
 
     return {
         "empresa": empresa_txt,
         "source_file": source_file,
         "file_sha256": hashlib.sha256(content).hexdigest(),
         "periodo_carga": periodo,
-        "registros_archivo": len(unique_incoming),
-        "nuevos_estimados": sum(1 for key in unique_incoming if key not in existentes_map),
-        "existentes_estimados": sum(1 for key in unique_incoming if key in existentes_map),
+        "politica_ausentes": policy.missing,
+        "registros_archivo": len(incoming_by_key),
+        "nuevos_estimados": sum(1 for key in incoming_by_key if key not in existentes_map),
+        "existentes_estimados": sum(1 for key in incoming_by_key if key in existentes_map),
+        "montos_a_actualizar": montos_a_actualizar,
+        "folios_repetidos": len(detalle_objs) - len(incoming_by_key),
+        "no_informados_estimados": (
+            len(ausentes) if policy.missing == AUSENTES_ELIMINAR_CONFIRMANDO else 0
+        ),
         "birlados": [
             {
                 "detalle_id": int(row.id),
@@ -1211,22 +1317,45 @@ def import_deudores_excel_service(
     resumen_objs = _build_resumen_objects(df_resumen, empresa_txt, source_file, periodo_carga)
     detalle_objs = _build_detalle_objects(df_detalle, empresa_txt, source_file, periodo_carga)
 
+    policy = _import_policy(empresa_txt)
     existentes = db.query(DeudorDetalle).filter(DeudorDetalle.empresa == empresa_txt).all()
-    detalles_birlados = _missing_active_details(existentes, detalle_objs) if detalle_objs else []
+    detalles_birlados = (
+        _missing_active_details(existentes, detalle_objs)
+        if detalle_objs and policy.missing == AUSENTES_BIRLADO
+        else []
+    )
     if detalles_birlados and not confirm_birlados:
         raise ValueError(
             f"La carga retirará {len(detalles_birlados)} obligaciones. "
             "Debes revisar la vista previa y confirmar el cambio a Birlado."
         )
-    existentes_map = {_detalle_identity_key(row): row for row in existentes}
+    existentes_map = _existing_match_map(existentes)
+    existentes_por_key: dict[tuple[str, ...], list[DeudorDetalle]] = {}
+    for row in existentes:
+        existentes_por_key.setdefault(_import_match_key(row), []).append(row)
+    allocated_ids = _allocated_detail_ids(db, empresa_txt) if policy.match_by_folio else set()
+
+    batch = DebtorImportBatch(
+        empresa=empresa_txt,
+        source_file=os.path.basename(source_file),
+        file_sha256=actual_hash,
+        imported_by_user_id=executor.id,
+        imported_by_username=executor.username,
+        birlado_count=len(detalles_birlados),
+    )
+    db.add(batch)
+    db.flush()
 
     insertados = 0
     actualizados = 0
     omitidos = 0
-    keys_procesadas: set[tuple[str, str, str, str, str]] = set()
+    montos_actualizados = 0
+    montos_no_actualizados_por_pagos = 0
+    diferencias_monto: list[dict] = []
+    keys_procesadas: set[tuple[str, ...]] = set()
 
     for nuevo in detalle_objs:
-        key = _detalle_identity_key(nuevo)
+        key = _import_match_key(nuevo)
         if key in keys_procesadas:
             omitidos += 1
             continue
@@ -1235,9 +1364,42 @@ def import_deudores_excel_service(
         existente = existentes_map.get(key)
 
         if existente is None:
+            nuevo.last_import_batch_id = batch.id
             db.add(nuevo)
             existentes_map[key] = nuevo
             insertados += 1
+            continue
+
+        if policy.match_by_folio and bool(existente.is_active):
+            if not _monto_difiere(existente, nuevo):
+                omitidos += 1
+                continue
+            aplicado = (
+                not _detalle_tiene_movimiento(existente)
+                and int(existente.id) not in allocated_ids
+            )
+            diferencias_monto.append({
+                "detalle_id": int(existente.id),
+                "rut_completo": existente.rut_completo,
+                "nombre_afiliado": existente.nombre_afiliado,
+                "folio": _clean_text(existente.id_deuda),
+                "monto_anterior": float(existente.monto_cobrar or 0),
+                "monto_nuevo": float(nuevo.monto_cobrar or 0),
+                "aplicado": aplicado,
+            })
+            if not aplicado:
+                montos_no_actualizados_por_pagos += 1
+                continue
+            existente.monto_cobrar = float(nuevo.monto_cobrar or 0)
+            existente.monto_total = float(nuevo.monto_total or existente.monto_total or 0)
+            existente.copago = float(nuevo.copago or 0)
+            existente.total_pagos = float(nuevo.total_pagos or 0)
+            existente.saldo_actual = float(nuevo.saldo_actual or 0)
+            existente.source_file = source_file or existente.source_file
+            existente.periodo_carga = periodo_carga or existente.periodo_carga
+            _fit_to_columns(existente)
+            montos_actualizados += 1
+            actualizados += 1
             continue
 
         if not modo_enriquecimiento and bool(existente.is_active):
@@ -1286,8 +1448,7 @@ def import_deudores_excel_service(
         existente.periodo_carga = periodo_carga or existente.periodo_carga
         existente.is_active = True
 
-        tenia_movimiento = float(existente.total_pagos or 0) != 0 or float(existente.saldo_actual or 0) != float(existente.copago or 0)
-        if not tenia_movimiento:
+        if not _detalle_tiene_movimiento(existente):
             existente.copago = float(nuevo.copago or 0)
             existente.total_pagos = float(nuevo.total_pagos or 0)
             existente.saldo_actual = float(nuevo.saldo_actual or 0)
@@ -1298,19 +1459,16 @@ def import_deudores_excel_service(
         _fit_to_columns(existente)
         actualizados += 1
 
-    batch = DebtorImportBatch(
-        empresa=empresa_txt,
-        source_file=os.path.basename(source_file),
-        file_sha256=actual_hash,
-        imported_by_user_id=executor.id,
-        imported_by_username=executor.username,
-        new_count=insertados,
-        updated_count=actualizados,
-        omitted_count=omitidos,
-        birlado_count=len(detalles_birlados),
-    )
-    db.add(batch)
-    db.flush()
+    # Todas las filas de un caso informado quedan asociadas a esta carga,
+    # incluidas las duplicadas historicas del mismo folio.
+    for key in keys_procesadas:
+        for row in existentes_por_key.get(key, []):
+            row.last_import_batch_id = batch.id
+
+    batch.new_count = insertados
+    batch.updated_count = actualizados
+    batch.omitted_count = omitidos
+    batch.amount_updated_count = montos_actualizados
     for row in detalles_birlados:
         previous_status = _clean_text(row.estado_deudor)
         row.is_active = False
@@ -1342,10 +1500,33 @@ def import_deudores_excel_service(
         overrides=assignment_overrides,
         commit=False,
     )
+
+    no_informados: list[dict] = []
+    if policy.missing == AUSENTES_ELIMINAR_CONFIRMANDO and detalle_objs:
+        rows_no_informadas = (
+            db.query(DeudorDetalle)
+            .filter(
+                DeudorDetalle.empresa == empresa_txt,
+                DeudorDetalle.is_active.is_(True),
+                or_(
+                    DeudorDetalle.last_import_batch_id.is_(None),
+                    DeudorDetalle.last_import_batch_id != batch.id,
+                ),
+            )
+            .order_by(DeudorDetalle.rut_afiliado, DeudorDetalle.id)
+            .all()
+        )
+        no_informados = [_no_informado_payload(row, allocated_ids) for row in rows_no_informadas]
     db.commit()
 
     return {
         "empresa": empresa_txt,
+        "politica_ausentes": policy.missing,
+        "montos_actualizados": int(montos_actualizados),
+        "montos_no_actualizados_por_pagos": int(montos_no_actualizados_por_pagos),
+        "diferencias_monto": diferencias_monto,
+        "folios_repetidos": len(detalle_objs) - len(keys_procesadas),
+        "no_informados": no_informados,
         "resumen_insertados": int(resumen_insertados),
         "detalle_insertados": int(insertados + actualizados),
         "detalle_nuevos": int(insertados),
@@ -1362,4 +1543,79 @@ def import_deudores_excel_service(
         "deudores_sin_asignar": int(
             (assignment_result or {}).get("unassigned_debtors", 0)
         ),
+    }
+
+
+def remove_import_missing_cases_service(
+    db: Session,
+    *,
+    batch_id: int,
+    detalle_ids: list[int],
+) -> dict:
+    batch = db.get(DebtorImportBatch, int(batch_id))
+    if batch is None:
+        raise ValueError("La carga indicada no existe.")
+    empresa = _clean_text(batch.empresa)
+    if _import_policy(empresa).missing != AUSENTES_ELIMINAR_CONFIRMANDO:
+        raise ValueError(f"La eliminación de casos no informados no aplica para {empresa}.")
+
+    ultimo_batch_id = (
+        db.query(func.max(DebtorImportBatch.id))
+        .filter(DebtorImportBatch.empresa == empresa)
+        .scalar()
+    )
+    if int(ultimo_batch_id or 0) != int(batch.id):
+        raise ValueError(
+            f"Existe una carga más reciente para {empresa}. "
+            "Revisa los casos no informados de la última carga."
+        )
+
+    ids = sorted({int(detalle_id) for detalle_id in detalle_ids or []})
+    if not ids:
+        raise ValueError("No se indicaron casos para eliminar.")
+
+    rows = db.query(DeudorDetalle).filter(DeudorDetalle.id.in_(ids)).all()
+    validos = [
+        row for row in rows
+        if _clean_text(row.empresa) == empresa
+        and bool(row.is_active)
+        and row.last_import_batch_id != batch.id
+    ]
+    if len(validos) != len(ids):
+        raise ValueError(
+            f"{len(ids) - len(validos)} de los casos indicados ya no corresponden a casos "
+            "no informados en esta carga. No se eliminó ningún caso."
+        )
+
+    ruts_afectados = {_norm_rut(row.rut_afiliado) for row in validos}
+    _, archivados, eliminados = _retire_details(
+        db,
+        detail_filters=[DeudorDetalle.id.in_(ids)],
+        transition_filters=[DebtorBirladoTransition.detalle_id.in_(ids)],
+    )
+    batch.removed_count = int(batch.removed_count or 0) + len(ids)
+    db.flush()
+
+    _rebuild_resumen_from_detalle(db, empresa=empresa)
+    _add_birlado_only_summaries(db, empresa=empresa)
+
+    ruts_activos = {
+        _norm_rut(rut) for (rut,) in db.query(DeudorDetalle.rut_afiliado).filter(
+            DeudorDetalle.empresa == empresa, DeudorDetalle.is_active.is_(True)
+        ).distinct().all()
+    }
+    ruts_sin_casos = sorted(rut for rut in ruts_afectados - ruts_activos if rut)
+    if ruts_sin_casos and inspect(db.connection()).has_table("debtor_user_assignments"):
+        db.query(DebtorUserAssignment).filter(
+            DebtorUserAssignment.empresa == empresa,
+            DebtorUserAssignment.rut_afiliado.in_(ruts_sin_casos),
+        ).delete(synchronize_session=False)
+
+    db.commit()
+    return {
+        "empresa": empresa,
+        "import_batch_id": int(batch.id),
+        "eliminados": int(eliminados),
+        "archivados_por_pagos": int(archivados),
+        "ruts_sin_casos": len(ruts_sin_casos),
     }

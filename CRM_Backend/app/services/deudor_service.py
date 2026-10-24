@@ -99,34 +99,17 @@ def _has_debtor_assignments_table(db: Session) -> bool:
     return inspect(db.connection()).has_table("debtor_user_assignments")
 
 
-def _clear_deudor_rows(
+def _retire_details(
     db: Session,
     *,
-    empresa: str = "",
-    rut: str = "",
-) -> bool:
-    """Retira una base sin romper el libro histórico de pagos.
+    detail_filters: list,
+    transition_filters: list,
+) -> tuple[int, int, int]:
+    """Archiva los detalles con pagos y elimina el resto.
 
-    Las asignaciones de pago apuntan al detalle original y forman parte del
-    registro financiero inmutable. Esos detalles se conservan archivados; el
-    resto se elimina físicamente después de retirar las transiciones de
-    birlado que sí dependen de ellos.
+    Devuelve (transiciones_eliminadas, detalles_archivados, detalles_eliminados).
     """
     tables = set(inspect(db.connection()).get_table_names())
-    detail_filters = []
-    resumen_filters = []
-    assignment_filters = []
-    transition_filters = []
-    if empresa:
-        detail_filters.append(func.trim(DeudorDetalle.empresa) == empresa)
-        resumen_filters.append(func.trim(DeudorResumen.empresa) == empresa)
-        assignment_filters.append(func.trim(DebtorUserAssignment.empresa) == empresa)
-        transition_filters.append(func.trim(DebtorBirladoTransition.empresa) == empresa)
-    if rut:
-        detail_filters.append(_rut_db_expr(DeudorDetalle.rut_afiliado) == rut)
-        resumen_filters.append(_rut_db_expr(DeudorResumen.rut_afiliado) == rut)
-        assignment_filters.append(_rut_db_expr(DebtorUserAssignment.rut_afiliado) == rut)
-        transition_filters.append(_rut_db_expr(DebtorBirladoTransition.rut_afiliado) == rut)
 
     deleted_transitions = 0
     if "debtor_birlado_transitions" in tables:
@@ -158,6 +141,44 @@ def _clear_deudor_rows(
         ).delete(synchronize_session=False)
     else:
         deleted_detalle = detail_query.delete(synchronize_session=False)
+
+    return deleted_transitions, archived_details, deleted_detalle
+
+
+def _clear_deudor_rows(
+    db: Session,
+    *,
+    empresa: str = "",
+    rut: str = "",
+) -> bool:
+    """Retira una base sin romper el libro histórico de pagos.
+
+    Las asignaciones de pago apuntan al detalle original y forman parte del
+    registro financiero inmutable. Esos detalles se conservan archivados; el
+    resto se elimina físicamente después de retirar las transiciones de
+    birlado que sí dependen de ellos.
+    """
+    tables = set(inspect(db.connection()).get_table_names())
+    detail_filters = []
+    resumen_filters = []
+    assignment_filters = []
+    transition_filters = []
+    if empresa:
+        detail_filters.append(func.trim(DeudorDetalle.empresa) == empresa)
+        resumen_filters.append(func.trim(DeudorResumen.empresa) == empresa)
+        assignment_filters.append(func.trim(DebtorUserAssignment.empresa) == empresa)
+        transition_filters.append(func.trim(DebtorBirladoTransition.empresa) == empresa)
+    if rut:
+        detail_filters.append(_rut_db_expr(DeudorDetalle.rut_afiliado) == rut)
+        resumen_filters.append(_rut_db_expr(DeudorResumen.rut_afiliado) == rut)
+        assignment_filters.append(_rut_db_expr(DebtorUserAssignment.rut_afiliado) == rut)
+        transition_filters.append(_rut_db_expr(DebtorBirladoTransition.rut_afiliado) == rut)
+
+    deleted_transitions, archived_details, deleted_detalle = _retire_details(
+        db,
+        detail_filters=detail_filters,
+        transition_filters=transition_filters,
+    )
 
     resumen_query = db.query(DeudorResumen)
     if resumen_filters:

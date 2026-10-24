@@ -345,6 +345,31 @@ def _migration_12_user_soft_delete(db: Session) -> None:
     ))
 
 
+def _migration_13_isapre_import_policies(db: Session) -> None:
+    inspector = inspect(db.connection())
+    additions = {
+        "deudores_detalle": {
+            "last_import_batch_id": "INTEGER NULL",
+        },
+        "debtor_import_batches": {
+            "amount_updated_count": "INTEGER NOT NULL DEFAULT 0",
+            "removed_count": "INTEGER NOT NULL DEFAULT 0",
+        },
+    }
+    for table_name, table_columns in additions.items():
+        if not inspector.has_table(table_name):
+            continue
+        columns = {str(column["name"]) for column in inspector.get_columns(table_name)}
+        for column_name, sql_type in table_columns.items():
+            if column_name not in columns:
+                db.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {sql_type}"))
+    if inspector.has_table("deudores_detalle"):
+        db.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_deudores_detalle_empresa_import_batch "
+            "ON deudores_detalle(empresa, last_import_batch_id)"
+        ))
+
+
 MIGRATIONS = (
     BackendMigration(1, "Registrar y completar el esquema CRM heredado", _migration_1_legacy_schema),
     BackendMigration(2, "Auditoría, notificaciones, derivaciones y reemplazos", _migration_2_operations),
@@ -358,6 +383,7 @@ MIGRATIONS = (
     BackendMigration(10, "Supervisores responsables y equipos de cartera", _migration_10_supervisor_portfolio_teams),
     BackendMigration(11, "Idempotencia para gestiones manuales", _migration_11_gestion_idempotency),
     BackendMigration(12, "Eliminacion logica y trazable de usuarios", _migration_12_user_soft_delete),
+    BackendMigration(13, "Politicas de importacion por Isapre", _migration_13_isapre_import_policies),
 )
 
 

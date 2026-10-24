@@ -4,6 +4,7 @@ import logging
 import os
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime
 
 import pandas as pd
 from PyQt6.QtCore import QDate, QThread, Qt, pyqtSignal
@@ -34,10 +35,11 @@ from auth.auth_service import (
     backend_preview_debtor_assignments,
     backend_preview_import_deudores,
     backend_preview_import_gestiones,
+    backend_remove_import_missing_cases,
     list_users,
 )
 from core.excel_export import write_excel_report
-from core.paths import get_data_dir
+from core.paths import get_data_dir, get_exports_dir
 from deudores.database import EMPRESAS_OPERATIVAS, base_deudores_ya_cargada
 from deudores.gestiones_db import TABLA
 from deudores.gestiones_import_dialog import GestionCompanyResolutionDialog
@@ -47,6 +49,45 @@ from deudores.worker import CargaDeudoresParams, CargaDeudoresWorker
 
 
 logger = logging.getLogger(__name__)
+
+POLITICA_AUSENTES_MANTENER = "keep"
+POLITICA_AUSENTES_ELIMINAR = "remove_after_confirm"
+
+_NO_INFORMADOS_COLUMNS = {
+    "rut_completo": "RUT",
+    "nombre_afiliado": "Nombre",
+    "folio": "Folio cuenta",
+    "fecha_emision": "Fecha emisión",
+    "monto_cobrar": "Monto a cobrar",
+    "saldo_actual": "Saldo actual",
+    "estado_deudor": "Estado",
+    "tiene_pagos": "Tiene pagos",
+}
+
+_DIFERENCIAS_MONTO_COLUMNS = {
+    "rut_completo": "RUT",
+    "nombre_afiliado": "Nombre",
+    "folio": "Folio cuenta",
+    "monto_anterior": "Monto anterior",
+    "monto_nuevo": "Monto nuevo",
+    "aplicado": "Monto actualizado",
+}
+
+
+def _si_no(value: object) -> str:
+    return "Sí" if bool(value) else "No"
+
+
+def _no_informados_report_frame(rows: list[dict]) -> pd.DataFrame:
+    frame = pd.DataFrame(rows or [], columns=list(_NO_INFORMADOS_COLUMNS))
+    frame["tiene_pagos"] = frame["tiene_pagos"].map(_si_no)
+    return frame.rename(columns=_NO_INFORMADOS_COLUMNS)
+
+
+def _diferencias_monto_report_frame(rows: list[dict]) -> pd.DataFrame:
+    frame = pd.DataFrame(rows or [], columns=list(_DIFERENCIAS_MONTO_COLUMNS))
+    frame["aplicado"] = frame["aplicado"].map(_si_no)
+    return frame.rename(columns=_DIFERENCIAS_MONTO_COLUMNS)
 
 
 class _OperationWorker(QThread):
@@ -407,13 +448,10 @@ class CarteraDataOperationsPanel(QWidget):
         if overrides is None:
             self._finish_busy(self.progress_deudores)
             return
-        birlados = len(preview.get("birlados", []) or [])
         answer = QMessageBox.question(
             self,
             "Confirmar carga",
-            f"Registros: {int(preview.get('registros_archivo', 0) or 0):,}\n"
-            f"Nuevos: {int(preview.get('nuevos_estimados', 0) or 0):,}\n"
-            f"Cambiarán a Birlado: {birlados:,}\n\n¿Continuar?",
+            self._deudor_preview_text(preview) + "\n\n¿Continuar?",
         )
         if answer != QMessageBox.StandardButton.Yes:
             self._finish_busy(self.progress_deudores)
@@ -449,6 +487,46 @@ class CarteraDataOperationsPanel(QWidget):
 
         self._run(import_operation, self._on_deudor_imported)
 
+    @staticmethod
+    def _deudor_preview_text(preview: dict) -> str:
+        politica = str(preview.get("politica_ausentes", "") or "")
+        lineas = [
+            f"Registros: {int(preview.get('registros_archivo', 0) or 0):,}",
+            f"Nuevos: {int(preview.get('nuevos_estimados', 0) or 0):,}",
+        ]
+        if politica in {POLITICA_AUSENTES_MANTENER, POLITICA_AUSENTES_ELIMINAR}:
+            lineas.append(f"Montos a actualizar: {int(preview.get('montos_a_actualizar', 0) or 0):,}")
+            if politica == POLITICA_AUSENTES_MANTENER:
+                lineas.append("Casos ausentes en la base: se mantienen")
+            else:
+                lineas.append(
+                    f"Casos no informados: {int(preview.get('no_informados_estimados', 0) or 0):,} "
+                    "(se revisarán al finalizar la carga)"
+                )
+        else:
+            lineas.append(f"Cambiarán a Birlado: {len(preview.get('birlados', []) or []):,}")
+        folios_repetidos = int(preview.get("folios_repetidos", 0) or 0)
+        if folios_repetidos:
+            lineas.append(f"Filas repetidas en el archivo (se omiten): {folios_repetidos:,}")
+        return "\n".join(lineas)
+
+    def _save_report(self, caption: str, file_prefix: str, sheets: dict[str, pd.DataFrame]) -> str:
+        default_name = os.path.join(
+            str(get_exports_dir()), f"{file_prefix}_{datetime.now():%Y%m%d_%H%M}.xlsx"
+        )
+        path, _ = QFileDialog.getSaveFileName(self, caption, default_name, "Excel (*.xlsx)")
+        if not path:
+            return ""
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        try:
+            write_excel_report(path, sheets)
+        except Exception as exc:
+            logger.exception("No se pudo guardar el reporte %s", file_prefix)
+            QMessageBox.critical(self, "Reporte no guardado", f"No se pudo guardar el reporte:\n{exc}")
+            return ""
+        return path
+
     def _on_deudor_imported(self, result: object, error: str) -> None:
         if error or not isinstance(result, dict):
             self._operation_failed(error or "El backend no confirmó la carga.")
@@ -456,12 +534,121 @@ class CarteraDataOperationsPanel(QWidget):
         self._finish_busy(self.progress_deudores)
         self.txt_deudores.clear()
         self.datos_actualizados.emit()
+
+        lineas = [
+            f"Registros nuevos: {int(result.get('detalle_nuevos', result.get('detalle_insertados', 0)) or 0):,}",
+            f"Actualizados: {int(result.get('detalle_actualizados', 0) or 0):,}",
+        ]
+        if int(result.get("montos_actualizados", 0) or 0) or int(result.get("montos_no_actualizados_por_pagos", 0) or 0):
+            lineas.append(f"Montos actualizados: {int(result.get('montos_actualizados', 0) or 0):,}")
+            lineas.append(
+                "Montos no actualizados por tener pagos: "
+                f"{int(result.get('montos_no_actualizados_por_pagos', 0) or 0):,}"
+            )
+        lineas.append(f"Asignaciones aplicadas: {int(result.get('asignaciones_aplicadas', 0) or 0):,}")
+
+        diferencias = list(result.get("diferencias_monto") or [])
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setWindowTitle("Carga completada")
+        dialog.setText("\n".join(lineas))
+        export_btn = None
+        if diferencias:
+            export_btn = dialog.addButton("Exportar diferencias de monto", QMessageBox.ButtonRole.ActionRole)
+        dialog.addButton(QMessageBox.StandardButton.Ok)
+        dialog.exec()
+        if export_btn is not None and dialog.clickedButton() is export_btn:
+            empresa = str(result.get("empresa", "") or "")
+            path = self._save_report(
+                "Exportar diferencias de monto",
+                f"Diferencias_monto_{empresa}",
+                {"Diferencias de monto": _diferencias_monto_report_frame(diferencias)},
+            )
+            if path:
+                QMessageBox.information(self, "Reporte guardado", f"Archivo guardado en:\n{path}")
+
+        if str(result.get("politica_ausentes", "")) == POLITICA_AUSENTES_ELIMINAR:
+            self._confirm_remove_no_informados(result)
+
+    def _confirm_remove_no_informados(self, result: dict) -> None:
+        rows = list(result.get("no_informados") or [])
+        batch_id = result.get("import_batch_id")
+        if not rows or batch_id is None:
+            return
+        empresa = str(result.get("empresa", "") or "")
+        con_pagos = sum(1 for row in rows if row.get("tiene_pagos"))
+        texto = (
+            f"{len(rows):,} casos no venían informados en la base cargada de {empresa} "
+            "y se eliminarán de la base de datos."
+        )
+        if con_pagos:
+            texto += (
+                f"\n{con_pagos:,} de ellos tienen pagos registrados y quedarán archivados "
+                "para conservar el historial de pagos."
+            )
+        texto += "\n\nAntes de eliminarlos se descargará un reporte con estos casos."
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Casos no informados")
+        dialog.setText(texto)
+        confirm_btn = dialog.addButton("Descargar reporte y eliminar", QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton("Conservar por ahora", QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        if dialog.clickedButton() is not confirm_btn:
+            QMessageBox.information(
+                self,
+                "Casos conservados",
+                "Los casos no informados se mantienen y volverán a revisarse en la próxima carga.",
+            )
+            return
+
+        report_path = self._save_report(
+            "Guardar reporte de casos a eliminar",
+            f"{empresa.replace(' ', '_')}_no_informados",
+            {"No informados": _no_informados_report_frame(rows)},
+        )
+        if not report_path:
+            QMessageBox.warning(
+                self,
+                "Eliminación cancelada",
+                "No se guardó el reporte, por lo que no se eliminó ningún caso.",
+            )
+            return
+
+        detalle_ids = [int(row["detalle_id"]) for row in rows]
+        self._set_busy(True, "Eliminando casos no informados…")
+        self.progress_deudores.setVisible(True)
+        self.progress_deudores.setRange(0, 0)
+
+        def operation():
+            data, err = backend_remove_import_missing_cases(
+                self._session, batch_id=int(batch_id), detalle_ids=detalle_ids
+            )
+            if err:
+                raise ValueError(err)
+            return data or {}
+
+        self._run(
+            operation,
+            lambda data, err: self._on_no_informados_removed(data, err, report_path),
+        )
+
+    def _on_no_informados_removed(self, data: object, error: str, report_path: str) -> None:
+        if error or not isinstance(data, dict):
+            self._operation_failed(
+                f"{error or 'El backend no confirmó la eliminación.'}\n\n"
+                f"El reporte quedó guardado en:\n{report_path}"
+            )
+            return
+        self._finish_busy(self.progress_deudores)
+        self.datos_actualizados.emit()
         QMessageBox.information(
             self,
-            "Carga completada",
-            f"Registros nuevos: {int(result.get('detalle_nuevos', result.get('detalle_insertados', 0)) or 0):,}\n"
-            f"Actualizados: {int(result.get('detalle_actualizados', 0) or 0):,}\n"
-            f"Asignaciones aplicadas: {int(result.get('asignaciones_aplicadas', 0) or 0):,}",
+            "Casos eliminados",
+            f"Casos eliminados: {int(data.get('eliminados', 0) or 0):,}\n"
+            f"Archivados por tener pagos: {int(data.get('archivados_por_pagos', 0) or 0):,}\n\n"
+            f"Reporte guardado en:\n{report_path}",
         )
 
     def _start_distribution_update(self) -> None:

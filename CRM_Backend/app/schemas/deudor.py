@@ -141,6 +141,29 @@ class DeudorDetalleResponse(BaseModel):
     detalle: list[DeudorDetalleItem] = Field(default_factory=list)
 
 
+class DiferenciaMontoItem(BaseModel):
+    detalle_id: int
+    rut_completo: str = ""
+    nombre_afiliado: str = ""
+    folio: str = ""
+    monto_anterior: float = 0
+    monto_nuevo: float = 0
+    aplicado: bool = False
+
+
+class NoInformadoItem(BaseModel):
+    detalle_id: int
+    rut_afiliado: str
+    rut_completo: str = ""
+    nombre_afiliado: str = ""
+    folio: str = ""
+    fecha_emision: str = ""
+    monto_cobrar: float = 0
+    saldo_actual: float = 0
+    estado_deudor: str = ""
+    tiene_pagos: bool = False
+
+
 class ImportDeudoresResponse(BaseModel):
     empresa: str
     resumen_insertados: int
@@ -154,6 +177,24 @@ class ImportDeudoresResponse(BaseModel):
     import_batch_id: int | None = None
     asignaciones_aplicadas: int = 0
     deudores_sin_asignar: int = 0
+    politica_ausentes: str = "birlado"
+    montos_actualizados: int = 0
+    montos_no_actualizados_por_pagos: int = 0
+    diferencias_monto: list[DiferenciaMontoItem] = Field(default_factory=list)
+    folios_repetidos: int = 0
+    no_informados: list[NoInformadoItem] = Field(default_factory=list)
+
+
+class EliminarNoInformadosRequest(BaseModel):
+    detalle_ids: list[int] = Field(default_factory=list)
+
+
+class EliminarNoInformadosResponse(BaseModel):
+    empresa: str
+    import_batch_id: int
+    eliminados: int = 0
+    archivados_por_pagos: int = 0
+    ruts_sin_casos: int = 0
 
 
 class BirladoPreviewItem(BaseModel):
@@ -175,6 +216,10 @@ class ImportDeudoresPreviewResponse(BaseModel):
     registros_archivo: int
     nuevos_estimados: int
     existentes_estimados: int
+    politica_ausentes: str = "birlado"
+    montos_a_actualizar: int = 0
+    folios_repetidos: int = 0
+    no_informados_estimados: int = 0
     birlados: list[BirladoPreviewItem] = Field(default_factory=list)
 
 
