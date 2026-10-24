@@ -127,7 +127,7 @@ def _pagar(db: Session, user: User, detalle: DeudorDetalle, key: str) -> None:
 
 
 def test_cruz_blanca_es_solo_flujo_y_actualiza_monto_por_folio():
-    with Session(_engine()) as db:
+    with Session(_engine(), autoflush=False) as db:
         user = _user(db)
         _importar(db, user, "Cruz Blanca", [
             _cb("11.111.111-1", "CB-1", 1000),
@@ -162,10 +162,12 @@ def test_cruz_blanca_es_solo_flujo_y_actualiza_monto_por_folio():
 
         resumen = db.query(DeudorResumen).filter_by(empresa="Cruz Blanca", rut_afiliado="11111111").one()
         assert resumen.saldo_actual == 3500
+        ruts_resumen = {row.rut_afiliado for row in db.query(DeudorResumen).filter_by(empresa="Cruz Blanca")}
+        assert ruts_resumen == {"11111111", "22222222", "33333333"}
 
 
 def test_monto_distinto_con_pagos_no_se_actualiza():
-    with Session(_engine()) as db:
+    with Session(_engine(), autoflush=False) as db:
         user = _user(db)
         _importar(db, user, "Cruz Blanca", [_cb("11.111.111-1", "CB-1", 1000)], "cb_202609.xlsx")
         _pagar(db, user, _detalles(db, "Cruz Blanca", "CB-1")[0], "1")
@@ -179,7 +181,7 @@ def test_monto_distinto_con_pagos_no_se_actualiza():
 
 
 def test_colmena_informa_no_informados_y_los_elimina_al_confirmar():
-    with Session(_engine()) as db:
+    with Session(_engine(), autoflush=False) as db:
         user = _user(db)
         _importar(db, user, "Colmena", [
             _colmena("11.111.111-1", "F-1", 1000),
@@ -229,7 +231,7 @@ def test_colmena_informa_no_informados_y_los_elimina_al_confirmar():
 
 
 def test_eliminacion_rechaza_casos_informados_cartera_sin_politica_y_carga_antigua():
-    with Session(_engine()) as db:
+    with Session(_engine(), autoflush=False) as db:
         user = _user(db)
         _importar(db, user, "Colmena", [
             _colmena("11.111.111-1", "F-1", 1000),
@@ -259,7 +261,7 @@ def test_eliminacion_rechaza_casos_informados_cartera_sin_politica_y_carga_antig
 
 
 def test_folios_duplicados_historicos_no_se_duplican_ni_se_informan_ausentes():
-    with Session(_engine()) as db:
+    with Session(_engine(), autoflush=False) as db:
         user = _user(db)
         for monto in (1000, 1200):
             db.add(DeudorDetalle(

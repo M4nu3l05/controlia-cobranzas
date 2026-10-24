@@ -1469,6 +1469,9 @@ def import_deudores_excel_service(
     batch.updated_count = actualizados
     batch.omitted_count = omitidos
     batch.amount_updated_count = montos_actualizados
+    # La sesion productiva no usa autoflush: sin esto, el resumen y los casos no
+    # informados se calcularian sin las filas nuevas ni las marcas de esta carga.
+    db.flush()
     for row in detalles_birlados:
         previous_status = _clean_text(row.estado_deudor)
         row.is_active = False
