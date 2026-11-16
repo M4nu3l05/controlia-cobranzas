@@ -891,9 +891,11 @@ def _recalcular_resumen_desde_detalle(
     if not detalle_rows:
         raise ValueError("No se encontraron expedientes para recalcular el resumen.")
 
-    copago_total = float(sum(float(r.copago or 0) for r in detalle_rows))
-    total_pagos_total = float(sum(float(r.total_pagos or 0) for r in detalle_rows))
-    saldo_total = float(sum(float(r.saldo_actual or 0) for r in detalle_rows))
+    # Igual que la reconstruccion en la importacion: las deudas retiradas no suman.
+    filas_activas = [r for r in detalle_rows if r.is_active is not False] or detalle_rows
+    copago_total = float(sum(float(r.copago or 0) for r in filas_activas))
+    total_pagos_total = float(sum(float(r.total_pagos or 0) for r in filas_activas))
+    saldo_total = float(sum(float(r.saldo_actual or 0) for r in filas_activas))
     expedientes_validos = [
         _norm_text(getattr(r, "nro_expediente", ""))
         for r in detalle_rows

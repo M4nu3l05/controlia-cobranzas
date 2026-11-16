@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
@@ -43,9 +44,11 @@ from app.models.debtor_assignment import (  # noqa: F401
 )
 from app.schemas.auth import HealthResponse
 from app.services.auth_service import ensure_first_admin
+from app.services.deudor_import_service import reparar_saldos_desincronizados
 from app.services.template_service import ensure_default_email_templates
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 def initialize_backend() -> None:
@@ -59,6 +62,11 @@ def initialize_backend() -> None:
             password=settings.first_admin_password,
         )
         ensure_default_email_templates(db)
+        try:
+            reparar_saldos_desincronizados(db)
+        except Exception:
+            db.rollback()
+            logger.exception("No se pudieron reparar saldos desincronizados con Monto_Cobrar.")
     finally:
         db.close()
 

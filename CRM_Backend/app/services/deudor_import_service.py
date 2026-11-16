@@ -955,6 +955,53 @@ def _detalle_tiene_movimiento(row: DeudorDetalle) -> bool:
     )
 
 
+def _sincronizar_saldo_con_monto(row: DeudorDetalle) -> bool:
+    """Alinea copago y saldo con monto_cobrar (saldo = monto - pagos). Devuelve si cambio."""
+    monto = round(float(row.monto_cobrar or 0), 2)
+    if monto <= 0:
+        return False
+    pagos = float(row.total_pagos or 0)
+    saldo = round(max(monto - pagos, 0.0), 2)
+    if round(float(row.copago or 0), 2) == monto and round(float(row.saldo_actual or 0), 2) == saldo:
+        return False
+    row.copago = monto
+    row.saldo_actual = saldo
+    return True
+
+
+def _sincronizar_saldos_empresa(db: Session, empresa: str) -> int:
+    rows = (
+        db.query(DeudorDetalle)
+        .filter(
+            DeudorDetalle.empresa == empresa,
+            DeudorDetalle.is_active.is_(True),
+            DeudorDetalle.monto_cobrar > 0,
+        )
+        .all()
+    )
+    return sum(1 for row in rows if _sincronizar_saldo_con_monto(row))
+
+
+def reparar_saldos_desincronizados(db: Session, empresa: str | None = None) -> int:
+    """Corrige detalles cuyo copago/saldo no siguen a monto_cobrar y reconstruye su resumen."""
+    empresas = [empresa] if empresa else [
+        _clean_text(value)
+        for (value,) in db.query(DeudorDetalle.empresa).distinct().all()
+        if _clean_text(value)
+    ]
+    corregidos = 0
+    for empresa_txt in empresas:
+        cambios = _sincronizar_saldos_empresa(db, empresa_txt)
+        if cambios:
+            db.flush()
+            _rebuild_resumen_from_detalle(db, empresa=empresa_txt)
+            _add_birlado_only_summaries(db, empresa=empresa_txt)
+            corregidos += cambios
+    if corregidos:
+        db.commit()
+    return corregidos
+
+
 def _allocated_detail_ids(db: Session, empresa: str) -> set[int]:
     if "payment_allocations" not in set(inspect(db.connection()).get_table_names()):
         return set()
@@ -1280,6 +1327,7 @@ def import_deudores_excel_service(
         raise ValueError("El archivo cambió después de la vista previa. Debes revisarlo nuevamente antes de confirmar.")
 
     _reparar_estado_inconsistente_empresa(db, empresa_txt)
+    _sincronizar_saldos_empresa(db, empresa_txt)
 
     df_resumen, df_detalle, periodo_carga = _parse_import_content(
         empresa=empresa_txt,
@@ -1452,6 +1500,9 @@ def import_deudores_excel_service(
             existente.copago = float(nuevo.copago or 0)
             existente.total_pagos = float(nuevo.total_pagos or 0)
             existente.saldo_actual = float(nuevo.saldo_actual or 0)
+        else:
+            # Con pagos se conservan, pero el saldo debe seguir al monto vigente.
+            _sincronizar_saldo_con_monto(existente)
 
         if (_clean_text(existente.estado_deudor) or "Sin Gestión") == "Sin Gestión":
             existente.estado_deudor = nuevo.estado_deudor or "Sin Gestión"
