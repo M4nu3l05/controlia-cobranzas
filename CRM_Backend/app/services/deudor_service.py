@@ -592,6 +592,8 @@ def list_destinatarios_service(
                 saldo_actual=float(row.saldo_actual or 0),
                 source_file=_norm_text(getattr(row, "source_file", "")),
                 periodo_carga=_norm_text(getattr(row, "periodo_carga", "")),
+                max_emision_ok=_norm_text(getattr(row, "max_emision_ok", "")),
+                min_emision_ok=_norm_text(getattr(row, "min_emision_ok", "")),
             )
         )
 
@@ -1156,7 +1158,7 @@ def registrar_pago_service(
         observacion_gestion = (
             f"Pago registrado | Empresa: {empresa_txt} | Expediente: {expediente_txt} | "
             f"Tipo: {tipo_pago_txt} | Monto: {amount_clp:.2f} | "
-            f"Transaccion: {transaction.public_id} | Fecha efectiva: {effective_date.isoformat()}"
+            f"Transaccion: {transaction.public_id} | Fecha efectiva: {effective_date.strftime('%d/%m/%Y')}"
         )
         if observaciones_txt:
             observacion_gestion += f" | Observaciones: {observaciones_txt}"

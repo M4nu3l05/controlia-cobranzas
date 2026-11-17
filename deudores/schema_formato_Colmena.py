@@ -216,14 +216,8 @@ def _fmt_fecha_detalle(val: str) -> str:
     v = str(val).strip()
     if not v or v.lower() in ("nan", "nat", "none", ""):
         return "—"
-    try:
-        import pandas as pd
-        ts = pd.to_datetime(v, errors="coerce")
-        if pd.isna(ts):
-            return v
-        return ts.strftime("%d/%m/%Y")
-    except Exception:
-        return v
+    from core.date_format import fmt_fecha
+    return fmt_fecha(v)
 
 
 def _fmt_valor_detalle(val: str, col_original: str) -> str:

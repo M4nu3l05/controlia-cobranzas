@@ -13,6 +13,7 @@ from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QDialog, QFileDialog, QInputDialog, QMessageBox, QWidget, QLabel, QComboBox, QTableWidgetItem
 
 from core.excel_export import write_excel_report
+from core.date_format import fmt_fecha_hora, fmt_periodo
 from core.paths import get_data_dir, get_exports_dir
 from deudores.database import (
     EMPRESAS,
@@ -185,7 +186,9 @@ class DeudoresWidget(QWidget):
     def _periodo_actual(self) -> str:
         s = self.sidebar
         if hasattr(s, "cmb_periodo"):
-            return s.cmb_periodo.currentText().strip()
+            # El texto visible es MM/AAAA; el valor real (AAAAMM) va en userData.
+            data = s.cmb_periodo.currentData()
+            return str(data if data is not None else s.cmb_periodo.currentText()).strip()
         return "Acumulado"
 
     def _filtrar_por_periodo(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -457,9 +460,10 @@ class DeudoresWidget(QWidget):
             nombre_item.setToolTip(str(tarea.get("observacion", "")))
             s.tbl_tareas.setItem(ri, 2, nombre_item)
 
-            due_text = "Vencida" if bool(tarea.get("is_overdue")) else str(tarea.get("due_at", ""))[:16]
+            due_fmt = fmt_fecha_hora(tarea.get("due_at", ""))
+            due_text = "Vencida" if bool(tarea.get("is_overdue")) else due_fmt
             due_item = QTableWidgetItem(due_text or "24 h")
-            due_item.setToolTip(str(tarea.get("due_at", "")))
+            due_item.setToolTip(due_fmt)
             s.tbl_tareas.setItem(ri, 3, due_item)
 
         s.btn_marcar_tareas.setEnabled(bool(tareas))
@@ -695,6 +699,11 @@ class DeudoresWidget(QWidget):
         for col in columnas_monto:
             if col in df_out.columns:
                 df_out[col] = df_out[col].apply(self._formatear_moneda_cl)
+
+        # Solo presentacion: el orden usa self._df con el periodo AAAAMM original.
+        for col in ("MAX_Emision_ok", "MIN_Emision_ok"):
+            if col in df_out.columns:
+                df_out[col] = df_out[col].apply(fmt_periodo)
 
         return df_out
 
@@ -1126,7 +1135,9 @@ class DeudoresWidget(QWidget):
 
         if hasattr(s, "cmb_periodo"):
             s.cmb_periodo.blockSignals(True)
-            idx_periodo = s.cmb_periodo.findText(periodo)
+            idx_periodo = s.cmb_periodo.findData(periodo)
+            if idx_periodo < 0:
+                idx_periodo = s.cmb_periodo.findText(periodo)
             if idx_periodo >= 0:
                 s.cmb_periodo.setCurrentIndex(idx_periodo)
             s.cmb_periodo.blockSignals(False)
@@ -2178,16 +2189,17 @@ class DeudoresWidget(QWidget):
         s.cmb_col.blockSignals(False)
 
         if hasattr(s, "cmb_periodo"):
-            periodo_actual = s.cmb_periodo.currentText().strip()
+            periodo_actual = self._periodo_actual()
             periodos = sorted(
                 [p for p in self._df.get("_periodo_carga", pd.Series(dtype=str)).astype(str).str.strip().unique().tolist() if p],
                 reverse=True,
             )
             s.cmb_periodo.blockSignals(True)
             s.cmb_periodo.clear()
-            s.cmb_periodo.addItem("Acumulado")
-            s.cmb_periodo.addItems(periodos)
-            idx_periodo = s.cmb_periodo.findText(periodo_actual)
+            s.cmb_periodo.addItem("Acumulado", "Acumulado")
+            for p in periodos:
+                s.cmb_periodo.addItem(fmt_periodo(p), p)
+            idx_periodo = s.cmb_periodo.findData(periodo_actual)
             s.cmb_periodo.setCurrentIndex(idx_periodo if idx_periodo >= 0 else 0)
             s.cmb_periodo.setEnabled(bool(periodos))
             s.cmb_periodo.blockSignals(False)

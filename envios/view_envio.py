@@ -734,6 +734,8 @@ class TabEnvio(QWidget):
                             "Copago": r.get("copago", 0),
                             "Total_Pagos": r.get("total_pagos", 0),
                             "Saldo_Actual": r.get("saldo_actual", 0),
+                            "MAX_Emision_ok": str(r.get("max_emision_ok", "") or "").strip(),
+                            "MIN_Emision_ok": str(r.get("min_emision_ok", "") or "").strip(),
                         }
                         for r in rows
                     ]

@@ -47,6 +47,7 @@ from auth.auth_service import (
     backend_save_cartera_asignaciones,
 )
 from comisiones.service import guardar_tasas as guardar_tasas_comision, obtener_tasas as obtener_tasas_comision
+from core.date_format import fmt_fecha_hora
 from core.paths import get_data_dir
 from core.db_migrations import Migration, apply_migrations
 from core.excel_export import write_excel_report
@@ -633,8 +634,8 @@ class AdminCarterasWidget(QWidget):
                 row.get("empresa", ""),
                 row.get("titular_username", ""),
                 row.get("replacement_username", ""),
-                row.get("starts_at", ""),
-                row.get("ends_at", ""),
+                fmt_fecha_hora(row.get("starts_at", "")),
+                fmt_fecha_hora(row.get("ends_at", "")),
                 "Activo" if bool(row.get("is_active")) else "Finalizado",
             ]
             for column, value in enumerate(values):
@@ -898,8 +899,8 @@ class AdminCarterasWidget(QWidget):
         for index, row in enumerate(rows or []):
             values = [
                 row.get("empresa", ""), row.get("titular_username", ""),
-                row.get("replacement_username", ""), row.get("starts_at", ""),
-                row.get("ends_at", ""), "Activo" if bool(row.get("is_active")) else "Finalizado",
+                row.get("replacement_username", ""), fmt_fecha_hora(row.get("starts_at", "")),
+                fmt_fecha_hora(row.get("ends_at", "")), "Activo" if bool(row.get("is_active")) else "Finalizado",
             ]
             for column, cell_value in enumerate(values):
                 item = QTableWidgetItem(str(cell_value))

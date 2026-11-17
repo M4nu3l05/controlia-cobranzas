@@ -8,6 +8,7 @@ import sqlite3
 
 import pandas as pd
 
+from core.date_format import parse_fecha
 from core.db_migrations import Migration, apply_migrations
 from core.paths import get_data_dir
 
@@ -137,7 +138,9 @@ def _normalizar_fecha(val: str) -> str:
     v = str(val).strip()
     if not v or v in ("nan", "None", ""):
         return ""
-    ts = pd.to_datetime(v, errors="coerce", dayfirst=True)
+    ts = parse_fecha(v)
+    if pd.isna(ts):
+        ts = pd.to_datetime(v, errors="coerce", dayfirst=True)
     return ts.strftime("%d/%m/%Y") if not pd.isna(ts) else (v[:10] if len(v) >= 10 else v)
 
 

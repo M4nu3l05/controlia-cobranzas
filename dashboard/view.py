@@ -29,6 +29,7 @@ from comisiones.service import (
     obtener_resumen as obtener_resumen_comisiones,
     reestablecer_comisiones,
 )
+from core.date_format import fmt_periodo, parse_fecha, parse_periodo
 from core.paths import get_data_dir
 from deudores.database import (
     EMPRESAS_OPERATIVAS,
@@ -102,6 +103,11 @@ def _parse_datetime_multi(value: str) -> pd.Timestamp:
     text = str(value or "").strip()
     if not text:
         return pd.NaT
+    ts = parse_fecha(text)
+    if pd.isna(ts):
+        ts = parse_periodo(text)
+    if not pd.isna(ts):
+        return ts
 
     for fmt in (
         "%Y-%m-%d %H:%M:%S",
@@ -634,15 +640,20 @@ class DashboardWidget(QWidget):
         return list(EMPRESAS_OPERATIVAS)
 
     def _periodo_actual(self) -> str:
-        return self.cmb_periodo.currentText().strip() if hasattr(self, "cmb_periodo") else "Acumulado"
+        if not hasattr(self, "cmb_periodo"):
+            return "Acumulado"
+        # El texto visible es MM/AAAA; el valor real (AAAAMM) va en userData.
+        data = self.cmb_periodo.currentData()
+        return str(data if data is not None else self.cmb_periodo.currentText()).strip()
 
     def _set_periodos_disponibles(self, periodos: list[str]) -> None:
         actuales = ["Acumulado"] + [p for p in periodos if p]
         actual = self._periodo_actual()
         self.cmb_periodo.blockSignals(True)
         self.cmb_periodo.clear()
-        self.cmb_periodo.addItems(actuales)
-        idx = self.cmb_periodo.findText(actual)
+        for p in actuales:
+            self.cmb_periodo.addItem(fmt_periodo(p), p)
+        idx = self.cmb_periodo.findData(actual)
         self.cmb_periodo.setCurrentIndex(idx if idx >= 0 else 0)
         self.cmb_periodo.blockSignals(False)
         self._periodos_disponibles = list(periodos)
@@ -912,7 +923,7 @@ class DashboardWidget(QWidget):
             self._company_cards[empresa].set_data(
                 main=f"{_fmt_int(datos.get('deudores', 0))} deudores",
                 subtitle=(
-                    f"{datos.get('freshness', 'Backend')} · {_fmt_int(datos.get('sin_gestion', 0))} sin gestión · "
+                    f"{fmt_periodo(datos.get('freshness', 'Backend'))} · {_fmt_int(datos.get('sin_gestion', 0))} sin gestión · "
                     f"{_fmt_clp(float(datos.get('saldo_actual', 0.0) or 0.0))} de saldo"
                 ),
                 percent=float(datos.get("cobertura_pct", 0) or 0),

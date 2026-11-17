@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from core.date_format import parse_fecha
+
 
 HOJA_DETALLE: str = "DETALLE"
 HOJA_RESUMEN: str = "RESUMEN"
@@ -232,6 +234,10 @@ def _parse_fecha_segura(v: str):
     texto = str(v or "").strip()
     if not texto:
         return pd.NaT
+
+    ts = parse_fecha(texto)
+    if not pd.isna(ts):
+        return ts
 
     formatos_directos = (
         "%Y-%m-%d %H:%M:%S",

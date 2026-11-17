@@ -7,17 +7,82 @@ import pandas as pd
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from core.date_format import (
+    EXCEL_FMT_FECHA,
+    EXCEL_FMT_FECHA_HORA,
+    fmt_periodo,
+    parse_fecha,
+    parse_periodo,
+    tiene_hora,
+)
+
 
 HEADER_FILL = PatternFill(fill_type="solid", fgColor="1D4ED8")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 SHEET_FREEZE = "A2"
-DEFAULT_DATE_FORMAT = "DD/MM/YYYY"
+DEFAULT_DATE_FORMAT = EXCEL_FMT_FECHA
+DEFAULT_DATETIME_FORMAT = EXCEL_FMT_FECHA_HORA
 DEFAULT_CURRENCY_FORMAT = '"$"#,##0'
 
+# Nombres tecnicos que pueden llegar desde la API y se muestran traducidos.
+HEADER_ALIASES = {
+    "derivation_due_at": "Fecha vencimiento derivación",
+    "derivation_completed_at": "Fecha cierre derivación",
+}
 
-def _looks_like_date_column(name: str) -> bool:
+_DATE_NAME_KEYS = ("fecha", "vence", "vencimiento", "inicio", "término", "termino")
+_PERIOD_NAME_KEYS = ("periodo", "período", "emision", "emisión")
+_SNIFF_SAMPLE = 50
+_SNIFF_RATIO = 0.8
+
+
+def _is_blank(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and pd.isna(value):
+        return True
+    if value is pd.NaT:
+        return True
+    return isinstance(value, str) and not value.strip()
+
+
+def _sample(values: pd.Series) -> list:
+    out = []
+    for v in values:
+        if _is_blank(v):
+            continue
+        out.append(v)
+        if len(out) >= _SNIFF_SAMPLE:
+            break
+    return out
+
+
+def _ratio(sample: list, parser) -> float:
+    if not sample:
+        return 0.0
+    return sum(1 for v in sample if not pd.isna(parser(v))) / len(sample)
+
+
+def _looks_like_date_column(name: str, values: pd.Series | None = None) -> bool:
     txt = str(name or "").strip().lower()
-    return "fecha" in txt
+    if values is not None and pd.api.types.is_datetime64_any_dtype(values):
+        return True
+    by_name = any(k in txt for k in _DATE_NAME_KEYS) or txt.endswith("_at")
+    if values is None:
+        return by_name
+    sample = _sample(values)
+    if not sample:
+        return by_name
+    # Con nombre de fecha basta la mayoria; sin el, los valores deben ser casi todos fechas
+    # (cubre columnas de archivos externos como "Emision" leidas como texto ISO).
+    return _ratio(sample, _parse_date_value) >= (0.5 if by_name else _SNIFF_RATIO)
+
+
+def _looks_like_period_column(name: str, values: pd.Series) -> bool:
+    txt = str(name or "").strip().lower()
+    if not any(k in txt for k in _PERIOD_NAME_KEYS):
+        return False
+    return _ratio(_sample(values), parse_periodo) >= _SNIFF_RATIO
 
 
 def _looks_like_currency_column(name: str) -> bool:
@@ -47,7 +112,7 @@ def _parse_currency_value(value):
         return None
 
     try:
-        if re.fullmatch(r"-?\d+(\.\d+)?", txt):
+        if re.fullmatch(r"-?\d+", txt):
             return float(txt)
 
         if "," in txt and "." in txt:
@@ -74,49 +139,61 @@ def _parse_currency_value(value):
 
         return float(txt)
     except Exception:
-        # Si no se puede convertir, deja el valor como vacio numerico.
         return None
 
 
 def _parse_date_value(value):
-    if value is None or value == "":
+    if value is None or isinstance(value, bool):
         return pd.NaT
-
-    if isinstance(value, bool):
-        return pd.NaT
-
-    txt = str(value).strip()
-    if not txt:
-        return pd.NaT
-
-    # Formatos explicitos para evitar warnings y conversiones ambiguas.
-    for fmt in (
-        "%d/%m/%Y",
-        "%d-%m-%Y",
-        "%d/%m/%Y %H:%M:%S",
-        "%d-%m-%Y %H:%M:%S",
-        "%Y-%m-%d",
-        "%Y-%m-%d %H:%M:%S",
-    ):
-        try:
-            return pd.to_datetime(txt, format=fmt, errors="raise")
-        except Exception:
-            pass
-
-    # Fallback tolerante sin dayfirst forzado.
-    return pd.to_datetime(txt, errors="coerce")
+    return parse_fecha(value)
 
 
-def _normalize_excel_df(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy() if df is not None else pd.DataFrame()
+def _to_excel_date(value):
+    """Fecha como Timestamp; si no se reconoce se conserva el valor original."""
+    if _is_blank(value):
+        return None
+    ts = _parse_date_value(value)
+    return value if pd.isna(ts) else ts
 
-    for col_name in out.columns:
-        if _looks_like_date_column(col_name):
-            out[col_name] = out[col_name].apply(_parse_date_value)
+
+def _to_excel_currency(value):
+    """Monto como numero; textos como "Sí"/"No" se conservan en vez de vaciarse."""
+    if _is_blank(value):
+        return None
+    parsed = _parse_currency_value(value)
+    return value if parsed is None else parsed
+
+
+def _classify_columns(df: pd.DataFrame) -> dict[str, str]:
+    kinds: dict[str, str] = {}
+    for col_name in df.columns:
+        values = df[col_name]
+        if _looks_like_date_column(col_name, values):
+            kinds[col_name] = "date"
+        elif _looks_like_period_column(col_name, values):
+            kinds[col_name] = "period"
         elif _looks_like_currency_column(col_name):
-            out[col_name] = out[col_name].apply(_parse_currency_value)
+            kinds[col_name] = "currency"
+    return kinds
 
-    return out
+
+def _normalize_excel_df(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, str]]:
+    out = df.copy() if df is not None else pd.DataFrame()
+    out = out.rename(columns={k: v for k, v in HEADER_ALIASES.items() if k in out.columns})
+    kinds = _classify_columns(out)
+
+    for col_name, kind in list(kinds.items()):
+        if kind == "date":
+            converted = out[col_name].apply(_to_excel_date).astype(object)
+            with_time = any(isinstance(v, pd.Timestamp) and tiene_hora(v) for v in converted)
+            out[col_name] = converted
+            kinds[col_name] = "datetime" if with_time else "date"
+        elif kind == "period":
+            out[col_name] = out[col_name].apply(fmt_periodo)
+        elif kind == "currency":
+            out[col_name] = out[col_name].apply(_to_excel_currency).astype(object)
+
+    return out, kinds
 
 
 def _autosize_worksheet(ws) -> None:
@@ -129,7 +206,14 @@ def _autosize_worksheet(ws) -> None:
         ws.column_dimensions[get_column_letter(col_idx)].width = min(max(max_length + 2, 12), 40)
 
 
-def _style_worksheet(ws, df: pd.DataFrame) -> None:
+_NUMBER_FORMATS = {
+    "date": DEFAULT_DATE_FORMAT,
+    "datetime": DEFAULT_DATETIME_FORMAT,
+    "currency": DEFAULT_CURRENCY_FORMAT,
+}
+
+
+def _style_worksheet(ws, df: pd.DataFrame, kinds: dict[str, str] | None = None) -> None:
     ws.freeze_panes = SHEET_FREEZE
     ws.auto_filter.ref = ws.dimensions
 
@@ -137,13 +221,14 @@ def _style_worksheet(ws, df: pd.DataFrame) -> None:
         cell.fill = HEADER_FILL
         cell.font = HEADER_FONT
 
+    if kinds is None:
+        kinds = _classify_columns(df)
     for idx, col_name in enumerate(df.columns, start=1):
-        if _looks_like_date_column(col_name):
-            for row in range(2, ws.max_row + 1):
-                ws.cell(row=row, column=idx).number_format = DEFAULT_DATE_FORMAT
-        elif _looks_like_currency_column(col_name):
-            for row in range(2, ws.max_row + 1):
-                ws.cell(row=row, column=idx).number_format = DEFAULT_CURRENCY_FORMAT
+        number_format = _NUMBER_FORMATS.get(kinds.get(col_name, ""))
+        if not number_format:
+            continue
+        for row in range(2, ws.max_row + 1):
+            ws.cell(row=row, column=idx).number_format = number_format
 
     _autosize_worksheet(ws)
 
@@ -154,6 +239,6 @@ def write_excel_report(path: str, sheets: dict[str, pd.DataFrame]) -> None:
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for sheet_name, df in sheets.items():
-            safe_df = _normalize_excel_df(df)
+            safe_df, kinds = _normalize_excel_df(df)
             safe_df.to_excel(writer, sheet_name=sheet_name, index=False)
-            _style_worksheet(writer.book[sheet_name], safe_df)
+            _style_worksheet(writer.book[sheet_name], safe_df, kinds)

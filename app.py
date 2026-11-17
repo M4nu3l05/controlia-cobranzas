@@ -45,6 +45,7 @@ from auth.auth_service import (
 )
 from legal import LegalDocumentDialog, enforce_legal_acceptance, get_privacy_text, get_terms_text
 from core import updater
+from core.date_format import fmt_fecha_hora
 from core.update_workers import UpdateCheckWorker, UpdateDownloadWorker
 from core.version import APP_VERSION
 
@@ -342,7 +343,7 @@ class RecoveryNotificationsDialog(QDialog):
             requested_email = str(row.get("requested_email", "") or "")
             target_username = str(row.get("target_username", "") or "")
             target_role_label = str(row.get("target_role_label", row.get("target_role", "")) or "")
-            requested_at = str(row.get("requested_at", "") or "")
+            requested_at = fmt_fecha_hora(row.get("requested_at", ""))
 
             self.table.setItem(r, 0, QTableWidgetItem(requested_email))
             self.table.setItem(r, 1, QTableWidgetItem(target_username))
@@ -433,7 +434,7 @@ class OperationalNotificationsDialog(QDialog):
             status_item = QTableWidgetItem("Leída" if bool(row.get("is_read")) else "Pendiente")
             status_item.setData(Qt.ItemDataRole.UserRole, int(row.get("id", 0) or 0))
             self.table.setItem(row_index, 0, status_item)
-            self.table.setItem(row_index, 1, QTableWidgetItem(str(row.get("created_at", ""))))
+            self.table.setItem(row_index, 1, QTableWidgetItem(fmt_fecha_hora(row.get("created_at", ""))))
             self.table.setItem(row_index, 2, QTableWidgetItem(str(row.get("title", row.get("notification_type", "")))))
             self.table.setItem(row_index, 3, QTableWidgetItem(str(row.get("empresa", ""))))
             self.table.setItem(row_index, 4, QTableWidgetItem(str(row.get("message", ""))))

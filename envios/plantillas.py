@@ -10,10 +10,10 @@
 import os
 import json
 import re
-from datetime import date, datetime
 from numbers import Number
 
 from auth.auth_service import backend_list_email_templates
+from core.date_format import fmt_fecha, fmt_periodo
 from core.paths import get_data_dir
 from core.text_utils import fix_mojibake_text
 
@@ -185,17 +185,7 @@ def _fmt_monto(val: object) -> str:
 
 
 def _fmt_fecha(value: object) -> str:
-    if isinstance(value, (datetime, date)):
-        return value.strftime("%d/%m/%Y")
-    text = str(value or "").strip()
-    if not text or text.lower() in {"nan", "none", "—", "-"}:
-        return ""
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-        try:
-            return datetime.strptime(text[:19], fmt).strftime("%d/%m/%Y")
-        except ValueError:
-            continue
-    return text
+    return fmt_fecha(value)
 
 
 def _first_value(row: dict, *keys: str):
@@ -267,8 +257,8 @@ def variables_desde_fila(fila: dict) -> dict:
         "total_pagos":     _fmt_monto(fila.get("Total_Pagos", "")),
         "empresa":         _limpio(fila.get("_empresa", fila.get("Compañía", ""))),
         "nro_expediente":  _limpio(fila.get("Nro_Expediente", fila.get("nro_expediente", ""))),
-        "ultima_emision":  _fmt_fecha(fila.get("MAX_Emision_ok", "")) or "—",
-        "primera_emision": _fmt_fecha(fila.get("MIN_Emision_ok", "")) or "—",
+        "ultima_emision":  fmt_periodo(fila.get("MAX_Emision_ok", "")) or "—",
+        "primera_emision": fmt_periodo(fila.get("MIN_Emision_ok", "")) or "—",
         "detalle_deudas":  formatear_detalle_deudas(
             fila.get("_detalle_deudas", fila.get("detalle_deudas_items", []))
         ),

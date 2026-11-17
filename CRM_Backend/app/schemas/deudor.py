@@ -47,6 +47,8 @@ class DestinatarioItem(BaseModel):
     saldo_actual: float
     source_file: str = ""
     periodo_carga: str = ""
+    max_emision_ok: str = ""
+    min_emision_ok: str = ""
 
 
 class TemplateDebtItem(BaseModel):

@@ -57,6 +57,7 @@ from envios.plantillas import (
 )
 from envios.worker import EnvioParams, EnvioWorker, ResultadoEnvio
 from envios.history_db import registrar_historial_envio
+from core.date_format import fmt_fecha
 from core.text_utils import fix_mojibake_text
 from auth.auth_service import (
     backend_get_deudor_detalle,
@@ -994,7 +995,7 @@ class _GestionWidget(QWidget):
             for ci, val in enumerate([
                 tipo,
                 _estado_gestion_legible(row.get("Estado", "")),
-                str(row.get("Fecha_gestion", "")),
+                fmt_fecha(row.get("Fecha_gestion", "")),
                 str(row.get("Observacion", "")),
             ]):
                 item = QTableWidgetItem(_fix_mojibake_text(val))
@@ -1021,7 +1022,7 @@ class _GestionWidget(QWidget):
             for ci, val in enumerate((
                 tipo,
                 _estado_gestion_legible(row.get("estado", "")),
-                str(row.get("fecha_gestion", "")),
+                fmt_fecha(row.get("fecha_gestion", "")),
                 str(row.get("observacion", "")),
             )):
                 item = QTableWidgetItem(_fix_mojibake_text(val))

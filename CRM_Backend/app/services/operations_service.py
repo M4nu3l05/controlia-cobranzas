@@ -19,6 +19,10 @@ from app.schemas.operations import (
 )
 
 
+def _fmt_dt(value: datetime | None) -> str:
+    return value.strftime("%d/%m/%Y %H:%M") if value else ""
+
+
 def create_notification(
     db: Session,
     *,
@@ -161,7 +165,10 @@ def create_replacement_service(
         user_id=int(replacement.id),
         notification_type="temporary_replacement",
         title="Reemplazo temporal asignado",
-        message=f"Puedes operar la cartera {row.empresa} entre {row.starts_at} y {row.ends_at}.",
+        message=(
+            f"Puedes operar la cartera {row.empresa} entre "
+            f"{_fmt_dt(row.starts_at)} y {_fmt_dt(row.ends_at)}."
+        ),
         empresa=row.empresa,
         related_entity_type="replacement",
         related_entity_id=int(row.id),
